@@ -5,22 +5,25 @@
 package chat
 
 import (
-	"errors"
+	"context"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/test/module"
 )
 
 const (
-	BotSteamID    = 111111111
-	FriendSteamID = 76561197960287930
-	ChatGroupID   = 999
-	ChatID        = 888
+	BotSteamID    = uint64(76561198000000001)
+	FriendSteamID = uint64(76561198000000002)
+	ChatGroupID   = uint64(123)
+	ChatID        = uint64(456)
 )
 
 func setupChat(t *testing.T) (*Chat, *module.InitContext) {
@@ -28,320 +31,296 @@ func setupChat(t *testing.T) (*Chat, *module.InitContext) {
 
 	m := New()
 	ictx := module.NewInitContext()
-
-	if err := m.Init(ictx); err != nil {
-		t.Fatalf("failed to init chat: %v", err)
-	}
-
-	t.Cleanup(func() {
-		_ = m.Close()
-	})
+	require.NoError(t, m.Init(ictx))
+	t.Cleanup(func() { _ = m.Close() })
 
 	return m, ictx
 }
 
-func invokeService(t *testing.T, ictx *module.InitContext, method string, msg proto.Message) {
-	t.Helper()
-
-	handler, ok := ictx.GetServiceHandler(method)
-
-	if !ok {
-		t.Fatalf("service handler %s not registered", method)
-	}
-
-	payload, _ := proto.Marshal(msg)
-	handler(&protocol.Packet{Payload: payload})
-}
-
-func TestChatManager_InitAndClose(t *testing.T) {
+func TestChat_InitAndClose(t *testing.T) {
 	m := New()
 	ictx := module.NewInitContext()
 
-	t.Run("Name", func(t *testing.T) {
-		if m.Name() != ModuleName {
-			t.Errorf("expected %s, got %s", ModuleName, m.Name())
-		}
+	assert.Equal(t, ModuleName, m.Name())
+
+	err := m.Init(ictx)
+	require.NoError(t, err)
+	ictx.AssertServiceHandlerRegistered(t, "FriendMessagesClient.IncomingMessage#1")
+
+	err = m.Close()
+	require.NoError(t, err)
+	ictx.AssertServiceHandlerUnregistered(t, "FriendMessagesClient.IncomingMessage#1")
+}
+
+func TestChat_StartAuthed(t *testing.T) {
+	m, _ := setupChat(t)
+	myID := id.ID(BotSteamID)
+
+	err := m.StartAuthed(context.Background(), module.NewAuthContext(myID))
+	require.NoError(t, err)
+
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+
+	assert.Equal(t, myID, m.steamID)
+	assert.Equal(t, myID.AccountID(), m.botAccountID)
+}
+
+func TestChat_FriendMessaging(t *testing.T) {
+	m, ictx := setupChat(t)
+	ctx := context.Background()
+
+	t.Run("SendMessage Success", func(t *testing.T) {
+		err := m.SendMessage(ctx, FriendSteamID, "hello")
+		assert.NoError(t, err)
+
+		req := &pb.CFriendMessages_SendMessage_Request{}
+		ictx.MockService().GetLastCall(req)
+		assert.Equal(t, FriendSteamID, req.GetSteamid())
+		assert.Equal(t, "hello", req.GetMessage())
 	})
 
-	t.Run("Registration", func(t *testing.T) {
-		_ = m.Init(ictx)
-		if _, ok := ictx.GetServiceHandler("FriendMessagesClient.IncomingMessage#1"); !ok {
-			t.Error("FriendMessagesClient handler not registered")
-		}
-
-		if _, ok := ictx.GetServiceHandler("ChatRoomClient.NotifyIncomingChatMessage#1"); !ok {
-			t.Error("ChatRoomClient handler not registered")
-		}
+	t.Run("SendTyping Success", func(t *testing.T) {
+		err := m.SendTyping(ctx, FriendSteamID)
+		assert.NoError(t, err)
 	})
 
-	t.Run("Cleanup", func(t *testing.T) {
-		_ = m.Close()
+	t.Run("AckFriendMessage Success", func(t *testing.T) {
+		err := m.AckFriendMessage(ctx, FriendSteamID, 12345)
+		assert.NoError(t, err)
+	})
 
-		if _, ok := ictx.GetServiceHandler("FriendMessagesClient.IncomingMessage#1"); ok {
-			t.Error("handlers should be removed after Close")
-		}
+	t.Run("GetRecentMessages Success", func(t *testing.T) {
+		m.stateMu.Lock()
+		m.steamID = id.ID(BotSteamID)
+		m.stateMu.Unlock()
+
+		// Using SetProtoResponse to avoid JSON tag mismatches and nil slice returns
+		ictx.MockService().
+			SetProtoResponse("FriendMessages", "GetRecentMessages", &pb.CFriendMessages_GetRecentMessages_Response{
+				Messages: []*pb.CFriendMessages_GetRecentMessages_Response_FriendMessage{
+					{Message: proto.String("hi")},
+				},
+			})
+
+		msgs, err := m.GetRecentMessages(ctx, FriendSteamID, 1)
+		require.NoError(t, err)
+		require.NotEmpty(t, msgs)
+		assert.Equal(t, "hi", msgs[0].GetMessage())
 	})
 }
 
-func TestChatManager_SendMessage(t *testing.T) {
+func TestChat_GroupMessaging(t *testing.T) {
 	m, ictx := setupChat(t)
-	text := "Hello, G-man!"
+	ctx := context.Background()
 
-	err := m.SendMessage(t.Context(), FriendSteamID, text)
-	if err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
-
-	req := &pb.CFriendMessages_SendMessage_Request{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetSteamid() != FriendSteamID || req.GetMessage() != text {
-		t.Errorf("unexpected request data: %+v", req)
-	}
-
-	if req.GetChatEntryType() != ChatEntryTypeChatMsg {
-		t.Error("should use ChatEntryTypeChatMsg by default")
-	}
-}
-
-func TestChatManager_GetRecentMessages(t *testing.T) {
-	m, ictx := setupChat(t)
-	_ = m.StartAuthed(t.Context(), module.NewAuthContext(BotSteamID))
-
-	mockMsgs := []*pb.CFriendMessages_GetRecentMessages_Response_FriendMessage{
-		{Message: proto.String("hi")},
-		{Message: proto.String("how are you?")},
-	}
-	ictx.MockService().
-		SetProtoResponse("FriendMessages", "GetRecentMessages", &pb.CFriendMessages_GetRecentMessages_Response{
-			Messages: mockMsgs,
+	t.Run("JoinGroupChat", func(t *testing.T) {
+		ictx.MockService().SetProtoResponse("ChatRoom", "JoinChatRoomGroup", &pb.CChatRoom_JoinChatRoomGroup_Response{
+			JoinChatId: proto.Uint64(ChatID),
 		})
 
-	msgs, err := m.GetRecentMessages(t.Context(), FriendSteamID, 2)
-	if err != nil {
-		t.Fatalf("failed: %v", err)
-	}
+		err := m.JoinGroupChat(ctx, ChatGroupID)
+		assert.NoError(t, err)
 
-	if len(msgs) != 2 || msgs[0].GetMessage() != "hi" {
-		t.Errorf("unexpected messages response: %v", msgs)
-	}
+		m.stateMu.RLock()
+		defer m.stateMu.RUnlock()
 
-	req := &pb.CFriendMessages_GetRecentMessages_Request{}
-	ictx.MockService().GetLastCall(req)
+		assert.Equal(t, ChatID, m.activeGroupChats[ChatGroupID])
+	})
 
-	if req.GetSteamid1() != BotSteamID || req.GetSteamid2() != FriendSteamID {
-		t.Error("request should include both bot and friend IDs")
-	}
+	t.Run("SendGroupMessage Fail Not In Group", func(t *testing.T) {
+		err := m.SendGroupMessage(ctx, 9999, "hi")
+		assert.ErrorIs(t, err, ErrNotInGroupChat)
+	})
+
+	t.Run("SendGroupMessage Success", func(t *testing.T) {
+		m.stateMu.Lock()
+		m.activeGroupChats[ChatGroupID] = ChatID
+		m.stateMu.Unlock()
+
+		err := m.SendGroupMessage(ctx, ChatGroupID, "hello group")
+		assert.NoError(t, err)
+	})
+
+	t.Run("DeleteGroupMessages Success", func(t *testing.T) {
+		err := m.DeleteGroupMessages(ctx, ChatGroupID, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("LeaveGroupChat Success", func(t *testing.T) {
+		err := m.LeaveGroupChat(ctx, ChatGroupID)
+		assert.NoError(t, err)
+
+		m.stateMu.RLock()
+		defer m.stateMu.RUnlock()
+
+		assert.NotContains(t, m.activeGroupChats, ChatGroupID)
+	})
+
+	t.Run("AckGroupMessage Success", func(t *testing.T) {
+		err := m.AckGroupMessage(ctx, ChatGroupID, ChatID, 123456)
+		require.NoError(t, err)
+
+		req := &pb.CChatRoom_AckChatMessage_Notification{}
+		ictx.MockService().GetLastCall(req)
+
+		assert.Equal(t, ChatGroupID, req.GetChatGroupId())
+		assert.Equal(t, ChatID, req.GetChatId())
+		assert.Equal(t, uint32(123456), req.GetTimestamp())
+	})
+
+	t.Run("handleGroupMessage Unmarshal Error", func(t *testing.T) {
+		// Triggers: if err := proto.Unmarshal(packet.Payload, msg); err != nil {
+		// Passing malformed garbage to trigger unmarshal error
+		m.handleGroupMessage(&protocol.Packet{Payload: []byte{0xFF, 0xFF}})
+
+		// Assert that it didn't do anything to active group chats
+		m.stateMu.RLock()
+		defer m.stateMu.RUnlock()
+
+		assert.Empty(t, m.activeGroupChats)
+	})
+
+	t.Run("handleGroupMessage Success and State Update", func(t *testing.T) {
+		sub := ictx.Bus().Subscribe(&GroupMessageEvent{})
+		ts := uint32(time.Now().Unix())
+
+		msg := &pb.CChatRoom_IncomingChatMessage_Notification{
+			ChatGroupId:   proto.Uint64(ChatGroupID),
+			ChatId:        proto.Uint64(ChatID),
+			SteamidSender: proto.Uint64(FriendSteamID),
+			Message:       proto.String("hello group"),
+			Timestamp:     proto.Uint32(ts),
+		}
+		b, err := proto.Marshal(msg)
+		require.NoError(t, err)
+
+		m.handleGroupMessage(&protocol.Packet{Payload: b})
+
+		m.stateMu.RLock()
+		assert.Equal(t, ChatID, m.activeGroupChats[ChatGroupID])
+		m.stateMu.RUnlock()
+
+		select {
+		case ev := <-sub.C():
+			gme := ev.(*GroupMessageEvent)
+			assert.Equal(t, ChatGroupID, gme.ChatGroupID)
+			assert.Equal(t, ChatID, gme.ChatID)
+			assert.Equal(t, FriendSteamID, gme.SenderID)
+			assert.Equal(t, "hello group", gme.Message)
+			assert.Equal(t, int64(ts), gme.Timestamp.Unix())
+
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("GroupMessageEvent was never published")
+		}
+	})
 }
 
-func TestChatManager_HandleIncomingMessage(t *testing.T) {
-	_, ictx := setupChat(t)
+func TestChat_HandleIncomingMessage(t *testing.T) {
+	m, ictx := setupChat(t)
 	subMsg := ictx.Bus().Subscribe(&MessageEvent{})
+	subSticker := ictx.Bus().Subscribe(&StickerEvent{})
 	subTyping := ictx.Bus().Subscribe(&TypingEvent{})
 
-	ts := uint32(time.Now().Unix())
-
-	t.Run("Normal Message", func(t *testing.T) {
-		invokeService(
-			t,
-			ictx,
-			"FriendMessagesClient.IncomingMessage#1",
-			&pb.CFriendMessages_IncomingMessage_Notification{
-				SteamidFriend:          proto.Uint64(FriendSteamID),
-				ChatEntryType:          proto.Int32(ChatEntryTypeChatMsg),
-				Message:                proto.String("Test!"),
-				Rtime32ServerTimestamp: proto.Uint32(ts),
-			},
-		)
+	t.Run("Chat Message", func(t *testing.T) {
+		msg := &pb.CFriendMessages_IncomingMessage_Notification{
+			SteamidFriend: proto.Uint64(FriendSteamID),
+			ChatEntryType: proto.Int32(ChatEntryTypeChatMsg),
+			Message:       proto.String("hello"),
+		}
+		b, _ := proto.Marshal(msg)
+		m.handleIncomingMessage(&protocol.Packet{Payload: b})
 
 		select {
 		case ev := <-subMsg.C():
-			me := ev.(*MessageEvent)
-			if me.SenderID != FriendSteamID || me.Message != "Test!" {
-				t.Errorf("invalid MessageEvent: %+v", me)
-			}
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("MessageEvent not received")
+			assert.Equal(t, "hello", ev.(*MessageEvent).Message)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Message not received")
+		}
+	})
+
+	t.Run("Sticker Message", func(t *testing.T) {
+		msg := &pb.CFriendMessages_IncomingMessage_Notification{
+			ChatEntryType: proto.Int32(ChatEntryTypeSticker),
+			Message:       proto.String("sticker_123"),
+		}
+		b, _ := proto.Marshal(msg)
+		m.handleIncomingMessage(&protocol.Packet{Payload: b})
+
+		select {
+		case ev := <-subSticker.C():
+			assert.Equal(t, "sticker_123", ev.(*StickerEvent).StickerID)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Sticker not received")
 		}
 	})
 
 	t.Run("Typing Notification", func(t *testing.T) {
-		invokeService(
-			t,
-			ictx,
-			"FriendMessagesClient.IncomingMessage#1",
-			&pb.CFriendMessages_IncomingMessage_Notification{
-				SteamidFriend: proto.Uint64(FriendSteamID),
-				ChatEntryType: proto.Int32(ChatEntryTypeTyping),
-			},
-		)
+		msg := &pb.CFriendMessages_IncomingMessage_Notification{
+			ChatEntryType: proto.Int32(ChatEntryTypeTyping),
+		}
+		b, _ := proto.Marshal(msg)
+		m.handleIncomingMessage(&protocol.Packet{Payload: b})
 
 		select {
-		case ev := <-subTyping.C():
-			if ev.(*TypingEvent).SenderID != FriendSteamID {
-				t.Error("invalid TypingEvent sender")
-			}
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("TypingEvent not received")
+		case <-subTyping.C():
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Typing not received")
 		}
 	})
+}
 
-	t.Run("Ignore LocalEcho", func(t *testing.T) {
-		invokeService(
-			t,
-			ictx,
-			"FriendMessagesClient.IncomingMessage#1",
-			&pb.CFriendMessages_IncomingMessage_Notification{
-				LocalEcho: proto.Bool(true),
-				Message:   proto.String("Ignore me"),
-			},
-		)
+func TestChat_OfflineSync(t *testing.T) {
+	m, ictx := setupChat(t)
+	m.botAccountID = id.ID(BotSteamID).AccountID()
+	ctx := context.Background()
+
+	t.Run("Sync Unread Loop", func(t *testing.T) {
+		// Mock 1 unread session
+		ictx.MockService().
+			SetProtoResponse("FriendsMessages", "GetActiveMessageSessions", &pb.CFriendsMessages_GetActiveMessageSessions_Response{
+				MessageSessions: []*pb.CFriendsMessages_GetActiveMessageSessions_Response_FriendMessageSession{
+					{
+						AccountidFriend: proto.Uint32(id.ID(FriendSteamID).AccountID()),
+						LastMessage:     proto.Uint32(200),
+						LastView:        proto.Uint32(100),
+					},
+				},
+			})
+
+		// Mock history
+		ictx.MockService().
+			SetProtoResponse("FriendMessages", "GetRecentMessages", &pb.CFriendMessages_GetRecentMessages_Response{
+				Messages: []*pb.CFriendMessages_GetRecentMessages_Response_FriendMessage{
+					{
+						Accountid: proto.Uint32(9999), // Friend
+						Timestamp: proto.Uint32(160),
+						Message:   proto.String("unread friend message"),
+					},
+				},
+			})
+
+		sub := ictx.Bus().Subscribe(&MessageEvent{})
+
+		m.synchronizeOfflineMessages(ctx)
 
 		select {
-		case <-subMsg.C():
-			t.Fatal("LocalEcho message should not trigger an event")
-		case <-time.After(50 * time.Millisecond):
-			// Success
+		case ev := <-sub.C():
+			assert.Equal(t, "unread friend message", ev.(*MessageEvent).Message)
+		case <-time.After(time.Second):
+			t.Fatal("Message not synced")
 		}
 	})
 }
 
-func TestChatManager_HandleGroupMessage(t *testing.T) {
-	_, ictx := setupChat(t)
-	subGroup := ictx.Bus().Subscribe(&GroupMessageEvent{})
+func TestChat_RateLimit(t *testing.T) {
+	m, _ := setupChat(t)
+	m.lastMessageTime = time.Now()
 
-	invokeService(t, ictx, "ChatRoomClient.NotifyIncomingChatMessage#1", &pb.CChatRoom_IncomingChatMessage_Notification{
-		ChatGroupId:   proto.Uint64(ChatGroupID),
-		ChatId:        proto.Uint64(ChatID),
-		SteamidSender: proto.Uint64(FriendSteamID),
-		Message:       proto.String("Group msg"),
-	})
+	start := time.Now()
+	// Should sleep for ~1.2s to trigger coverage
+	_ = m.applyRateLimit()
+	elapsed := time.Since(start)
 
-	select {
-	case ev := <-subGroup.C():
-		ge := ev.(*GroupMessageEvent)
-		if ge.ChatGroupID != ChatGroupID || ge.SenderID != FriendSteamID || ge.Message != "Group msg" {
-			t.Errorf("invalid GroupMessageEvent: %+v", ge)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("GroupMessageEvent not received")
-	}
-}
-
-func TestChatManager_SendTyping(t *testing.T) {
-	m, ictx := setupChat(t)
-
-	err := m.SendTyping(t.Context(), FriendSteamID)
-	if err != nil {
-		t.Fatalf("SendTyping failed: %v", err)
-	}
-
-	req := &pb.CFriendMessages_SendMessage_Request{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetSteamid() != FriendSteamID {
-		t.Errorf("expected steamid %d, got %d", FriendSteamID, req.GetSteamid())
-	}
-
-	if req.GetChatEntryType() != ChatEntryTypeTyping {
-		t.Errorf("expected type %d (Typing), got %d", ChatEntryTypeTyping, req.GetChatEntryType())
-	}
-}
-
-func TestChatManager_AckFriendMessage(t *testing.T) {
-	m, ictx := setupChat(t)
-	ts := uint32(1700000000)
-
-	err := m.AckFriendMessage(t.Context(), FriendSteamID, ts)
-	if err != nil {
-		t.Fatalf("AckFriendMessage failed: %v", err)
-	}
-
-	req := &pb.CFriendMessages_AckMessage_Notification{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetSteamidPartner() != FriendSteamID || req.GetTimestamp() != ts {
-		t.Errorf("AckMessage data mismatch: partner=%d, ts=%d", req.GetSteamidPartner(), req.GetTimestamp())
-	}
-}
-
-func TestChatManager_SendGroupMessage(t *testing.T) {
-	m, ictx := setupChat(t)
-	text := "Hello Group!"
-
-	err := m.SendGroupMessage(t.Context(), ChatGroupID, ChatID, text)
-	if err != nil {
-		t.Fatalf("SendGroupMessage failed: %v", err)
-	}
-
-	req := &pb.CChatRoom_SendChatMessage_Request{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetChatGroupId() != ChatGroupID || req.GetChatId() != ChatID || req.GetMessage() != text {
-		t.Errorf("SendGroupMessage data mismatch: %+v", req)
-	}
-}
-
-func TestChatManager_DeleteGroupMessages(t *testing.T) {
-	m, ictx := setupChat(t)
-
-	msgsToDelete := []*pb.CChatRoom_DeleteChatMessages_Request_Message{
-		{ServerTimestamp: proto.Uint32(100), Ordinal: proto.Uint32(1)},
-		{ServerTimestamp: proto.Uint32(101), Ordinal: proto.Uint32(2)},
-	}
-
-	err := m.DeleteGroupMessages(t.Context(), ChatGroupID, ChatID, msgsToDelete)
-	if err != nil {
-		t.Fatalf("DeleteGroupMessages failed: %v", err)
-	}
-
-	req := &pb.CChatRoom_DeleteChatMessages_Request{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetChatGroupId() != ChatGroupID || len(req.GetMessages()) != 2 {
-		t.Errorf("DeleteGroupMessages request mismatch: count=%d", len(req.GetMessages()))
-	}
-}
-
-func TestChatManager_ServiceErrors(t *testing.T) {
-	m, ictx := setupChat(t)
-
-	t.Run("SendMessage Failure", func(t *testing.T) {
-		ictx.MockService().ResponseErrs["FriendMessages.SendMessage"] = errors.New("steam_offline")
-
-		err := m.SendMessage(t.Context(), FriendSteamID, "fail")
-		if err == nil {
-			t.Error("expected error but got nil")
-		}
-	})
-
-	t.Run("GetRecentMessages Failure", func(t *testing.T) {
-		ictx.MockService().ResponseErrs["FriendMessages.GetRecentMessages"] = errors.New("access_denied")
-
-		_, err := m.GetRecentMessages(t.Context(), FriendSteamID, 5)
-		if err == nil {
-			t.Error("expected error but got nil")
-		}
-	})
-}
-
-func TestChatManager_MessageTimestamps(t *testing.T) {
-	_, ictx := setupChat(t)
-	subMsg := ictx.Bus().Subscribe(&MessageEvent{})
-
-	fixedTime := int64(1700000000)
-
-	invokeService(t, ictx, "FriendMessagesClient.IncomingMessage#1", &pb.CFriendMessages_IncomingMessage_Notification{
-		SteamidFriend:          proto.Uint64(FriendSteamID),
-		ChatEntryType:          proto.Int32(ChatEntryTypeChatMsg),
-		Message:                proto.String("Time check"),
-		Rtime32ServerTimestamp: proto.Uint32(uint32(fixedTime)),
-	})
-
-	ev := <-subMsg.C()
-	me := ev.(*MessageEvent)
-
-	if me.Timestamp.Unix() != fixedTime {
-		t.Errorf("expected timestamp %d, got %d", fixedTime, me.Timestamp.Unix())
-	}
+	assert.GreaterOrEqual(t, elapsed, messageInterval-(200*time.Millisecond))
 }

@@ -25,8 +25,6 @@ type StateEvent struct {
 	New State
 }
 
-func (e StateEvent) Topic() string { return "socket.state" }
-
 // ConnectedEvent is emitted when the socket successfully establishes a transport
 // connection to a Steam CM Server.
 type ConnectedEvent struct {
@@ -34,16 +32,12 @@ type ConnectedEvent struct {
 	Server string // The endpoint the socket connected to (Host:Port)
 }
 
-func (e ConnectedEvent) Topic() string { return "socket.connected" }
-
 // NetworkErrorEvent is emitted when a non-fatal underlying network error occurs
 // during active communication.
 type NetworkErrorEvent struct {
 	bus.BaseEvent
 	Error error
 }
-
-func (e NetworkErrorEvent) Topic() string { return "socket.networkError" }
 
 // DisconnectedEvent is emitted when the socket connection is closed.
 // This can happen intentionally or due to a network/Steam drop.
@@ -59,13 +53,9 @@ type DisconnectedEvent struct {
 	EResult enums.EResult
 }
 
-func (e DisconnectedEvent) Topic() string { return "socket.disconnected" }
-
 // ReconnectAttemptEvent is published whenever an attempt is made to reconnect.
 type ReconnectAttemptEvent struct {
 	bus.BaseEvent
 	Attempt int
 	Delay   time.Duration
 }
-
-func (e ReconnectAttemptEvent) Topic() string { return "socket.reconnectAttempt" }

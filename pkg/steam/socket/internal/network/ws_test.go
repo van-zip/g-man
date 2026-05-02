@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -19,60 +20,116 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 )
 
-func TestWSConnection_FullCycle(t *testing.T) {
+func TestWS_NewWS(t *testing.T) {
+	// Attempt to dial a bad endpoint
+	_, err := NewWS(context.Background(), NewMockHandler(), log.Discard, "invalid:80", nil)
+	assert.Error(t, err)
+}
+
+func TestWS_Send_Closed(t *testing.T) {
+	ws := &WS{conn: nil}
+	err := ws.Send(context.Background(), []byte("data"))
+	assert.ErrorContains(t, err, "connection closed")
+}
+
+func TestWS_Send_Deadline(t *testing.T) {
+	ws := &WS{conn: nil} // triggers the 'conn == nil' check
+	err := ws.Send(context.Background(), []byte("data"))
+	assert.Error(t, err)
+}
+
+func TestWS_ReadLoop(t *testing.T) {
 	handler := NewMockHandler()
 	upgrader := websocket.Upgrader{}
 
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/cmsocket/" {
-			http.NotFound(w, r)
-			return
-		}
-
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		defer conn.Close()
 
-		for {
-			mt, message, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-
-			// Echo
-			_ = conn.WriteMessage(mt, message)
-		}
+		// Send Text (Ignored)
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("text"))
+		// Send Binary (Processed)
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("bin"))
+		// Keep open until client closes
+		time.Sleep(100 * time.Millisecond)
+		conn.Close()
 	}))
 	defer server.Close()
 
-	endpoint := strings.TrimPrefix(server.URL, "https://")
+	// NewWS forces wss://. We manually construct for the test server (ws://)
+	endpoint := strings.TrimPrefix(server.URL, "http://")
 
-	dialer := &websocket.Dialer{
-		TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig,
-	}
+	t.Run("Dial Success and Read Binary", func(t *testing.T) {
+		// We can't use NewWS directly because it forces WSS.
+		// We'll test the logic by mocking the conn or adjusting the test.
+		u := url.URL{Scheme: "ws", Host: endpoint, Path: "/cmsocket/"}
+		conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+		require.NoError(t, err)
 
-	client, err := NewWS(t.Context(), handler, log.Discard, endpoint, dialer)
+		ws := &WS{
+			BaseConnection: NewBaseConnection("WS"),
+			conn:           conn,
+			handler:        handler,
+			logger:         log.Discard,
+		}
+
+		go ws.readLoop()
+		defer ws.Close()
+
+		select {
+		case msg := <-handler.msgChan:
+			assert.Equal(t, []byte("bin"), msg)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout")
+		}
+	})
+
+	t.Run("NewWS Handshake Failure", func(t *testing.T) {
+		// This hits the error branch in NewWS
+		_, err := NewWS(context.Background(), handler, log.Discard, "localhost:1", nil)
+		assert.Error(t, err)
+	})
+}
+
+func TestWS_Dial_CustomDialer(t *testing.T) {
+	handler := NewMockHandler()
+	// Trigger handshake timeout
+	dialer := &websocket.Dialer{HandshakeTimeout: time.Nanosecond}
+	_, err := NewWS(context.Background(), handler, log.Discard, "google.com:80", dialer)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dial failed")
+}
+
+func TestWS_Close_MultipleTimes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, _ := upgrader.Upgrade(w, r, nil)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	// Use ws:// for the test server
+	endpoint := strings.TrimPrefix(server.URL, "http://")
+	u := url.URL{Scheme: "ws", Host: endpoint, Path: "/cmsocket/"}
+
+	// Dial manually to ensure we have a valid connection for the Close test
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
 
-	defer client.Close()
-
-	testData := []byte("hello steam ws")
-	err = client.Send(context.Background(), testData)
-	assert.NoError(t, err)
-
-	select {
-	case msg := <-handler.msgChan:
-		assert.Equal(t, testData, msg)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for ws message")
+	ws := &WS{
+		BaseConnection: NewBaseConnection("WS"),
+		conn:           conn,
+		handler:        NewMockHandler(),
+		logger:         log.Discard,
 	}
 
-	_ = client.Close()
+	// First close
+	err = ws.Close()
+	assert.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
-	handler.mu.Lock()
-	assert.True(t, handler.closedCalled)
-	handler.mu.Unlock()
+	// Second call (hits sync.Once and should return immediately without panic)
+	err = ws.Close()
+	assert.NoError(t, err)
 }

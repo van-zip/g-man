@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -22,7 +24,13 @@ type mockSocketCaller struct {
 	mockCbErr   error
 }
 
-func (m *mockSocketCaller) Session() socket.Session { return m.session }
+func (m *mockSocketCaller) Session() socket.Session {
+	if m.session == nil {
+		return nil
+	}
+
+	return m.session
+}
 
 func (m *mockSocketCaller) SendSync(
 	ctx context.Context,
@@ -46,123 +54,94 @@ func (m *mockSocketCaller) SendSync(
 	return m.mockPacket, nil
 }
 
-func TestSocketTransport_Do(t *testing.T) {
-	tests := []struct {
-		name        string
-		target      Target
-		mockCallErr error
-		mockCbErr   error
-		mockPacket  *protocol.Packet
-		expectErr   bool
-		expectRes   enums.EResult
-	}{
-		{
-			name:      "Invalid Target Type",
-			target:    mockTarget{name: "bad_target"},
-			expectErr: true,
-		},
-		{
-			name:        "Immediate Call Error",
-			target:      mockSocketTarget{eMsg: enums.EMsg_ClientLogon},
-			mockCallErr: errors.New("socket disconnected"),
-			expectErr:   true,
-		},
-		{
-			name:      "Callback Returns Error",
-			target:    mockSocketTarget{eMsg: enums.EMsg_ClientLogon},
-			mockCbErr: errors.New("timeout"),
-			expectErr: true,
-		},
-		{
-			name:   "Successful Call With Header",
-			target: mockSocketTarget{eMsg: enums.EMsg_ClientLogon},
-			mockPacket: &protocol.Packet{
-				Payload: []byte("success"),
-				Header: mockEHeader{
-					result:    enums.EResult_AccessDenied,
-					sourceJob: 12345,
-				},
-			},
-			expectErr: false,
-			expectRes: enums.EResult_AccessDenied,
-		},
-		{
-			name:   "Successful Call Without Header",
-			target: mockSocketTarget{eMsg: enums.EMsg_ClientLogon},
-			mockPacket: &protocol.Packet{
-				Payload: []byte("success"),
-				Header:  nil,
-			},
-			expectErr: false,
-			expectRes: enums.EResult_OK,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			caller := &mockSocketCaller{
-				session:     &mockSession{isAuth: true},
-				mockCallErr: tt.mockCallErr,
-				mockPacket:  tt.mockPacket,
-				mockCbErr:   tt.mockCbErr,
-			}
-
-			trans := NewSocketTransport(caller)
-			req := NewRequest(tt.target, []byte("request_body"))
-
-			resp, err := trans.Do(t.Context(), req)
-
-			if (err != nil) != tt.expectErr {
-				t.Fatalf("Expected error: %v, got: %v", tt.expectErr, err)
-			}
-
-			if !tt.expectErr {
-				meta, _ := resp.Socket()
-				if meta.Result != tt.expectRes {
-					t.Errorf("Expected Result %v, got %v", tt.expectRes, meta.Result)
-				}
-
-				if string(resp.Body) != "success" {
-					t.Errorf("Expected body 'success', got '%s'", string(resp.Body))
-				}
-
-				if tt.mockPacket.Header != nil && meta.SourceJobID != 12345 {
-					t.Errorf("Expected SourceJobID 12345, got %d", meta.SourceJobID)
-				}
-			}
-		})
-	}
+type mockSocketTarget struct {
+	emsg uint32
 }
 
-func TestSocketTransport_ContextCancellation(t *testing.T) {
-	caller := &mockSocketCaller{
-		session: &mockSession{isAuth: true},
-	}
+func (m mockSocketTarget) String() string              { return "mock" }
+func (m mockSocketTarget) EMsg(isAuth bool) enums.EMsg { return enums.EMsg(m.emsg) }
+func (m mockSocketTarget) ObjectName() string          { return "MockObject" }
 
-	ctx, cancel := context.WithCancel(t.Context())
-	target := mockSocketTarget{eMsg: enums.EMsg_ClientLogon, name: "TestService.Method"}
-	req := NewRequest(target, nil)
+type mockSession struct {
+	socket.Session
+	authed bool
+}
 
-	resCh := make(chan error, 1)
+func (m *mockSession) IsAuthenticated() bool { return m.authed }
 
-	go func() {
-		_, err := NewSocketTransport(caller).Do(ctx, req)
-		resCh <- err
-	}()
+type simpleHeader struct {
+	protocol.Header
+	sourceJob uint64
+}
 
-	cancel()
+func (s simpleHeader) GetSourceJob() uint64 { return s.sourceJob }
 
-	select {
-	case err := <-resCh:
-		if err == nil {
-			t.Fatal("Expected error due to cancelled context, got nil")
+func TestSocketTransport_Do_Coverage(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success with EHeader", func(t *testing.T) {
+		caller := &mockSocketCaller{
+			session: &mockSession{authed: true},
+			mockPacket: &protocol.Packet{
+				Payload: []byte("payload"),
+				Header: mockEHeader{
+					result:    enums.EResult_Fail,
+					sourceJob: 777,
+				},
+			},
 		}
+		tr := NewSocketTransport(caller)
+		req := NewRequest(mockSocketTarget{emsg: 1}, nil)
 
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Expected context.Canceled error, got %v", err)
+		resp, err := tr.Do(ctx, req)
+		require.NoError(t, err)
+
+		meta, ok := resp.Socket()
+		assert.True(t, ok)
+		assert.Equal(t, enums.EResult_Fail, meta.Result)
+		assert.Equal(t, uint64(777), meta.SourceJobID)
+	})
+
+	t.Run("Success with Simple Header (No EResult)", func(t *testing.T) {
+		// This tests the branch where Header exists but isn't an EHeader
+		caller := &mockSocketCaller{
+			session: &mockSession{authed: false},
+			mockPacket: &protocol.Packet{
+				Payload: []byte("payload"),
+				Header:  simpleHeader{sourceJob: 888},
+			},
 		}
+		tr := NewSocketTransport(caller)
+		req := NewRequest(mockSocketTarget{emsg: 1}, nil)
 
-	case <-time.After(500 * time.Millisecond):
-		t.Error("Transport is blocking and ignoring context cancellation")
-	}
+		resp, err := tr.Do(ctx, req)
+		require.NoError(t, err)
+
+		meta, _ := resp.Socket()
+		assert.Equal(t, enums.EResult_OK, meta.Result) // Default
+		assert.Equal(t, uint64(888), meta.SourceJobID)
+	})
+
+	t.Run("Error - Disconnected (Nil Session)", func(t *testing.T) {
+		caller := &mockSocketCaller{session: nil}
+		tr := NewSocketTransport(caller)
+		_, err := tr.Do(ctx, NewRequest(mockSocketTarget{}, nil))
+		assert.ErrorContains(t, err, "socket is disconnected")
+	})
+
+	t.Run("Error - Unsupported Target", func(t *testing.T) {
+		tr := NewSocketTransport(&mockSocketCaller{})
+		_, err := tr.Do(ctx, NewRequest(mockTarget{name: "http_only"}, nil))
+		assert.ErrorContains(t, err, "does not support socket protocol")
+	})
+
+	t.Run("Error - SendSync Failed", func(t *testing.T) {
+		caller := &mockSocketCaller{
+			session:     &mockSession{},
+			mockCallErr: errors.New("network error"),
+		}
+		tr := NewSocketTransport(caller)
+		_, err := tr.Do(ctx, NewRequest(mockSocketTarget{}, nil))
+		assert.ErrorContains(t, err, "socket_transport call failed")
+	})
 }

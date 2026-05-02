@@ -5,10 +5,12 @@
 package gc
 
 import (
-	"reflect"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
@@ -18,8 +20,7 @@ import (
 )
 
 const (
-	AppID_TF2 uint32 = 440
-	AppID_CS2 uint32 = 730
+	AppidTf2 uint32 = 440
 )
 
 func setupCoordinator(t *testing.T) (*Coordinator, *module.InitContext) {
@@ -28,9 +29,7 @@ func setupCoordinator(t *testing.T) (*Coordinator, *module.InitContext) {
 	c := New()
 	ictx := module.NewInitContext()
 
-	if err := c.Init(ictx); err != nil {
-		t.Fatalf("failed to init coordinator: %v", err)
-	}
+	require.NoError(t, c.Init(ictx))
 
 	t.Cleanup(func() {
 		_ = c.Close()
@@ -50,9 +49,7 @@ func emitGC(t *testing.T, ictx *module.InitContext, appID, msgType uint32, paylo
 	}
 
 	gcData, err := inner.Serialize()
-	if err != nil {
-		t.Fatalf("failed to serialize GC packet: %v", err)
-	}
+	require.NoError(t, err)
 
 	ictx.EmitPacket(t, enums.EMsg_ClientFromGC, &pb.CMsgGCClient{
 		Appid:   proto.Uint32(appID),
@@ -62,138 +59,130 @@ func emitGC(t *testing.T, ictx *module.InitContext, appID, msgType uint32, paylo
 }
 
 func TestCoordinator_InitAndClose(t *testing.T) {
-	c := New()
-	ictx := module.NewInitContext()
+	c, ictx := setupCoordinator(t)
+	ictx.AssertPacketHandlerRegistered(t, enums.EMsg_ClientFromGC)
 
-	t.Run("Name", func(t *testing.T) {
-		if c.Name() != ModuleName {
-			t.Errorf("expected %s, got %s", ModuleName, c.Name())
-		}
+	err := c.Close()
+	require.NoError(t, err)
+	ictx.AssertPacketHandlerUnregistered(t, enums.EMsg_ClientFromGC)
+	assert.Nil(t, c.unregFuncs)
+}
+
+func TestCoordinator_SendMethods(t *testing.T) {
+	c, _ := setupCoordinator(t)
+	ctx := t.Context()
+
+	t.Run("Send (Proto)", func(t *testing.T) {
+		err := c.Send(ctx, AppidTf2, 1001, &pb.CMsgGCClient{})
+		assert.NoError(t, err)
 	})
 
-	t.Run("Registration", func(t *testing.T) {
-		_ = c.Init(ictx)
-		if _, ok := ictx.GetPacketHandler(enums.EMsg_ClientFromGC); !ok {
-			t.Error("EMsg_ClientFromGC handler not registered")
-		}
-	})
-
-	t.Run("Cleanup", func(t *testing.T) {
-		_ = c.Close()
-
-		if _, ok := ictx.GetPacketHandler(enums.EMsg_ClientFromGC); ok {
-			t.Error("handler should be unregistered after Close")
-		}
+	t.Run("SendRaw", func(t *testing.T) {
+		err := c.SendRaw(ctx, AppidTf2, 1002, []byte("raw"))
+		assert.NoError(t, err)
 	})
 }
 
-func TestCoordinator_SendRaw(t *testing.T) {
+func TestCoordinator_CallAndResolve(t *testing.T) {
 	c, ictx := setupCoordinator(t)
-	msgType := uint32(1005)
-	payload := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	ctx := t.Context()
 
-	err := c.SendRaw(t.Context(), AppID_TF2, msgType, payload)
-	if err != nil {
-		t.Fatalf("SendRaw failed: %v", err)
-	}
-
-	req := &pb.CMsgGCClient{}
-	ictx.MockService().GetLastCall(req)
-
-	if req.GetAppid() != AppID_TF2 {
-		t.Errorf("expected AppID %d, got %d", AppID_TF2, req.GetAppid())
-	}
-
-	expectedMsgType := msgType | protocol.ProtoMask
-	if req.GetMsgtype() != expectedMsgType {
-		t.Errorf("expected msg type %d, got %d", expectedMsgType, req.GetMsgtype())
-	}
-}
-
-func TestCoordinator_Call(t *testing.T) {
-	c, ictx := setupCoordinator(t)
-
-	appID := AppID_CS2
-	msgType := uint32(4004)
-	replyType := uint32(4005)
-
-	resultChan := make(chan *protocol.GCPacket, 1)
-
-	err := c.Call(t.Context(), appID, msgType, &pb.CMsgGCClient{}, func(p *protocol.GCPacket, err error) {
-		if err != nil {
-			t.Errorf("callback error: %v", err)
-		}
-
-		resultChan <- p
+	t.Run("Call Missing Callback", func(t *testing.T) {
+		err := c.Call(ctx, AppidTf2, 1001, nil, nil)
+		assert.ErrorContains(t, err, "callback is required")
 	})
-	if err != nil {
-		t.Fatalf("Call failed: %v", err)
-	}
 
-	if c.jobManager.Count() != 1 {
-		t.Errorf("expected 1 active job, got %d", c.jobManager.Count())
-	}
+	t.Run("Call and Resolve Success", func(t *testing.T) {
+		resolved := make(chan struct{})
+		err := c.Call(ctx, AppidTf2, 1001, &pb.CMsgGCClient{}, func(p *protocol.GCPacket, err error) {
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("pong"), p.Payload)
+			close(resolved)
+		})
+		require.NoError(t, err)
 
-	jobID := uint64(1)
-	emitGC(t, ictx, appID, replyType, []byte("response"), jobID)
+		jobID := c.jobManager.NextID() - 1
+		emitGC(t, ictx, AppidTf2, 1002, []byte("pong"), jobID)
 
-	select {
-	case p := <-resultChan:
-		if p.MsgType != replyType || string(p.Payload) != "response" {
-			t.Errorf("unexpected response packet: %+v", p)
+		select {
+		case <-resolved:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for job resolution")
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for job callback")
-	}
+	})
 
-	if c.jobManager.Count() != 0 {
-		t.Error("job should be removed after resolution")
-	}
+	t.Run("CallRaw Success", func(t *testing.T) {
+		err := c.CallRaw(ctx, AppidTf2, 1001, nil, func(p *protocol.GCPacket, err error) {})
+		assert.NoError(t, err)
+	})
 }
 
 func TestCoordinator_Routing(t *testing.T) {
-	c, ictx := setupCoordinator(t)
+	_, ictx := setupCoordinator(t)
 	sub := ictx.Bus().Subscribe(&GCMessageEvent{})
 
-	t.Run("Route to Bus", func(t *testing.T) {
-		msgType := uint32(2002)
-		payload := []byte{0x01, 0x02}
-
-		emitGC(t, ictx, AppID_TF2, msgType, payload, protocol.NoJob)
+	t.Run("Fallthrough to Bus (No JobID)", func(t *testing.T) {
+		emitGC(t, ictx, AppidTf2, 5001, []byte("data"), protocol.NoJob)
 
 		select {
 		case ev := <-sub.C():
-			gcEv := ev.(*GCMessageEvent)
-			if gcEv.Packet.MsgType != msgType || !reflect.DeepEqual(gcEv.Packet.Payload, payload) {
-				t.Errorf("invalid event data: %+v", gcEv)
-			}
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("GCMessageEvent not received")
+			assert.Equal(t, uint32(5001), ev.(*GCMessageEvent).Packet.MsgType)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("event not on bus")
 		}
 	})
 
-	t.Run("Route to Job Only", func(t *testing.T) {
-		jobID := uint64(999)
-		hit := make(chan bool, 1)
-
-		_ = c.jobManager.Add(jobID, func(p *protocol.GCPacket, err error) {
-			hit <- true
-		})
-
-		emitGC(t, ictx, AppID_TF2, 3003, nil, jobID)
-
-		select {
-		case <-hit:
-			// OK
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("job callback was not executed")
-		}
+	t.Run("Fallthrough to Bus (Unrecognized JobID)", func(t *testing.T) {
+		// TargetJobID set to 12345, which we haven't registered
+		emitGC(t, ictx, AppidTf2, 5002, []byte("data"), 12345)
 
 		select {
 		case ev := <-sub.C():
-			t.Errorf("packet was routed to Bus, but should have been captured by Job: %+v", ev)
-		case <-time.After(50 * time.Millisecond):
-			// OK
+			assert.Equal(t, uint32(5002), ev.(*GCMessageEvent).Packet.MsgType)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("event should have fallen back to bus for unknown job")
 		}
+	})
+}
+
+func TestCoordinator_Errors(t *testing.T) {
+	c, ictx := setupCoordinator(t)
+	ctx := t.Context()
+
+	t.Run("Parse GCPacket Failure", func(t *testing.T) {
+		ictx.EmitPacket(t, enums.EMsg_ClientFromGC, &pb.CMsgGCClient{
+			Appid:   proto.Uint32(440),
+			Payload: []byte{0x00}, // Too short for GC header
+		})
+		// Should log and return gracefully
+	})
+
+	t.Run("Transport Send Error Resolves Job", func(t *testing.T) {
+		ictx.MockServiceAccessor().ResponseErrs[enums.EMsg_ClientToGC.String()] = errors.New("io timeout")
+
+		resolved := make(chan struct{})
+		err := c.Call(ctx, AppidTf2, 1001, nil, func(p *protocol.GCPacket, err error) {
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "io timeout")
+			close(resolved)
+		})
+
+		assert.Error(t, err)
+
+		select {
+		case <-resolved:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("callback not resolved on transport error")
+		}
+	})
+
+	t.Run("Job Manager Full", func(t *testing.T) {
+		// Fill manager manually to hit error branch in .Add
+		for i := range 2000 {
+			_ = c.jobManager.Add(uint64(i+10), func(p *protocol.GCPacket, err error) {})
+		}
+
+		err := c.Call(ctx, AppidTf2, 1001, nil, func(p *protocol.GCPacket, err error) {})
+		assert.ErrorContains(t, err, "gc job track")
 	})
 }

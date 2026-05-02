@@ -2,20 +2,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package market
+package market_test
 
 import (
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/community/market"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/test/module"
 )
 
-func setupMarket(t *testing.T) (*Market, *module.InitContext, *module.AuthContext) {
-	cfg := DefaultConfig()
-	m := New(cfg)
+func setupMarket(t *testing.T) (*market.Market, *module.InitContext, *module.AuthContext) {
+	cfg := market.DefaultConfig()
+	m := market.New(cfg)
 
 	initCtx := module.NewInitContext()
 	if err := m.Init(initCtx); err != nil {
@@ -34,12 +35,16 @@ func TestMarket_CreateSellOrder(t *testing.T) {
 	m, _, auth := setupMarket(t)
 	mockComm := auth.MockCommunity()
 
-	mockComm.SetJSONResponse("https://steamcommunity.com/market/sellitem", http.StatusOK, CreateSellOrderResponse{
-		Success:              true,
-		RequiresConfirmation: 1,
-	})
+	mockComm.SetJSONResponse(
+		"https://steamcommunity.com/market/sellitem",
+		http.StatusOK,
+		market.CreateSellOrderResponse{
+			Success:              true,
+			RequiresConfirmation: 1,
+		},
+	)
 
-	opts := CreateSellOrderOptions{
+	opts := market.CreateSellOrderOptions{
 		AppID:     440, // TF2
 		ContextID: 2,
 		AssetID:   123456789,
@@ -73,18 +78,18 @@ func TestMarket_CreateSellOrder(t *testing.T) {
 func TestMarket_CreateBuyOrder_CurrencyFormatting(t *testing.T) {
 	tests := []struct {
 		name     string
-		currency CurrencyCode
+		currency market.CurrencyCode
 		price    int
 		expected string
 	}{
-		{"USD formatting", CurrencyCodeUSD, 150, "1.50"},
-		{"JPY formatting (no decimals)", CurrencyCodeJPY, 150, "150"},
-		{"Large USD amount", CurrencyCodeUSD, 100000, "1000.00"},
+		{"USD formatting", market.CurrencyCodeUSD, 150, "1.50"},
+		{"JPY formatting (no decimals)", market.CurrencyCodeJPY, 150, "150"},
+		{"Large USD amount", market.CurrencyCodeUSD, 100000, "1000.00"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := New(Config{Currency: tt.currency})
+			m := market.New(market.Config{Currency: tt.currency})
 			auth := module.NewAuthContext(id.ID(1))
 			_ = m.StartAuthed(t.Context(), auth)
 
@@ -92,13 +97,13 @@ func TestMarket_CreateBuyOrder_CurrencyFormatting(t *testing.T) {
 			mockComm.SetJSONResponse(
 				"https://steamcommunity.com/market/createbuyorder",
 				http.StatusOK,
-				CreateBuyOrderResponse{
+				market.CreateBuyOrderResponse{
 					Success:    true,
 					BuyOrderID: 999,
 				},
 			)
 
-			_, err := m.CreateBuyOrder(t.Context(), CreateBuyOrderOptions{
+			_, err := m.CreateBuyOrder(t.Context(), market.CreateBuyOrderOptions{
 				AppID:          440,
 				MarketHashName: "Mann Co. Supply Crate Key",
 				Price:          tt.price,
@@ -123,7 +128,7 @@ func TestMarket_GetPriceOverview(t *testing.T) {
 	mockComm := auth.MockCommunity()
 
 	expectedURL := "https://steamcommunity.com/market/priceoverview?appid=440&currency=1&market_hash_name=Mann+Co.+Supply+Crate+Key"
-	mockComm.SetJSONResponse(expectedURL, http.StatusOK, PriceOverviewResponse{
+	mockComm.SetJSONResponse(expectedURL, http.StatusOK, market.PriceOverviewResponse{
 		Success:     true,
 		LowestPrice: "$2.50",
 		Volume:      "1,000",
@@ -141,9 +146,9 @@ func TestMarket_GetPriceOverview(t *testing.T) {
 }
 
 func TestMarket_NotAuthenticated(t *testing.T) {
-	m := New(DefaultConfig())
+	m := market.New(market.DefaultConfig())
 
-	_, err := m.CreateSellOrder(t.Context(), CreateSellOrderOptions{})
+	_, err := m.CreateSellOrder(t.Context(), market.CreateSellOrderOptions{})
 	if err == nil || !strings.Contains(err.Error(), "not authenticated") {
 		t.Errorf("expected authentication error, got %v", err)
 	}
@@ -252,15 +257,15 @@ func TestMarket_Search(t *testing.T) {
 	m, _, auth := setupMarket(t)
 	mockComm := auth.MockCommunity()
 
-	mockComm.SetJSONResponse("market/search/render", http.StatusOK, SearchResponse{
+	mockComm.SetJSONResponse("market/search/render", http.StatusOK, market.SearchResponse{
 		Success:    true,
 		TotalCount: 500,
-		Results: []SearchResultResponse{
+		Results: []market.SearchResultResponse{
 			{Name: "Item 1", HashName: "item_1", SellPrice: 100},
 		},
 	})
 
-	opts := SearchOptions{
+	opts := market.SearchOptions{
 		Query: "key",
 		Count: 10,
 		Start: 0,
@@ -295,11 +300,11 @@ func TestMarket_GetMyListings(t *testing.T) {
 	m, _, auth := setupMarket(t)
 	mockComm := auth.MockCommunity()
 
-	mockComm.SetJSONResponse("market/mylistings", http.StatusOK, MyListingsResponse{
+	mockComm.SetJSONResponse("market/mylistings", http.StatusOK, market.MyListingsResponse{
 		Success:           true,
 		TotalCount:        5,
 		NumActiveListings: 2,
-		BuyOrders: []BuyOrderResponse{
+		BuyOrders: []market.BuyOrderResponse{
 			{BuyOrderID: "111", HashName: "Key", Price: "250"},
 		},
 	})

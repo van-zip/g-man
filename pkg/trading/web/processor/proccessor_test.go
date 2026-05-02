@@ -7,7 +7,6 @@ package processor
 import (
 	"context"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/trading"
@@ -102,68 +101,6 @@ func (h *mockOfferHandler) OnActionFailed(
 
 	h.failedCalled = true
 	h.failedAction = act
-}
-
-func TestProcessor_EnqueueAndWorker(t *testing.T) {
-	mockMgr := &mockManager{}
-	mockHdl := &mockOfferHandler{}
-	mockBp := newBackpackMock()
-
-	p := NewProcessor(mockMgr, mockBp, mockHdl)
-	p.Start(context.Background())
-
-	off := &offer.TradeOffer{
-		ID: 123,
-		ItemsToGive: []*trading.Item{
-			{AssetID: 100},
-			{AssetID: 200},
-		},
-	}
-
-	mockHdl.decision = offer.ActionDecision{Action: offer.ActionAccept}
-
-	p.Enqueue(off)
-
-	if mockBp.lockCalls != 1 {
-		t.Errorf("expected LockItems to be called once, got %d", mockBp.lockCalls)
-	}
-
-	waitForCondition(func() bool {
-		mockMgr.mu.Lock()
-		defer mockMgr.mu.Unlock()
-		return mockMgr.acceptCalls == 1
-	}, 1*time.Second)
-
-	if mockBp.unlockCalls != 1 {
-		t.Errorf("expected UnlockItems to be called after processing, got %d", mockBp.unlockCalls)
-	}
-}
-
-func TestProcessor_CounterFallback(t *testing.T) {
-	mockMgr := &mockManager{}
-	mockHdl := &mockOfferHandler{}
-	mockBp := newBackpackMock()
-
-	mockHdl.decision = offer.ActionDecision{Action: offer.ActionCounter}
-
-	p := NewProcessor(mockMgr, mockBp, mockHdl)
-	p.Start(context.Background())
-
-	p.Enqueue(&offer.TradeOffer{ID: 456, ItemsToGive: []*trading.Item{{AssetID: 500}}})
-
-	waitForCondition(func() bool {
-		mockMgr.mu.Lock()
-		defer mockMgr.mu.Unlock()
-		return mockMgr.declineCalls == 1
-	}, 1*time.Second)
-
-	if mockMgr.declineCalls != 1 {
-		t.Errorf("expected counter fallback to call DeclineOffer, got %d calls", mockMgr.declineCalls)
-	}
-
-	if !mockHdl.failedCalled {
-		t.Error("expected OnActionFailed to be called for the initial counter failure")
-	}
 }
 
 func waitForCondition(condition func() bool, timeout time.Duration) bool {

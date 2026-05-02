@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package steamid provides utilities for parsing, validating, and converting SteamIDs
+// Package id provides utilities for parsing, validating, and converting SteamIDs
 // between various formats (Steam2, Steam3, AccountID, and SteamID64).
 package id
 

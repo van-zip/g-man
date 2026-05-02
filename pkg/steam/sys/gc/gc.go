@@ -95,7 +95,7 @@ func (c *Coordinator) Send(ctx context.Context, appID, msgType uint32, msg proto
 	return c.send(ctx, appID, msgType, msg, nil, nil)
 }
 
-// Send fires a raw payload to the GC without waiting for a response.
+// SendRaw fires a raw payload to the GC without waiting for a response.
 func (c *Coordinator) SendRaw(ctx context.Context, appID, msgType uint32, payload []byte) error {
 	return c.send(ctx, appID, msgType, nil, payload, nil)
 }
@@ -115,7 +115,7 @@ func (c *Coordinator) Call(
 	return c.send(ctx, appID, msgType, msg, nil, cb)
 }
 
-// Call sends a message to the GC and waits for a response with a matching JobID.
+// CallRaw sends a message to the GC and waits for a response with a matching JobID.
 func (c *Coordinator) CallRaw(
 	ctx context.Context,
 	appID, msgType uint32,

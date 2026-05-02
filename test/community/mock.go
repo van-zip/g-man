@@ -100,6 +100,13 @@ func (m *Mock) Request(
 	}, nil
 }
 
+func (m *Mock) SetRawResponse(url string, statusCode int, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Responses[url] = data
+	m.StatusCodes[url] = statusCode
+}
+
 func (m *Mock) SetJSONResponse(url string, statusCode int, obj any) {
 	b, _ := json.Marshal(obj)
 
@@ -131,24 +138,32 @@ func (m *Mock) SetRedirect(url, location string) {
 func (m *Mock) GetLastCall() *http.Request {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	if len(m.Calls) == 0 {
 		return nil
 	}
-
 	return m.Calls[len(m.Calls)-1]
+}
+
+func (m *Mock) GetLastCallParams() url.Values {
+	req := m.GetLastCall()
+	if req == nil {
+		return nil
+	}
+	if req.Method == http.MethodPost {
+		_ = req.ParseForm()
+		return req.PostForm
+	}
+	return req.URL.Query()
 }
 
 func (m *Mock) ClearCalls() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	m.Calls = nil
 }
 
 func (m *Mock) CallsCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	return len(m.Calls)
 }

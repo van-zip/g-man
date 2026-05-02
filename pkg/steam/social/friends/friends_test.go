@@ -5,25 +5,29 @@
 package friends
 
 import (
-	"io"
-	"net/url"
-	"strconv"
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
+	tc "github.com/lemon4ksan/g-man/test/community"
 	"github.com/lemon4ksan/g-man/test/module"
 )
 
 const (
-	FriendID_1 = 101
-	FriendID_2 = 102
-	BotSteamID = 76561198000000000
+	FriendID_1 = id.ID(101)
+	FriendID_2 = id.ID(102)
+	BotSteamID = id.ID(76561198000000000)
 )
 
 func setupFriends(t *testing.T) (*Manager, *module.InitContext) {
@@ -31,16 +35,12 @@ func setupFriends(t *testing.T) (*Manager, *module.InitContext) {
 
 	m := New()
 	ictx := module.NewInitContext()
+	require.NoError(t, m.Init(ictx))
 
-	if err := m.Init(ictx); err != nil {
-		t.Fatalf("failed to init friends: %v", err)
-	}
+	auth := module.NewAuthContext(BotSteamID)
+	require.NoError(t, m.StartAuthed(context.Background(), auth))
 
-	_ = m.StartAuthed(t.Context(), module.NewAuthContext(BotSteamID))
-
-	t.Cleanup(func() {
-		_ = m.Close()
-	})
+	t.Cleanup(func() { _ = m.Close() })
 
 	return m, ictx
 }
@@ -49,205 +49,198 @@ func TestManager_InitAndClose(t *testing.T) {
 	m := New()
 	ictx := module.NewInitContext()
 
-	t.Run("Register", func(t *testing.T) {
-		_ = m.Init(ictx)
-		ictx.AssertPacketHandlerRegistered(t, enums.EMsg_ClientFriendsList)
-		ictx.AssertPacketHandlerRegistered(t, enums.EMsg_ClientPersonaState)
-	})
+	assert.Equal(t, ModuleName, m.Name())
 
-	t.Run("Unregister", func(t *testing.T) {
-		_ = m.Close()
+	err := m.Init(ictx)
+	require.NoError(t, err)
+	ictx.AssertPacketHandlerRegistered(t, enums.EMsg_ClientFriendsList)
 
-		ictx.AssertPacketHandlerUnregistered(t, enums.EMsg_ClientFriendsList)
-	})
+	err = m.Close()
+	require.NoError(t, err)
+	ictx.AssertPacketHandlerUnregistered(t, enums.EMsg_ClientFriendsList)
 }
 
 func TestManager_FriendCache(t *testing.T) {
 	m, _ := setupFriends(t)
 
+	m.mu.Lock()
 	m.relationships[FriendID_1] = enums.EFriendRelationship_Friend
 	m.relationships[FriendID_2] = enums.EFriendRelationship_RequestRecipient
 	m.users[FriendID_1] = &PersonaState{PlayerName: "G-man"}
+	m.mu.Unlock()
 
 	t.Run("Status Checks", func(t *testing.T) {
-		if !m.IsFriend(FriendID_1) {
-			t.Error("expected IsFriend(FriendID_1) to be true")
-		}
-
-		if m.IsFriend(FriendID_2) {
-			t.Error("RequestRecipient should not be considered a 'Friend'")
-		}
+		assert.True(t, m.IsFriend(FriendID_1))
+		assert.False(t, m.IsFriend(FriendID_2))
 	})
 
 	t.Run("Getters", func(t *testing.T) {
 		p := m.GetFriend(FriendID_1)
-		if p == nil || p.PlayerName != "G-man" {
-			t.Errorf("expected G-man, got %+v", p)
-		}
+		assert.NotNil(t, p)
+		assert.Equal(t, "G-man", p.PlayerName)
 
 		friends := m.GetFriends()
-		if len(friends) != 1 || friends[0] != FriendID_1 {
-			t.Errorf("expected [101], got %v", friends)
-		}
+		assert.ElementsMatch(t, []id.ID{FriendID_1}, friends)
 	})
 }
 
 func TestManager_GetMaxFriends(t *testing.T) {
 	m, ictx := setupFriends(t)
+	ctx := context.Background()
 
-	ictx.MockService().SetJSONResponse("IPlayerService", "GetBadges", map[string]any{
-		"response": map[string]any{
-			"player_level": 100,
-		},
+	t.Run("API Success", func(t *testing.T) {
+		ictx.MockService().SetJSONResponse("IPlayerService", "GetBadges", map[string]any{
+			"response": map[string]any{"player_level": 10},
+		})
+
+		max, err := m.GetMaxFriends(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 300, max)
 	})
 
-	max, err := m.GetMaxFriends(t.Context())
-	if err != nil {
-		t.Fatalf("failed: %v", err)
-	}
+	t.Run("API Error", func(t *testing.T) {
+		m.mu.Lock()
+		m.maxFriends = 0 // Clear cache to force API call
+		m.mu.Unlock()
 
-	if max != 750 {
-		t.Errorf("expected 750, got %d", max)
-	}
+		// Key must be Interface/Method for service calls in the mock
+		ictx.MockService().ResponseErrs["IPlayerService/GetBadges"] = errors.New("api down")
 
-	ictx.MockService().ClearCalls()
-
-	maxCached, _ := m.GetMaxFriends(t.Context())
-
-	if maxCached != 750 {
-		t.Error("cache value mismatch")
-	}
+		_, err := m.GetMaxFriends(ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "api down")
+	})
 }
 
 func TestManager_AddAndRemoveFriend(t *testing.T) {
 	m, ictx := setupFriends(t)
+	ctx := context.Background()
 
 	t.Run("Add", func(t *testing.T) {
-		_ = m.AddFriend(t.Context(), FriendID_1)
+		err := m.AddFriend(ctx, uint64(FriendID_1))
+		assert.NoError(t, err)
+
 		req := &pb.CMsgClientAddFriend{}
 		ictx.MockService().GetLastCall(req)
-
-		if req.GetSteamidToAdd() != FriendID_1 {
-			t.Errorf("wrong steamid in AddFriend request: %d", req.GetSteamidToAdd())
-		}
+		assert.Equal(t, uint64(FriendID_1), req.GetSteamidToAdd())
 	})
 
 	t.Run("Remove", func(t *testing.T) {
-		_ = m.RemoveFriend(t.Context(), FriendID_1)
+		err := m.RemoveFriend(ctx, uint64(FriendID_1))
+		assert.NoError(t, err)
+
 		req := &pb.CMsgClientRemoveFriend{}
 		ictx.MockService().GetLastCall(req)
-
-		if req.GetFriendid() != FriendID_1 {
-			t.Errorf("wrong steamid in RemoveFriend request: %d", req.GetFriendid())
-		}
+		assert.Equal(t, uint64(FriendID_1), req.GetFriendid())
 	})
 }
 
 func TestManager_InviteToGroups(t *testing.T) {
 	m, _ := setupFriends(t)
-
-	authCtx := module.NewAuthContext(BotSteamID)
-	comm := authCtx.MockCommunity()
-
-	_ = m.StartAuthed(t.Context(), authCtx)
-
-	inviteURL := community.BaseURL + "actions/GroupInvite"
-	comm.SetJSONResponse(inviteURL, 200, map[string]any{"success": true})
-
-	t.Run("Invite Friend", func(t *testing.T) {
-		m.relationships[FriendID_1] = enums.EFriendRelationship_Friend
-
-		m.InviteToGroups(t.Context(), FriendID_1, []uint64{999})
-
-		last := comm.GetLastCall()
-		if last == nil {
-			t.Fatal("no HTTP call recorded")
-		}
-
-		data, _ := io.ReadAll(last.Body)
-
-		body, _ := url.ParseQuery(string(data))
-		if body.Get("invitee") != strconv.Itoa(FriendID_1) {
-			t.Errorf("expected invitee=%d, got %s", FriendID_1, body.Get("invitee"))
-		}
-	})
+	ctx := context.Background()
+	// Ensure we use the community mock instance linked to the manager's state
+	comm := tc.New()
+	m.community = comm
+	path := "actions/GroupInvite"
 
 	t.Run("Skip Non-Friend", func(t *testing.T) {
 		comm.ClearCalls()
+		m.InviteToGroups(ctx, FriendID_2, []uint64{999})
+		assert.Equal(t, 0, comm.CallsCount())
+	})
 
-		m.InviteToGroups(t.Context(), 666, []uint64{999})
+	t.Run("Success and Ignore 400", func(t *testing.T) {
+		m.mu.Lock()
+		m.relationships[FriendID_1] = enums.EFriendRelationship_Friend
+		m.mu.Unlock()
 
-		if comm.CallsCount() > 0 {
-			t.Error("should not send invite to someone who is not a friend")
-		}
+		comm.ClearCalls()
+		comm.SetJSONResponse(community.BaseURL+path, 200, map[string]any{"success": true})
+
+		comm.ResponseErrs[path] = &rest.APIError{StatusCode: 400, Body: []byte("already in group")}
+
+		m.InviteToGroups(ctx, FriendID_1, []uint64{1001, 1002})
+
+		assert.Equal(t, 2, comm.CallsCount())
 	})
 }
 
 func TestManager_HandleFriendsList(t *testing.T) {
 	m, ictx := setupFriends(t)
-	sub := ictx.Bus().Subscribe(&RelationshipChangedEvent{})
 
-	m.relationships[FriendID_1] = enums.EFriendRelationship_Friend
-
-	ictx.EmitPacket(t, enums.EMsg_ClientFriendsList, &pb.CMsgClientFriendsList{
-		Friends: []*pb.CMsgClientFriendsList_Friend{
-			{
-				Ulfriendid:          proto.Uint64(FriendID_1),
-				Efriendrelationship: proto.Uint32(uint32(enums.EFriendRelationship_None)),
-			},
-			{
-				Ulfriendid:          proto.Uint64(FriendID_2),
-				Efriendrelationship: proto.Uint32(uint32(enums.EFriendRelationship_Friend)),
-			},
-		},
+	t.Run("Unmarshal Error", func(t *testing.T) {
+		m.handleFriendsList(&protocol.Packet{Payload: []byte{0xFF, 0xEE}})
+		// Should log and return
 	})
 
-	events := make(map[id.ID]*RelationshipChangedEvent)
+	t.Run("Relationship Changes", func(t *testing.T) {
+		sub := ictx.Bus().Subscribe(&RelationshipChangedEvent{})
 
-	for i := 0; i < 2; i++ {
+		ictx.EmitPacket(t, enums.EMsg_ClientFriendsList, &pb.CMsgClientFriendsList{
+			Friends: []*pb.CMsgClientFriendsList_Friend{
+				{
+					Ulfriendid:          proto.Uint64(uint64(FriendID_1)),
+					Efriendrelationship: proto.Uint32(uint32(enums.EFriendRelationship_Friend)),
+				},
+				{
+					Ulfriendid:          proto.Uint64(uint64(FriendID_1)), // No change
+					Efriendrelationship: proto.Uint32(uint32(enums.EFriendRelationship_Friend)),
+				},
+			},
+		})
+
 		select {
 		case ev := <-sub.C():
 			e := ev.(*RelationshipChangedEvent)
-			events[e.SteamID] = e
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("timed out waiting for RelationshipChangedEvent")
+			assert.Equal(t, FriendID_1, e.SteamID)
+			assert.Equal(t, enums.EFriendRelationship_Friend, e.New)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Event not received")
 		}
-	}
 
-	if ev, ok := events[FriendID_1]; !ok || ev.New != enums.EFriendRelationship_None {
-		t.Errorf("removal event failed: %+v", ev)
-	}
-
-	if ev, ok := events[FriendID_2]; !ok || ev.New != enums.EFriendRelationship_Friend {
-		t.Errorf("addition event failed: %+v", ev)
-	}
-
-	if m.IsFriend(FriendID_1) || !m.IsFriend(FriendID_2) {
-		t.Error("internal relationships map state is incorrect")
-	}
+		// Ensure only one event was fired (since second friend update had no change)
+		assert.Empty(t, sub.C())
+	})
 }
 
 func TestManager_HandlePersonaState(t *testing.T) {
 	m, ictx := setupFriends(t)
-	sub := ictx.Bus().Subscribe(&PersonaStateUpdatedEvent{})
 
-	ictx.EmitPacket(t, enums.EMsg_ClientPersonaState, &pb.CMsgClientPersonaState{
-		Friends: []*pb.CMsgClientPersonaState_Friend{
-			{Friendid: proto.Uint64(FriendID_1), PlayerName: proto.String("Lemon")},
-		},
+	t.Run("Unmarshal Error", func(t *testing.T) {
+		m.handlePersonaState(&protocol.Packet{Payload: []byte{0xFF}})
 	})
 
-	select {
-	case ev := <-sub.C():
-		pev := ev.(*PersonaStateUpdatedEvent)
-		if pev.SteamID != FriendID_1 || pev.State.PlayerName != "Lemon" {
-			t.Errorf("invalid event: %+v", pev)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("PersonaStateUpdatedEvent not received")
-	}
+	t.Run("State Updates", func(t *testing.T) {
+		sub := ictx.Bus().Subscribe(&PersonaStateUpdatedEvent{})
 
-	if p := m.GetFriend(FriendID_1); p == nil || p.PlayerName != "Lemon" {
-		t.Error("persona state was not cached")
-	}
+		ictx.EmitPacket(t, enums.EMsg_ClientPersonaState, &pb.CMsgClientPersonaState{
+			Friends: []*pb.CMsgClientPersonaState_Friend{
+				{
+					Friendid:   proto.Uint64(uint64(FriendID_1)),
+					PlayerName: proto.String("New Name"),
+					AvatarHash: []byte("abc"),
+				},
+				{
+					Friendid:   proto.Uint64(uint64(FriendID_1)), // Update existing
+					PlayerName: proto.String("Updated Name"),
+				},
+				{
+					Friendid: proto.Uint64(uint64(FriendID_2)), // New user, missing fields
+				},
+			},
+		})
+
+		// Check Friend 1
+		p1 := m.GetFriend(FriendID_1)
+		assert.Equal(t, "Updated Name", p1.PlayerName)
+		assert.Equal(t, []byte("abc"), p1.AvatarHash)
+
+		// Check Friend 2
+		p2 := m.GetFriend(FriendID_2)
+		assert.NotNil(t, p2)
+		assert.Empty(t, p2.PlayerName)
+
+		// Verify events were fired
+		assert.Len(t, sub.C(), 3)
+	})
 }

@@ -39,13 +39,9 @@ type RelationshipChangedEvent struct {
 	New     enums.EFriendRelationship
 }
 
-func (e *RelationshipChangedEvent) Topic() string { return "friends.relationship_changed" }
-
 // PersonaStateUpdatedEvent is called when a friend changes their nickname, avatar, or status (enters the game).
 type PersonaStateUpdatedEvent struct {
 	bus.BaseEvent
 	SteamID id.ID
 	State   *PersonaState
 }
-
-func (e *PersonaStateUpdatedEvent) Topic() string { return "friends.persona_updated" }

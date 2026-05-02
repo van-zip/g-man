@@ -45,10 +45,10 @@ const BaseURL = "https://steamcommunity.com/"
 
 var (
 	rxFamilyView = regexp.MustCompile(
-		`<div id="parental_notice_instructions">Enter your PIN below to exit Family View\.<\/div>`,
+		`<div id="parental_notice_instructions">Enter your PIN below to exit Family View\.</div>`,
 	)
-	rxSorry      = regexp.MustCompile(`<h1>Sorry!<\/h1>[\s\S]*?<h3>(.+?)<\/h3>`)
-	rxTradeError = regexp.MustCompile(`<div id="error_msg">\s*([^<]+)\s*<\/div>`)
+	rxSorry      = regexp.MustCompile(`<h1>Sorry!</h1>[\s\S]*?<h3>(.+?)</h3>`)
+	rxTradeError = regexp.MustCompile(`<div id="error_msg">\s*([^<]+)\s*</div>`)
 	rxApiKey     = regexp.MustCompile(`Key: (?i)[0-9A-F]{32}`)
 )
 
@@ -72,8 +72,8 @@ func WithLogger(l log.Logger) bus.Option[*Client] {
 	}
 }
 
-// WithRest sets a custom rest client for performing requests.
-func WithRest(r *rest.Client) bus.Option[*Client] {
+// WithREST sets a custom rest client for performing requests.
+func WithREST(r rest.Requester) bus.Option[*Client] {
 	return func(c *Client) {
 		c.restClient = r
 	}
@@ -86,9 +86,9 @@ func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
 	return &clone
 }
 
-// New creates a new Community Client.
+// NewClient creates a new Community Client.
 // It initializes a rest.Client with the required default browser-like headers.
-func New(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...bus.Option[*Client]) *Client {
+func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...bus.Option[*Client]) *Client {
 	rc := rest.NewClient(httpClient).
 		WithBaseURL(BaseURL).
 		WithHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").
@@ -143,7 +143,7 @@ func (c *Client) Request(
 	_ = resp.Body.Close()
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to read community response: %w", err)
+		return nil, err
 	}
 
 	// Reconstruct the body so the caller (or UnmarshalResponse) can read it later
@@ -378,7 +378,7 @@ func execute[Resp any](
 
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("community: failed to read response: %w", err)
+		return nil, err
 	}
 
 	result := new(Resp)

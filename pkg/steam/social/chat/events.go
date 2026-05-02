@@ -14,25 +14,35 @@ const (
 	ChatEntryTypeChatMsg          = 1
 	ChatEntryTypeTyping           = 2
 	ChatEntryTypeLeftConversation = 6
+	ChatEntryTypeEmote            = 8  // e.g. :steamhappy:
+	ChatEntryTypeSticker          = 10 // Animated sticker
 )
 
+// MessageEvent represents a standard text message from a friend.
 type MessageEvent struct {
 	bus.BaseEvent
 	SenderID  uint64
 	Message   string
 	Timestamp time.Time
-	Ordinal   uint32
+	// Ordinal helps correctly sequence messages that arrive out of order.
+	Ordinal uint32
 }
 
-func (e *MessageEvent) Topic() string { return "chat.message_received" }
+// StickerEvent represents an animated sticker message from a friend.
+type StickerEvent struct {
+	bus.BaseEvent
+	SenderID  uint64
+	StickerID string // ID or URL of the sticker
+	Timestamp time.Time
+}
 
+// TypingEvent is fired when a friend starts typing a message.
 type TypingEvent struct {
 	bus.BaseEvent
 	SenderID uint64
 }
 
-func (e *TypingEvent) Topic() string { return "chat.typing" }
-
+// GroupMessageEvent represents a text message in a group chat.
 type GroupMessageEvent struct {
 	bus.BaseEvent
 	ChatGroupID uint64
@@ -41,5 +51,3 @@ type GroupMessageEvent struct {
 	Message     string
 	Timestamp   time.Time
 }
-
-func (e *GroupMessageEvent) Topic() string { return "chat.group_message_received" }

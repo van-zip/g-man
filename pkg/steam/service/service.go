@@ -45,6 +45,16 @@ type Client struct {
 	registry    *api.UnmarshalRegistry
 }
 
+// APIKey returns the underlying api key.
+func (c *Client) APIKey() string {
+	return c.apiKey
+}
+
+// AccessToken returns the underlying access token.
+func (c *Client) AccessToken() string {
+	return c.accessToken
+}
+
 // New initializes a new Service Client.
 func New(tr tr.Transport) *Client {
 	return &Client{

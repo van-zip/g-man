@@ -4,7 +4,7 @@
 
 package inventory
 
-type InventoryAsset struct {
+type Asset struct {
 	AssetID    string `json:"assetid"`
 	ClassID    string `json:"classid"`
 	InstanceID string `json:"instanceid"`
@@ -13,7 +13,7 @@ type InventoryAsset struct {
 	Pos        int    `json:"-"`
 }
 
-type InventoryDescription struct {
+type Description struct {
 	ClassID         string         `json:"classid"`
 	InstanceID      string         `json:"instanceid"`
 	Tradable        int            `json:"tradable"`
@@ -37,16 +37,16 @@ type InventoryTag struct {
 }
 
 type CEconItem struct {
-	Asset       InventoryAsset
-	Description *InventoryDescription
+	Asset       Asset
+	Description *Description
 }
 
 type inventoryResponse struct {
-	Success      bool                   `json:"success"`
-	Error        string                 `json:"error"`
-	Assets       []InventoryAsset       `json:"assets"`
-	Descriptions []InventoryDescription `json:"descriptions"`
-	MoreItems    bool                   `json:"more_items"`
-	LastAssetID  string                 `json:"last_assetid"`
-	TotalCount   int                    `json:"total_inventory_count"`
+	Success      bool          `json:"success"`
+	Error        string        `json:"error"`
+	Assets       []Asset       `json:"assets"`
+	Descriptions []Description `json:"descriptions"`
+	MoreItems    bool          `json:"more_items"`
+	LastAssetID  string        `json:"last_assetid"`
+	TotalCount   int           `json:"total_inventory_count"`
 }

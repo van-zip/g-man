@@ -89,8 +89,7 @@ func (s *Base) Send(ctx context.Context, data []byte) error {
 // SetEncryptionKey upgrades the underlying connection to use Steam's symmetric encryption.
 func (s *Base) SetEncryptionKey(key []byte) bool {
 	if enc, ok := s.conn.(network.Encryptable); ok {
-		enc.SetEncryptionKey(key)
-		return true
+		return enc.SetEncryptionKey(key)
 	}
 
 	return false

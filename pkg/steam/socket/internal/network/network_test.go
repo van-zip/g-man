@@ -12,32 +12,36 @@ type MockHandler struct {
 	errors       []error
 	closedCalled bool
 	msgChan      chan []byte
+	errChan      chan error
 }
 
 func NewMockHandler() *MockHandler {
 	return &MockHandler{
 		msgChan: make(chan []byte, 10),
+		errChan: make(chan error, 10),
 	}
 }
 
 func (m *MockHandler) OnNetMessage(msg NetMessage) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.messages = append(m.messages, msg)
+	m.mu.Unlock()
+
 	m.msgChan <- msg
 }
 
 func (m *MockHandler) OnNetError(err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.errors = append(m.errors, err)
+	m.mu.Unlock()
+
+	m.errChan <- err
 }
 
 func (m *MockHandler) OnNetClose() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.closedCalled = true
+	m.mu.Unlock()
 }
+
+func (m *MockHandler) ErrChan() <-chan error { return m.errChan }

@@ -6,12 +6,12 @@ package transport
 
 import (
 	"io"
-	"net/http"
 	"net/url"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 )
 
 type mockTarget struct {
@@ -19,41 +19,6 @@ type mockTarget struct {
 }
 
 func (m mockTarget) String() string { return m.name }
-
-type mockHTTPTarget struct {
-	mockTarget
-	method string
-	path   string
-}
-
-func (m mockHTTPTarget) HTTPMethod() string { return m.method }
-func (m mockHTTPTarget) HTTPPath() string   { return m.path }
-
-type mockSocketTarget struct {
-	mockTarget
-	eMsg enums.EMsg
-	name string
-}
-
-func (m mockSocketTarget) EMsg(isAuth bool) enums.EMsg { return m.eMsg }
-func (m mockSocketTarget) ObjectName() string          { return m.name }
-
-type mockHTTPDoer struct {
-	doFunc func(req *http.Request) (*http.Response, error)
-}
-
-func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
-	return m.doFunc(req)
-}
-
-type mockSession struct {
-	socket.Session
-	isAuth bool
-}
-
-func (m *mockSession) IsAuthenticated() bool { return m.isAuth }
-func (m *mockSession) SteamID() uint64       { return 12345 }
-func (m *mockSession) SessionID() int32      { return 67890 }
 
 type mockEHeader struct {
 	result    enums.EResult
@@ -65,28 +30,79 @@ func (m mockEHeader) GetSourceJob() uint64          { return m.sourceJob }
 func (m mockEHeader) GetTargetJob() uint64          { return 0 }
 func (m mockEHeader) SerializeTo(w io.Writer) error { return nil }
 
-func TestRequest_Builder(t *testing.T) {
-	target := mockTarget{name: "test_target"}
-	body := []byte("hello steam")
+func TestRequest_FluentAPI(t *testing.T) {
+	target := mockTarget{name: "dest"}
+	req := NewRequest(target, []byte("body"))
 
-	req := NewRequest(target, body).
-		WithParam("key1", "val1").
-		WithParams(url.Values{"key2": {"val2"}}).
-		WithHeader("X-Token", "123")
+	req.WithParam("a", "1").
+		WithParams(url.Values{"b": {"2"}, "c": {"3"}}).
+		WithHeader("X-Test", "true").
+		WithParam("access_token", "secret")
 
-	if req.Target().String() != "test_target" {
-		t.Errorf("Expected target to be 'test_target', got '%s'", req.Target().String())
-	}
+	assert.Equal(t, "body", string(req.Body()))
+	assert.Equal(t, target, req.Target())
+	assert.Equal(t, "1", req.Params().Get("a"))
+	assert.Equal(t, "2", req.Params().Get("b"))
+	assert.Equal(t, "3", req.Params().Get("c"))
+	assert.Equal(t, "true", req.Header().Get("X-Test"))
+	assert.Equal(t, "secret", req.Token())
+}
 
-	if string(req.Body()) != "hello steam" {
-		t.Errorf("Expected body 'hello steam', got '%s'", string(req.Body()))
-	}
+func TestResponse_MetadataExtraction(t *testing.T) {
+	t.Run("As Success", func(t *testing.T) {
+		type myMeta struct{ ID int }
 
-	if req.Params().Get("key1") != "val1" || req.Params().Get("key2") != "val2" {
-		t.Errorf("Expected params to be correctly set")
-	}
+		resp := NewResponse(nil, myMeta{ID: 42})
 
-	if req.Header().Get("X-Token") != "123" {
-		t.Errorf("Expected header X-Token to be '123'")
-	}
+		var extracted myMeta
+
+		ok := resp.As(&extracted)
+		assert.True(t, ok)
+		assert.Equal(t, 42, extracted.ID)
+	})
+
+	t.Run("As Failure - Type Mismatch", func(t *testing.T) {
+		resp := NewResponse(nil, HTTPMetadata{StatusCode: 200})
+
+		var wrongType string
+
+		ok := resp.As(&wrongType)
+		assert.False(t, ok)
+	})
+
+	t.Run("As Failure - Nil Metadata", func(t *testing.T) {
+		resp := NewResponse(nil, nil)
+
+		var m HTTPMetadata
+		assert.False(t, resp.As(&m))
+	})
+
+	t.Run("As Panic - Not a Pointer", func(t *testing.T) {
+		resp := NewResponse(nil, 1)
+		assert.Panics(t, func() {
+			resp.As(123)
+		})
+	})
+
+	t.Run("Helper Coverage", func(t *testing.T) {
+		// HTTP helper
+		hMeta := HTTPMetadata{StatusCode: 404}
+		respH := NewResponse(nil, hMeta)
+		gotH, okH := respH.HTTP()
+		assert.True(t, okH)
+		assert.Equal(t, 404, gotH.StatusCode)
+
+		// Socket helper
+		sMeta := SocketMetadata{SourceJobID: 123}
+		respS := NewResponse(nil, sMeta)
+		gotS, okS := respS.Socket()
+		assert.True(t, okS)
+		assert.Equal(t, uint64(123), gotS.SourceJobID)
+
+		// Negative checks for helpers
+		_, ok := respH.Socket()
+		assert.False(t, ok)
+		_, ok = respS.HTTP()
+		assert.False(t, ok)
+	})
 }

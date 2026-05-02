@@ -6,13 +6,13 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
@@ -20,255 +20,218 @@ import (
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
-type MockTransport struct {
-	OnDo func(req *tr.Request) (*tr.Response, error)
+type mockTransport struct {
+	onDo func(req *tr.Request) (*tr.Response, error)
 }
 
-func (m *MockTransport) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
-	return m.OnDo(req)
+func (m *mockTransport) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
+	return m.onDo(req)
 }
-
-func (m *MockTransport) Close() error { return nil }
+func (m *mockTransport) Close() error { return nil }
 
 type mockTarget string
 
 func (m mockTarget) String() string { return string(m) }
 
-func TestUnifiedClient_ParamInjection(t *testing.T) {
-	ctx := context.Background()
-	apiKey := "test-api-key"
-	accessToken := "test-access-token"
-
-	transport := &MockTransport{
-		OnDo: func(req *tr.Request) (*tr.Response, error) {
-			if req.Params().Get("key") != apiKey {
-				t.Errorf("expected api key %s, got %s", apiKey, req.Params().Get("key"))
-			}
-
-			if req.Params().Get("access_token") != accessToken {
-				t.Errorf("expected access token %s, got %s", accessToken, req.Params().Get("access_token"))
-			}
-
-			return tr.NewResponse([]byte("{}"), tr.HTTPMetadata{StatusCode: http.StatusOK}), nil
-		},
-	}
-
-	client := New(transport).
-		WithAPIKey(apiKey).
-		WithAccessToken(accessToken)
-
-	req := tr.NewRequest(mockTarget("test"), nil)
-
-	_, err := client.Do(ctx, req)
-	if err != nil {
-		t.Fatalf("Do failed: %v", err)
-	}
+type mockDoerWithRegistry struct {
+	reg  *api.UnmarshalRegistry
+	onDo func(req *tr.Request) (*tr.Response, error)
 }
 
-func TestUnifiedClient_Errors(t *testing.T) {
+func (m *mockDoerWithRegistry) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
+	return m.onDo(req)
+}
+func (m *mockDoerWithRegistry) Registry() *api.UnmarshalRegistry { return m.reg }
+
+// These are only used for reflection tests and won't be passed to proto.Marshal.
+type (
+	CTest_DoWork_Request struct{ proto.Message }
+	Test_DoWork_Request  struct{ proto.Message }
+	CTest_Simple         struct{ proto.Message }
+	C_Invalid            struct{ proto.Message }
+)
+
+func TestClient_Initialization(t *testing.T) {
+	trans := &mockTransport{}
+	c := New(trans)
+	assert.NotNil(t, c.Registry())
+
+	c1 := c.WithAPIKey("key")
+	assert.Equal(t, "key", c1.apiKey)
+
+	c2 := c.WithAccessToken("token")
+	assert.Equal(t, "token", c2.accessToken)
+
+	reg := api.NewUnmarshalRegistry()
+	c3 := c.WithRegistry(reg)
+	assert.Same(t, reg, c3.Registry())
+}
+
+func TestClient_Do(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("HTTP Error", func(t *testing.T) {
-		transport := &MockTransport{
-			OnDo: func(req *tr.Request) (*tr.Response, error) {
-				return tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 401}), nil
-			},
-		}
-		client := New(transport)
-		_, err := client.Do(ctx, tr.NewRequest(mockTarget("test"), nil))
-
-		var apiErr api.SteamAPIError
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != 401 {
-			t.Errorf("expected SteamAPIError 401, got %v", err)
-		}
+	t.Run("Transport Error", func(t *testing.T) {
+		trans := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
+			return nil, errors.New("fail")
+		}}
+		c := New(trans)
+		_, err := c.Do(ctx, tr.NewRequest(mockTarget("t"), nil))
+		assert.ErrorContains(t, err, "transport error")
 	})
 
-	t.Run("EResult Error", func(t *testing.T) {
-		transport := &MockTransport{
-			OnDo: func(req *tr.Request) (*tr.Response, error) {
-				return tr.NewResponse(nil, tr.HTTPMetadata{
-					Result:     enums.EResult_Fail,
-					StatusCode: http.StatusOK,
-				}), nil
-			},
-		}
-		client := New(transport)
-		_, err := client.Do(ctx, tr.NewRequest(mockTarget("test"), nil))
-
-		var resErr api.EResultError
-		if !errors.As(err, &resErr) || resErr.Result != enums.EResult_Fail {
-			t.Errorf("expected EResultError Fail, got %v", err)
-		}
+	t.Run("Credential Injection", func(t *testing.T) {
+		trans := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
+			assert.Equal(t, "K", req.Params().Get("key"))
+			assert.Equal(t, "T", req.Params().Get("access_token"))
+			return tr.NewResponse([]byte("{}"), tr.HTTPMetadata{StatusCode: 200}), nil
+		}}
+		c := New(trans).WithAPIKey("K").WithAccessToken("T")
+		_, err := c.Do(ctx, tr.NewRequest(mockTarget("t"), nil))
+		assert.NoError(t, err)
 	})
 }
 
-type CPlayer_GetNickname_Request struct {
-	pb.CMsgClientHeartBeat
-}
+func TestClient_ValidateEResult(t *testing.T) {
+	trans := &mockTransport{}
+	c := New(trans)
 
-type CPlayer_GetNickname_Response struct {
-	proto.Message
-	Nickname string `json:"nickname"`
+	// HTTP 401
+	resp := tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 401})
+	assert.ErrorIs(t, c.validateEResult(resp), api.ErrSessionExpired)
+
+	// HTTP Result 0 -> OK
+	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: 0})
+	assert.NoError(t, c.validateEResult(resp))
+
+	// Auth Error Result
+	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: enums.EResult_InvalidPassword})
+	assert.ErrorIs(t, c.validateEResult(resp), api.ErrSessionExpired)
+
+	// General Result Fail
+	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: enums.EResult_Fail})
+	err := c.validateEResult(resp)
+
+	var resErr api.EResultError
+	require.ErrorAs(t, err, &resErr)
+	assert.Equal(t, enums.EResult_Fail, resErr.Result)
+
+	// Socket Success
+	resp = tr.NewResponse(nil, tr.SocketMetadata{Result: enums.EResult_OK})
+	assert.NoError(t, c.validateEResult(resp))
 }
 
 func TestInferUnifiedMethod(t *testing.T) {
-	tests := []struct {
-		msg     proto.Message
-		iface   string
-		method  string
-		wantErr bool
-	}{
-		{&CPlayer_GetNickname_Request{}, "Player", "GetNickname", false},
-		{&pb.CMsgClientLogon{}, "", "", true},
-		{nil, "", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%T", tt.msg), func(t *testing.T) {
-			iface, method, err := inferUnifiedMethod(tt.msg)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("inferUnifiedMethod() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if iface != tt.iface || method != tt.method {
-				t.Errorf("got (%s, %s), want (%s, %s)", iface, method, tt.iface, tt.method)
-			}
-		})
-	}
-}
-
-func TestClient_Immutability(t *testing.T) {
-	base := New(&MockTransport{})
-	derived := base.WithAPIKey("key1")
-
-	if base.apiKey != "" {
-		t.Error("Base client was mutated after WithAPIKey")
-	}
-
-	if derived.apiKey != "key1" {
-		t.Error("Derived client doesn't have the API key")
-	}
-
-	if base == derived {
-		t.Error("WithAPIKey returned the same pointer, expected a clone")
-	}
-}
-
-func TestUnified_Success(t *testing.T) {
-	expectedNickname := "GabeN"
-
-	respData, _ := json.Marshal(map[string]any{
-		"response": map[string]string{"nickname": expectedNickname},
+	t.Run("Nil Request", func(t *testing.T) {
+		_, _, err := inferUnifiedMethod(nil)
+		assert.ErrorIs(t, err, ErrInvalidMessage)
 	})
 
-	transport := &MockTransport{
-		OnDo: func(req *tr.Request) (*tr.Response, error) {
-			target := req.Target().(*UnifiedTarget)
-			if target.Interface != "Player" || target.Method != "GetNickname" {
-				t.Errorf("Wrong target inferred: %s", target.String())
-			}
+	t.Run("Naming Logic", func(t *testing.T) {
+		// Valid
+		iface, method, err := inferUnifiedMethod(&CTest_DoWork_Request{})
+		assert.NoError(t, err)
+		assert.Equal(t, "Test", iface)
+		assert.Equal(t, "DoWork", method)
 
-			return tr.NewResponse(respData, tr.HTTPMetadata{StatusCode: http.StatusOK}), nil
-		},
-	}
+		// Cache hit
+		iface, _, _ = inferUnifiedMethod(&CTest_DoWork_Request{})
+		assert.Equal(t, "Test", iface)
 
-	res, err := Unified[CPlayer_GetNickname_Response](
-		t.Context(),
-		transport,
-		&CPlayer_GetNickname_Request{},
-		api.WithFormat(api.FormatJSON),
-	)
-	if err != nil {
-		t.Fatalf("Unified call failed: %v", err)
-	}
+		// No "C" prefix
+		iface, _, err = inferUnifiedMethod(&Test_DoWork_Request{})
+		assert.NoError(t, err)
+		assert.Equal(t, "Test", iface)
 
-	if res.Nickname != expectedNickname {
-		t.Errorf("Expected nickname %s, got %s", expectedNickname, res.Nickname)
-	}
+		// No suffix
+		_, method, err = inferUnifiedMethod(&CTest_Simple{})
+		assert.NoError(t, err)
+		assert.Equal(t, "Simple", method)
+	})
+
+	t.Run("Invalid Names", func(t *testing.T) {
+		// No underscores
+		type SingleWord struct{ proto.Message }
+
+		_, _, err := inferUnifiedMethod(&SingleWord{})
+		assert.ErrorIs(t, err, ErrInvalidMessage)
+	})
 }
 
-func TestExecute_NoResponse(t *testing.T) {
-	ctx := context.Background()
-	transport := &MockTransport{
-		OnDo: func(req *tr.Request) (*tr.Response, error) {
-			return tr.NewResponse([]byte("ignored content"), tr.HTTPMetadata{StatusCode: http.StatusOK}), nil
-		},
-	}
-
-	res, err := execute[NoResponse](ctx, transport, tr.NewRequest(mockTarget("test"), nil), api.FormatJSON)
-	if err != nil {
-		t.Errorf("execute with NoResponse failed: %v", err)
-	}
-
-	if res != nil {
-		t.Error("expected nil response for NoResponse type")
-	}
-}
-
-func TestClient_SocketMetadataValidation(t *testing.T) {
+func TestExecute_Logic(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("Socket Success", func(t *testing.T) {
-		transport := &MockTransport{
-			OnDo: func(req *tr.Request) (*tr.Response, error) {
-				return tr.NewResponse(nil, tr.SocketMetadata{Result: enums.EResult_OK}), nil
+	t.Run("Registry From Provider", func(t *testing.T) {
+		reg := api.NewUnmarshalRegistry()
+		doer := &mockDoerWithRegistry{
+			reg: reg,
+			onDo: func(req *tr.Request) (*tr.Response, error) {
+				return tr.NewResponse([]byte(`{"nickname":"G"}`), tr.HTTPMetadata{StatusCode: 200}), nil
 			},
 		}
-		client := New(transport)
 
-		_, err := client.Do(ctx, tr.NewRequest(mockTarget("test"), nil))
-		if err != nil {
-			t.Errorf("Expected OK for socket EResult_OK, got %v", err)
-		}
+		type resp struct{ Nickname string }
+
+		res, err := execute[resp](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		assert.NoError(t, err)
+		assert.Equal(t, "G", res.Nickname)
 	})
 
-	t.Run("Socket EResult Fail", func(t *testing.T) {
-		transport := &MockTransport{
-			OnDo: func(req *tr.Request) (*tr.Response, error) {
-				return tr.NewResponse(nil, tr.SocketMetadata{Result: enums.EResult_AccessDenied}), nil
-			},
-		}
-		client := New(transport)
-		_, err := client.Do(ctx, tr.NewRequest(mockTarget("test"), nil))
+	t.Run("Unmarshal Error", func(t *testing.T) {
+		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
+			return tr.NewResponse([]byte(`{invalid}`), tr.HTTPMetadata{StatusCode: 200}), nil
+		}}
+		_, err := execute[map[string]any](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		assert.Error(t, err)
+	})
 
-		var resErr api.EResultError
-		if !errors.As(err, &resErr) || resErr.Result != enums.EResult_AccessDenied {
-			t.Errorf("expected EResult_AccessDenied, got %v", err)
-		}
+	t.Run("NoResponse Sentinel", func(t *testing.T) {
+		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
+			return tr.NewResponse([]byte(`ignored`), tr.HTTPMetadata{StatusCode: 200}), nil
+		}}
+		res, err := execute[NoResponse](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		assert.NoError(t, err)
+		assert.Nil(t, res)
 	})
 }
 
-func TestWebAPI_WithParams(t *testing.T) {
+func TestEntryPoints(t *testing.T) {
 	ctx := context.Background()
+	trans := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
+		return tr.NewResponse([]byte(`{}`), tr.HTTPMetadata{StatusCode: 200}), nil
+	}}
 
-	type TestParams struct {
-		SteamID uint64 `url:"steamid"`
-	}
+	t.Run("UnifiedExplicit", func(t *testing.T) {
+		// Use a real generated proto message to avoid Marshal panic
+		_, err := UnifiedExplicit[NoResponse](ctx, trans, "POST", "I", "M", 1, &emptypb.Empty{})
+		assert.NoError(t, err)
+	})
 
-	transport := &MockTransport{
-		OnDo: func(req *tr.Request) (*tr.Response, error) {
-			if req.Params().Get("steamid") != "76561197960287930" {
-				t.Errorf("Param not found or wrong value: %s", req.Params().Get("steamid"))
-			}
+	t.Run("WebAPI", func(t *testing.T) {
+		// Nil request msg
+		_, err := WebAPI[NoResponse](ctx, trans, "GET", "I", "M", 1, nil)
+		assert.NoError(t, err)
 
-			return tr.NewResponse(
-				[]byte(`{"response": {"status": "ok"}}`),
-				tr.HTTPMetadata{StatusCode: http.StatusOK},
-			), nil
-		},
-	}
+		// With struct params
+		type P struct {
+			ID int `url:"id"`
+		}
 
-	_, err := WebAPI[any](
-		ctx,
-		transport,
-		"GET",
-		"ISteamUser",
-		"GetPlayerSummaries",
-		2,
-		&TestParams{SteamID: 76561197960287930},
-	)
-	if err != nil {
-		t.Errorf("WebAPI failed: %v", err)
-	}
+		_, err = WebAPI[NoResponse](ctx, trans, "GET", "I", "M", 1, &P{ID: 1})
+		assert.NoError(t, err)
+
+		// Param conversion error
+		_, err = WebAPI[NoResponse](ctx, trans, "GET", "I", "M", 1, make(chan int))
+		assert.Error(t, err)
+	})
+
+	t.Run("Legacy", func(t *testing.T) {
+		_, err := Legacy[NoResponse](ctx, trans, enums.EMsg_ClientLogon, &pb.CMsgClientLogon{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("Unified Inference Failure", func(t *testing.T) {
+		// Use a real message that doesn't follow the naming convention
+		_, err := Unified[NoResponse](ctx, trans, &pb.CMsgClientLogon{})
+		assert.ErrorIs(t, err, ErrInvalidMessage)
+	})
 }

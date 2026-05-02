@@ -7,171 +7,199 @@ package id_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/test/requester"
 )
 
+func TestEnums(t *testing.T) {
+	t.Run("Universe Stringer", func(t *testing.T) {
+		assert.Equal(t, "Invalid", id.UniverseInvalid.String())
+		assert.Equal(t, "Public", id.UniversePublic.String())
+		assert.Equal(t, "Beta", id.UniverseBeta.String())
+		assert.Equal(t, "Internal", id.UniverseInternal.String())
+		assert.Equal(t, "Dev", id.UniverseDev.String())
+		assert.Equal(t, "Universe(100)", id.Universe(100).String())
+	})
+
+	t.Run("AccountType Stringer", func(t *testing.T) {
+		assert.Equal(t, "Invalid", id.AccountTypeInvalid.String())
+		assert.Equal(t, "Individual", id.AccountTypeIndividual.String())
+		assert.Equal(t, "Multiseat", id.AccountTypeMultiseat.String())
+		assert.Equal(t, "GameServer", id.AccountTypeGameServer.String())
+		assert.Equal(t, "AnonGameServer", id.AccountTypeAnonGameServer.String())
+		assert.Equal(t, "Pending", id.AccountTypePending.String())
+		assert.Equal(t, "ContentServer", id.AccountTypeContentServer.String())
+		assert.Equal(t, "Clan", id.AccountTypeClan.String())
+		assert.Equal(t, "Chat", id.AccountTypeChat.String())
+		assert.Equal(t, "ConsoleUser", id.AccountTypeConsoleUser.String())
+		assert.Equal(t, "AnonUser", id.AccountTypeAnonUser.String())
+		assert.Equal(t, "AccountType(100)", id.AccountType(100).String())
+	})
+}
+
+func TestID_Basics(t *testing.T) {
+	raw := uint64(76561198044393456)
+	sid := id.New(raw)
+
+	assert.Equal(t, raw, sid.Uint64())
+	assert.Equal(t, "76561198044393456", sid.String())
+	assert.Equal(t, uint32(84127728), sid.AccountID())
+	assert.Equal(t, uint32(1), sid.Instance())
+	assert.Equal(t, id.UniversePublic, sid.Universe())
+	assert.Equal(t, id.AccountTypeIndividual, sid.Type())
+
+	// FromAccountID
+	assert.Equal(t, sid, id.FromAccountID(84127728))
+}
+
 func TestParse(t *testing.T) {
+	expected := id.ID(76561198044393456)
+
 	tests := []struct {
-		name     string
-		input    string
-		expected id.ID
+		name  string
+		input string
+		want  id.ID
 	}{
 		{"Empty", "", id.InvalidID},
-		{"SteamID64", "76561198044393456", id.ID(76561198044393456)},
-		{"Steam2", "STEAM_0:0:42063864", id.ID(76561198044393456)},
-		{"Steam3", "[U:1:84127728]", id.ID(76561198044393456)},
-		{"Invalid String", "not_an_id", id.InvalidID},
+		{"Steam64", "76561198044393456", expected},
+		{"Steam2_0", "STEAM_0:0:42063864", expected},
+		{"Steam2_1", "STEAM_0:1:42063864", id.ID(76561198044393457)},
+		{"Steam3", "[U:1:84127728]", expected},
+		{"Steam3WithInstance", "[U:1:84127728:1]", expected},
+		{"Garbage", "abc-123", id.InvalidID},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := id.Parse(tt.input); got != tt.expected {
-				t.Errorf("Parse(%s) = %v, want %v", tt.input, got, tt.expected)
-			}
+			assert.Equal(t, tt.want, id.Parse(tt.input))
 		})
 	}
 }
 
-func TestID_Components(t *testing.T) {
-	sid := id.ID(76561198044393456)
-
-	if sid.AccountID() != 84127728 {
-		t.Errorf("Expected AccountID 84127728, got %d", sid.AccountID())
-	}
-
-	if sid.Universe() != id.UniversePublic {
-		t.Errorf("Expected Universe Public, got %v", sid.Universe())
-	}
-
-	if sid.Type() != id.AccountTypeIndividual {
-		t.Errorf("Expected Type Individual, got %v", sid.Type())
-	}
-
-	if sid.Instance() != 1 {
-		t.Errorf("Expected Instance 1, got %d", sid.Instance())
-	}
+func TestID_IsValid(t *testing.T) {
+	assert.True(t, id.ID(76561198044393456).IsValid())
+	assert.False(t, id.InvalidID.IsValid())
+	// Test boundary of Universe
+	assert.False(t, id.ID(uint64(id.UniverseInvalid)<<56).IsValid())
+	// Test boundary of AccountType
+	assert.False(t, id.ID(uint64(id.UniversePublic)<<56).IsValid())
 }
 
 func TestID_Formatting(t *testing.T) {
 	sid := id.ID(76561198044393456)
-
-	if sid.Steam2() != "STEAM_0:0:42063864" {
-		t.Errorf("Steam2() = %s", sid.Steam2())
-	}
-
-	if sid.Steam3() != "[U:1:84127728]" {
-		t.Errorf("Steam3() = %s", sid.Steam3())
-	}
-
-	if sid.String() != "76561198044393456" {
-		t.Errorf("String() = %s", sid.String())
-	}
-}
-
-func TestID_Valid(t *testing.T) {
-	if !id.ID(76561198044393456).IsValid() {
-		t.Error("Standard ID should be valid")
-	}
-
-	if id.InvalidID.IsValid() {
-		t.Error("InvalidID should be invalid")
-	}
+	assert.Equal(t, "STEAM_0:0:42063864", sid.Steam2())
+	assert.Equal(t, "[U:1:84127728]", sid.Steam3())
 }
 
 func TestID_JSON(t *testing.T) {
 	sid := id.ID(76561198044393456)
 
-	// Test Marshal (Should be a string to prevent JS precision loss)
-	data, err := json.Marshal(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Run("Marshal", func(t *testing.T) {
+		data, err := json.Marshal(sid)
+		require.NoError(t, err)
+		assert.Equal(t, `"76561198044393456"`, string(data))
+	})
 
-	if string(data) != `"76561198044393456"` {
-		t.Errorf("JSON Marshal = %s", string(data))
-	}
+	t.Run("Unmarshal Success", func(t *testing.T) {
+		var out id.ID
+		// String
+		require.NoError(t, json.Unmarshal([]byte(`"76561198044393456"`), &out))
+		assert.Equal(t, sid, out)
+		// Number
+		require.NoError(t, json.Unmarshal([]byte(`76561198044393456`), &out))
+		assert.Equal(t, sid, out)
+	})
 
-	// Test Unmarshal (Should support strings)
-	var decoded id.ID
-	if err := json.Unmarshal([]byte(`"76561198044393456"`), &decoded); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("Unmarshal Null/Empty", func(t *testing.T) {
+		var out id.ID
+		require.NoError(t, json.Unmarshal([]byte(`null`), &out))
+		assert.Equal(t, id.InvalidID, out)
 
-	if decoded != sid {
-		t.Errorf("JSON Unmarshal = %v", decoded)
-	}
+		// Manual check of UnmarshalJSON with empty slice
+		err := out.UnmarshalJSON([]byte{})
+		assert.NoError(t, err)
+		assert.Equal(t, id.InvalidID, out)
+	})
 
-	// Test Unmarshal (Should support numbers for backward compatibility)
-	if err := json.Unmarshal([]byte(`76561198044393456`), &decoded); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("Unmarshal Error", func(t *testing.T) {
+		var out id.ID
 
-	if decoded != sid {
-		t.Errorf("JSON Unmarshal (number) = %v", decoded)
-	}
+		err := json.Unmarshal([]byte(`"not-a-number"`), &out)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid json value")
+	})
 }
 
 func TestResolve(t *testing.T) {
 	ctx := context.Background()
 	mock := requester.New()
 
-	t.Run("Direct ID", func(t *testing.T) {
-		got, err := id.Resolve(ctx, mock, "76561198044393456")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if got.Uint64() != 76561198044393456 {
-			t.Errorf("Expected same ID back")
-		}
+	t.Run("Valid Direct ID", func(t *testing.T) {
+		sid, err := id.Resolve(ctx, mock, " 76561198044393456 ")
+		require.NoError(t, err)
+		assert.Equal(t, id.ID(76561198044393456), sid)
 	})
 
-	t.Run("Profile URL", func(t *testing.T) {
-		got, err := id.Resolve(ctx, mock, "https://steamcommunity.com/profiles/76561198044393456")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if got.Uint64() != 76561198044393456 {
-			t.Errorf("Expected ID extracted from URL")
-		}
+	t.Run("Profile URL with ID", func(t *testing.T) {
+		sid, err := id.Resolve(ctx, mock, "https://steamcommunity.com/profiles/76561198044393456")
+		require.NoError(t, err)
+		assert.Equal(t, id.ID(76561198044393456), sid)
 	})
 
 	t.Run("Vanity URL Success", func(t *testing.T) {
-		vanityName := "lemon4ksan"
-		expectedID := "76561198044393456"
-
 		mock.SetJSONResponse("ISteamUser", "ResolveVanityURL", map[string]any{
 			"response": map[string]any{
 				"success": 1,
-				"steamid": expectedID,
+				"steamid": "76561198044393456",
 			},
 		})
-
-		got, err := id.Resolve(ctx, mock, "https://steamcommunity.com/id/"+vanityName)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if got.String() != expectedID {
-			t.Errorf("Expected %s, got %v", expectedID, got)
-		}
+		sid, err := id.Resolve(ctx, mock, "steamcommunity.com/id/lemon4ksan")
+		require.NoError(t, err)
+		assert.Equal(t, id.ID(76561198044393456), sid)
 	})
 
-	t.Run("Vanity URL Not Found", func(t *testing.T) {
+	t.Run("Vanity URL slug is ID", func(t *testing.T) {
+		// This tests the branch: if id := Parse(slug); id.IsValid() { return id, nil }
+		sid, err := id.Resolve(ctx, mock, "https://steamcommunity.com/id/76561198044393456")
+		require.NoError(t, err)
+		assert.Equal(t, id.ID(76561198044393456), sid)
+	})
+
+	t.Run("Invalid Format Error", func(t *testing.T) {
+		_, err := id.Resolve(ctx, mock, "google.com")
+		assert.Error(t, err)
+		assert.Equal(t, "steamid: invalid input format", err.Error())
+	})
+}
+
+func TestResolveVanityURL(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("WebAPI Error", func(t *testing.T) {
+		mock := requester.New()
+		mock.ResponseErrs["ISteamUser/ResolveVanityURL"] = errors.New("network fail")
+		_, err := id.ResolveVanityURL(ctx, mock, "test")
+		assert.Error(t, err)
+		assert.Equal(t, "network fail", err.Error())
+	})
+
+	t.Run("Steam Success False", func(t *testing.T) {
+		mock := requester.New()
 		mock.SetJSONResponse("ISteamUser", "ResolveVanityURL", map[string]any{
 			"response": map[string]any{
 				"success": 42,
-				"message": "No match",
+				"message": "No match found",
 			},
 		})
-
-		_, err := id.Resolve(ctx, mock, "https://steamcommunity.com/id/unknown_user")
-		if err == nil {
-			t.Fatal("Expected error for non-existent vanity URL")
-		}
+		_, err := id.ResolveVanityURL(ctx, mock, "test")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "could not resolve vanity URL")
+		assert.Contains(t, err.Error(), "success=42")
 	})
 }

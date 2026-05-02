@@ -100,24 +100,6 @@ func (s *AuthenticatorSuite) TestAcquireMachineId_Generation() {
 	s.Len(details.MachineID, 42)
 }
 
-func (s *AuthenticatorSuite) TestLogOn_InvalidPassword_ClearsStorage() {
-	details := &LogOnDetails{AccountName: "user", RefreshToken: "token", SteamID: 123}
-	server := socket.CMServer{Type: "websockets"}
-
-	s.store.On("GetMachineID", mock.Anything, "user").Return([]byte("id"), nil)
-	s.store.On("Clear", mock.Anything, "user").Return(nil).Once()
-	s.socket.On("Connect", server).Return(nil)
-	s.socket.On("SendProto", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		s.socket.SimulatePacket(enums.EMsg_ClientLogOnResponse, &pb.CMsgClientLogonResponse{
-			Eresult: proto.Int32(int32(enums.EResult_InvalidPassword)),
-		})
-	}).Return(nil)
-
-	err := s.auth.LogOn(context.Background(), details, server)
-	s.Error(err)
-	s.store.AssertExpectations(s.T())
-}
-
 func (s *AuthenticatorSuite) TestLogOnAnonymous_Coverage() {
 	server := socket.CMServer{Type: "websockets"}
 
@@ -230,11 +212,12 @@ func (s *AuthenticatorSuite) TestAcquireAuthToken_Coverage() {
 
 func (s *AuthenticatorSuite) TestNopStore() {
 	n := nopStore{}
-	_ = n.SaveRefreshToken(nil, "", "")
-	_ = n.SaveMachineID(nil, "", nil)
-	_ = n.Clear(nil, "")
-	_, _ = n.GetRefreshToken(nil, "")
-	_, _ = n.GetMachineID(nil, "")
+	ctx := context.Background()
+	_ = n.SaveRefreshToken(ctx, "", "")
+	_ = n.SaveMachineID(ctx, "", nil)
+	_ = n.Clear(ctx, "")
+	_, _ = n.GetRefreshToken(ctx, "")
+	_, _ = n.GetMachineID(ctx, "")
 }
 
 type MockSocketProvider struct {

@@ -5,151 +5,167 @@
 package service
 
 import (
-	"net/url"
+	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
 
-func TestUnifiedTarget_Formatting(t *testing.T) {
-	cases := []struct {
-		name     string
-		target   *UnifiedTarget
-		expected string
-	}{
-		{
-			name: "Standard Service",
-			target: &UnifiedTarget{
-				Interface: "Player",
-				Method:    "GetGameBadgeLevels",
-				Version:   1,
-				IsService: true,
-			},
-			expected: "IPlayerService/GetGameBadgeLevels/v1",
-		},
-		{
-			name: "Already prefixed",
-			target: &UnifiedTarget{
-				Interface: "IInventory",
-				Method:    "GetItems",
-				Version:   2,
-				IsService: true,
-			},
-			expected: "IInventoryService/GetItems/v2",
-		},
-		{
-			name: "Non-Service",
-			target: &UnifiedTarget{
-				Interface: "Cloud",
-				Method:    "GetFile",
-				Version:   1,
-				IsService: false,
-			},
-			expected: "ICloud/GetFile/v1",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.target.HTTPPath() != tc.expected {
-				t.Errorf("expected %s, got %s", tc.expected, tc.target.HTTPPath())
-			}
-		})
-	}
-}
-
-func TestUnifiedTarget_EMsg(t *testing.T) {
-	target := &UnifiedTarget{}
-
-	if target.EMsg(true) != enums.EMsg_ServiceMethodCallFromClient {
-		t.Error("wrong EMsg for authed unified request")
-	}
-
-	if target.EMsg(false) != enums.EMsg_ServiceMethodCallFromClientNonAuthed {
-		t.Error("wrong EMsg for non-authed unified request")
-	}
-}
-
-func TestNewUnifiedRequest_Encoding(t *testing.T) {
-	t.Run("Proto encoding", func(t *testing.T) {
-		msg := &emptypb.Empty{}
-
-		req, err := NewUnifiedRequest("POST", "Test", "Method", 1, msg)
-		if err != nil {
-			t.Fatal(err)
+func TestUnifiedTarget(t *testing.T) {
+	t.Run("Formatting and Setters", func(t *testing.T) {
+		target := &UnifiedTarget{
+			Interface: "Player",
+			Method:    "GetNickname",
+			Version:   1,
+			IsService: true,
 		}
+
+		assert.Equal(t, "Player.GetNickname#1", target.String())
+		assert.Equal(t, target.String(), target.ObjectName())
+		assert.Equal(t, "POST", target.HTTPMethod(), "Should default to POST")
+
+		target.SetHTTPMethod("GET")
+		assert.Equal(t, "GET", target.HTTPMethod())
+
+		target.SetVersion(2)
+		assert.Equal(t, 2, target.Version)
+	})
+
+	t.Run("HTTPPath Logic", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			iface     string
+			isService bool
+			expected  string
+		}{
+			{
+				name:      "Add I and Service",
+				iface:     "Player",
+				isService: true,
+				expected:  "IPlayerService/Get/v1",
+			},
+			{
+				name:      "Already has I, add Service",
+				iface:     "IInventory",
+				isService: true,
+				expected:  "IInventoryService/Get/v1",
+			},
+			{
+				name:      "Add I, already has Service",
+				iface:     "ChatService",
+				isService: true,
+				expected:  "IChatService/Get/v1",
+			},
+			{
+				name:      "Not a Service",
+				iface:     "PublishedFile",
+				isService: false,
+				expected:  "IPublishedFile/Get/v1",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				u := &UnifiedTarget{
+					Interface: tt.iface,
+					Method:    "Get",
+					Version:   1,
+					IsService: tt.isService,
+				}
+				assert.Equal(t, tt.expected, u.HTTPPath())
+			})
+		}
+	})
+
+	t.Run("EMsg Branching", func(t *testing.T) {
+		u := &UnifiedTarget{}
+		assert.Equal(t, enums.EMsg_ServiceMethodCallFromClient, u.EMsg(true))
+		assert.Equal(t, enums.EMsg_ServiceMethodCallFromClientNonAuthed, u.EMsg(false))
+	})
+}
+
+func TestNewUnifiedRequest(t *testing.T) {
+	t.Run("Nil Message", func(t *testing.T) {
+		req, err := NewUnifiedRequest("POST", "I", "M", 1, nil)
+		require.NoError(t, err)
+		assert.Nil(t, req.Body())
+	})
+
+	t.Run("Proto Message", func(t *testing.T) {
+		msg := &emptypb.Empty{}
+		req, err := NewUnifiedRequest("POST", "I", "M", 1, msg)
+		require.NoError(t, err)
 
 		expected, _ := proto.Marshal(msg)
-		if string(req.Body()) != string(expected) {
-			t.Error("proto body mismatch")
-		}
+		assert.Equal(t, expected, req.Body())
 	})
 
-	t.Run("JSON encoding", func(t *testing.T) {
-		msg := map[string]string{"foo": "bar"}
-
-		req, err := NewUnifiedRequest("POST", "Test", "Method", 1, msg)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if string(req.Body()) != `{"foo":"bar"}` {
-			t.Errorf("json body mismatch: %s", string(req.Body()))
-		}
+	t.Run("Byte Slice", func(t *testing.T) {
+		raw := []byte{0xDE, 0xAD}
+		req, err := NewUnifiedRequest("POST", "I", "M", 1, raw)
+		require.NoError(t, err)
+		assert.Equal(t, raw, req.Body())
 	})
 
-	t.Run("Raw bytes", func(t *testing.T) {
-		raw := []byte{0x01, 0x02}
+	t.Run("JSON Struct", func(t *testing.T) {
+		data := struct{ ID int }{ID: 10}
+		req, err := NewUnifiedRequest("POST", "I", "M", 1, data)
+		require.NoError(t, err)
 
-		req, _ := NewUnifiedRequest("POST", "Test", "Method", 1, raw)
-		if string(req.Body()) != string(raw) {
-			t.Error("raw body mismatch")
-		}
+		expected, _ := json.Marshal(data)
+		assert.Equal(t, expected, req.Body())
+	})
+
+	t.Run("JSON Error", func(t *testing.T) {
+		// Channels cannot be marshaled to JSON
+		_, err := NewUnifiedRequest("POST", "I", "M", 1, make(chan int))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to encode unified body")
 	})
 }
 
 func TestWebAPITarget(t *testing.T) {
-	target := &WebAPITarget{
+	w := &WebAPITarget{
 		HttpMethod: "GET",
 		Interface:  "ISteamUser",
-		Method:     "GetPlayerSummaries",
+		Method:     "GetPlayer",
 		Version:    2,
 	}
 
-	expectedPath := "ISteamUser/GetPlayerSummaries/v2"
-	if target.HTTPPath() != expectedPath {
-		t.Errorf("expected %s, got %s", expectedPath, target.HTTPPath())
-	}
+	assert.Equal(t, "ISteamUser/GetPlayer", w.String())
+	assert.Equal(t, "GET", w.HTTPMethod())
+	assert.Equal(t, "ISteamUser/GetPlayer/v2", w.HTTPPath())
+
+	w.SetHTTPMethod("POST")
+	assert.Equal(t, "POST", w.HttpMethod)
+
+	w.SetVersion(3)
+	assert.Equal(t, 3, w.Version)
 }
 
 func TestLegacyTarget(t *testing.T) {
-	emsg := enums.EMsg_ClientLogon
-	target := &LegacyTarget{eMsg: emsg}
+	t.Run("NewLegacyRequest Success", func(t *testing.T) {
+		msg := &emptypb.Empty{}
+		req, err := NewLegacyRequest(enums.EMsg_ClientLogon, msg)
+		require.NoError(t, err)
 
-	if target.EMsg(true) != emsg {
-		t.Error("EMsg mismatch")
-	}
+		target := req.Target().(*LegacyTarget)
+		assert.Equal(t, enums.EMsg_ClientLogon, target.EMsg(true))
+		assert.Equal(t, enums.EMsg_ClientLogon.String(), target.String())
+		assert.Empty(t, target.ObjectName())
 
-	if target.ObjectName() != "" {
-		t.Error("LegacyTarget should have empty object name")
-	}
-}
+		expected, _ := proto.Marshal(msg)
+		assert.Equal(t, expected, req.Body())
+	})
 
-func TestRequestModifiers(t *testing.T) {
-	req := NewWebAPIRequest("GET", "I", "M", 1)
-
-	api.WithQueryParam("a", "1")(req, nil)
-	api.WithQueryParams(url.Values{"b": {"2"}})(req, nil)
-
-	if req.Params().Get("a") != "1" {
-		t.Error("WithParam failed")
-	}
-
-	if req.Params().Get("b") != "2" {
-		t.Error("WithParams failed")
-	}
+	t.Run("NewLegacyRequest Nil Message", func(t *testing.T) {
+		req, err := NewLegacyRequest(enums.EMsg_ClientLogon, nil)
+		require.NoError(t, err)
+		assert.Nil(t, req.Body())
+	})
 }

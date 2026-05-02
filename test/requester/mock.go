@@ -34,6 +34,10 @@ type restResponse struct {
 	Header http.Header
 }
 
+func NewBuffer(b []byte) io.ReadCloser {
+	return io.NopCloser(bytes.NewBuffer(b))
+}
+
 type Mock struct {
 	mu    sync.Mutex
 	Calls []*tr.Request

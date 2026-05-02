@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
@@ -143,6 +144,26 @@ func (m *InitContext) AssertPacketHandlerUnregistered(t *testing.T, e enums.EMsg
 	if _, ok := m.packetHandlers[e]; ok {
 		t.Errorf("expected packet handler for %v to be unregistered", e)
 	}
+}
+
+// AssertServiceHandlerRegistered verifies that a handler for the specific method exists.
+func (m *InitContext) AssertServiceHandlerRegistered(t *testing.T, serviceMethod string) {
+	t.Helper()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	_, ok := m.serviceHandlers[serviceMethod]
+	assert.True(t, ok, "Expected service handler %q to be registered, but it was not", serviceMethod)
+}
+
+// AssertServiceHandlerUnregistered verifies that a handler for the specific method does NOT exist.
+func (m *InitContext) AssertServiceHandlerUnregistered(t *testing.T, serviceMethod string) {
+	t.Helper()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	_, ok := m.serviceHandlers[serviceMethod]
+	assert.False(t, ok, "Expected service handler %q to be unregistered, but it is still present", serviceMethod)
 }
 
 func (m *InitContext) EmitPacket(t *testing.T, e enums.EMsg, msg proto.Message) {

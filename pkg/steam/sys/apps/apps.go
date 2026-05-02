@@ -209,8 +209,6 @@ func (a *Apps) sendGamesPlayed(
 	return nil
 }
 
-// --- Handlers ---
-
 func (a *Apps) handlePlayingSessionState(packet *protocol.Packet) {
 	msg := &pb.CMsgClientPlayingSessionState{}
 	if err := proto.Unmarshal(packet.Payload, msg); err != nil {

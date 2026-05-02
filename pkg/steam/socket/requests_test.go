@@ -8,9 +8,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/lemon4ksan/g-man/pkg/jobs"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
@@ -19,212 +24,282 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/internal/session"
 )
 
-func TestBuilders(t *testing.T) {
+func TestPayloadBuilders(t *testing.T) {
+	sess := new(session.Base)
+	buf := new(bytes.Buffer)
+
+	// Proto
+	err := Proto(enums.EMsg(1), &pb.CMsgClientHeartBeat{})(sess, buf, 0, "")
+	require.NoError(t, err)
+	assert.True(t, buf.Len() > 0)
+
+	// Unified
+	buf.Reset()
+	err = Unified("Test.Method#1", &pb.CMsgClientHeartBeat{})(sess, buf, 1, "token")
+	require.NoError(t, err)
+
+	pkt, _ := protocol.ParsePacket(buf)
+	hdr, _ := pkt.Header.(*protocol.MsgHdrProtoBuf)
+	assert.Equal(t, "Test.Method#1", hdr.Proto.GetTargetJobName())
+	assert.Equal(t, "token", hdr.Proto.GetWgToken())
+}
+
+func TestOptions_WithToken(t *testing.T) {
+	cfg := &SendConfig{}
+	token := "oath_access_token_123"
+
+	// Triggers: WithToken sets an access token...
+	opt := WithToken(token)
+	opt(cfg)
+
+	assert.Equal(t, token, cfg.Token)
+}
+
+func TestBuilders_DynamicRaw(t *testing.T) {
 	mockConn := newMockConnection()
 	sess := session.New(mockConn)
 	sess.SetSteamID(76561197960287930)
-	sess.SetSessionID(12345)
 
-	t.Run("Unified", func(t *testing.T) {
-		method := "Player.GetOwnedGames#1"
-		req := &pb.CMsgClientHeartBeat{}
-		builder := Unified(method, req)
+	t.Run("Proto Branch (TargetName set)", func(t *testing.T) {
+		payload := []byte("proto_data")
+		target := "Player.GetNickname#1"
+
+		// Triggers: isProto := targetName != ""
+		builder := DynamicRaw(enums.EMsg_ServiceMethodCallFromClient, target, payload)
 
 		buf := new(bytes.Buffer)
-		jobID := uint64(888)
-
-		err := builder(sess, buf, jobID, "test_token")
-		if err != nil {
-			t.Fatalf("Unified builder failed: %v", err)
-		}
+		err := builder(sess, buf, 999, "my_token")
+		require.NoError(t, err)
 
 		pkt, err := protocol.ParsePacket(buf)
-		if err != nil {
-			t.Fatalf("Failed to parse built unified packet: %v", err)
-		}
+		require.NoError(t, err)
 
-		if pkt.EMsg != enums.EMsg_ServiceMethodCallFromClient {
-			t.Errorf("Expected EMsg_ServiceMethodCallFromClient, got %v", pkt.EMsg)
-		}
-
+		assert.True(t, pkt.IsProto)
 		hdr, ok := pkt.Header.(*protocol.MsgHdrProtoBuf)
-		if !ok {
-			t.Fatal("Expected MsgHdrProtoBuf")
-		}
-
-		if hdr.Proto.GetTargetJobName() != method {
-			t.Errorf("Expected method %s, got %s", method, hdr.Proto.GetTargetJobName())
-		}
-
-		if hdr.Proto.GetWgToken() != "test_token" {
-			t.Errorf("Expected token test_token, got %s", hdr.Proto.GetWgToken())
-		}
-
-		if hdr.Proto.GetJobidSource() != jobID {
-			t.Errorf("Expected jobID %d, got %d", jobID, hdr.Proto.GetJobidSource())
-		}
+		require.True(t, ok)
+		assert.Equal(t, target, hdr.Proto.GetTargetJobName())
+		assert.Equal(t, "my_token", hdr.Proto.GetWgToken())
+		assert.Equal(t, payload, pkt.Payload)
 	})
 
-	t.Run("DynamicRaw_WithTarget", func(t *testing.T) {
-		builder := DynamicRaw(enums.EMsg_ClientLogon, "SomeMethod", []byte("payload"))
+	t.Run("Raw Branch (TargetName empty)", func(t *testing.T) {
+		payload := []byte("raw_data")
+
+		// Triggers: isProto := targetName != "" (false case)
+		builder := DynamicRaw(enums.EMsg_ClientLogon, "", payload)
+
 		buf := new(bytes.Buffer)
-		_ = builder(sess, buf, 1, "")
+		err := builder(sess, buf, 123, "")
+		require.NoError(t, err)
 
-		pkt, _ := protocol.ParsePacket(buf)
-		if !pkt.IsProto {
-			t.Error("DynamicRaw with target should produce a Proto packet")
-		}
-	})
+		pkt, err := protocol.ParsePacket(buf)
+		require.NoError(t, err)
 
-	t.Run("DynamicRaw_NoTarget", func(t *testing.T) {
-		builder := DynamicRaw(enums.EMsg_ClientLogon, "", []byte("payload"))
-		buf := new(bytes.Buffer)
-		_ = builder(sess, buf, 1, "")
-
-		pkt, _ := protocol.ParsePacket(buf)
-		if pkt.IsProto {
-			t.Error("DynamicRaw without target should not produce a Proto packet")
-		}
+		assert.False(t, pkt.IsProto)
+		hdr, ok := pkt.Header.(*protocol.MsgHdrExtended)
+		require.True(t, ok)
+		assert.Equal(t, uint64(123), hdr.SourceJobID)
+		assert.Equal(t, payload, pkt.Payload)
 	})
 }
 
-func TestSocket_SendMethods(t *testing.T) {
-	mockConn := newMockConnection()
-	cfg := DefaultTestConfig()
+func TestSocket_Send(t *testing.T) {
+	conn := newMockConnection()
+	cfg := DefaultConfig()
 	cfg.Dialers = map[string]ConnectionDialer{
-		"mock": func(ctx context.Context, nh network.Handler, l log.Logger, s string) (network.Connection, error) {
-			return mockConn, nil
+		"mock": func(c context.Context, n network.Handler, l log.Logger, s string) (network.Connection, error) {
+			return conn, nil
 		},
 	}
 
 	sock := NewSocket(cfg)
 	defer sock.Close()
 
-	err := sock.Connect(CMServer{Type: "mock"})
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
+	require.NoError(t, sock.Connect(CMServer{Type: "mock"}))
 
-	mockSess := sock.Session().(*logged)
-	mockSess.SetSteamID(76561197960287930)
-	mockSess.SetSessionID(12345)
-
-	t.Run("SendUnified", func(t *testing.T) {
-		err := sock.SendUnified(t.Context(), "Test.Method", &pb.CMsgClientHeartBeat{})
-		if err != nil {
-			t.Fatalf("SendUnified failed: %v", err)
-		}
-
-		data := <-mockConn.sentMsgs
-
-		pkt, _ := protocol.ParsePacket(bytes.NewReader(data))
-		if pkt.EMsg != enums.EMsg_ServiceMethodCallFromClient {
-			t.Errorf("Unexpected EMsg: %v", pkt.EMsg)
-		}
+	t.Run("Builder Error", func(t *testing.T) {
+		err := sock.Send(context.Background(), func(s Session, b *bytes.Buffer, u uint64, s2 string) error {
+			return errors.New("build fail")
+		})
+		assert.ErrorContains(t, err, "build fail")
 	})
 
-	t.Run("SendRaw", func(t *testing.T) {
-		testPayload := []byte("raw_binary_data")
-
-		err := sock.SendRaw(t.Context(), enums.EMsg_ClientHeartBeat, testPayload)
-		if err != nil {
-			t.Fatalf("SendRaw failed: %v", err)
-		}
-
-		data := <-mockConn.sentMsgs
-
-		pkt, err := protocol.ParsePacket(bytes.NewReader(data))
-		if err != nil {
-			t.Fatalf("Failed to parse packet sent by SendRaw: %v", err)
-		}
-
-		if !bytes.Equal(pkt.Payload, testPayload) {
-			t.Errorf("Payload mismatch in SendRaw. Expected %q, got %q", testPayload, pkt.Payload)
-		}
-
-		if pkt.IsProto {
-			t.Error("SendRaw should produce non-proto packet")
-		}
-
-		hdr, ok := pkt.Header.(*protocol.MsgHdrExtended)
-		if !ok {
-			t.Fatalf("Expected MsgHdrExtended header, got %T", pkt.Header)
-		}
-
-		if hdr.SteamID != mockSess.SteamID() {
-			t.Errorf("Expected SteamID %d from session, got %d", mockSess.SteamID(), hdr.SteamID)
-		}
-
-		if hdr.SessionID != mockSess.SessionID() {
-			t.Errorf("Expected SessionID %d from session, got %d", mockSess.SessionID(), hdr.SessionID)
-		}
-
-		if hdr.SourceJobID != protocol.NoJob {
-			t.Errorf("Expected SourceJobID to be NoJob (0), got %d", hdr.SourceJobID)
-		}
+	t.Run("Send Fatal Error", func(t *testing.T) {
+		conn.sendFunc = func(ctx context.Context, data []byte) error { return syscall.ECONNRESET }
+		err := sock.Send(context.Background(), Raw(enums.EMsg(1), nil))
+		assert.Error(t, err)
+		assert.Equal(t, StateDisconnected, sock.State()) // Should trigger reconnect logic
 	})
 }
 
 func TestSocket_SendSync(t *testing.T) {
-	mockConn := newMockConnection()
-	cfg := DefaultTestConfig()
+	conn := newMockConnection()
+	cfg := DefaultConfig()
 	cfg.Dialers = map[string]ConnectionDialer{
-		"mock": func(ctx context.Context, nh network.Handler, l log.Logger, s string) (network.Connection, error) {
-			return mockConn, nil
+		"mock": func(c context.Context, n network.Handler, l log.Logger, s string) (network.Connection, error) {
+			return conn, nil
 		},
 	}
 
 	sock := NewSocket(cfg)
 	defer sock.Close()
 
-	_ = sock.Connect(CMServer{Type: "mock"})
-
-	jobIDChan := make(chan uint64, 1)
+	require.NoError(t, sock.Connect(CMServer{Type: "mock"}))
 
 	go func() {
-		data := <-mockConn.sentMsgs
+		data := <-conn.sentMsgs
 		pkt, _ := protocol.ParsePacket(bytes.NewReader(data))
-
-		var sourceID uint64
-		if pkt.IsProto {
-			sourceID = pkt.Header.(*protocol.MsgHdrProtoBuf).Proto.GetJobidSource()
-		} else {
-			sourceID = pkt.Header.(*protocol.MsgHdrExtended).SourceJobID
-		}
-
-		jobIDChan <- sourceID
-
-		resp := &protocol.Packet{
-			EMsg: pkt.EMsg,
-			Header: &protocol.MsgHdr{
-				TargetJobID: sourceID,
-			},
-			Payload: []byte("sync_response"),
-		}
-		sock.msgCh <- resp
+		// Respond
+		resp := packProto(enums.EMsg(1), pkt.GetSourceJobID(), []byte("resp"))
+		sock.processSingle(bytes.NewReader(resp))
 	}()
 
-	t.Run("Success", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
-		defer cancel()
+	resp, err := sock.SendSync(context.Background(), Raw(enums.EMsg(1), nil))
+	require.NoError(t, err)
+	assert.Equal(t, "resp", string(resp.Payload))
+}
 
-		resp, err := sock.SendSync(ctx, Raw(enums.EMsg_ClientHeartBeat, []byte("req")))
-		if err != nil {
-			t.Fatalf("SendSync returned error: %v", err)
-		}
+func TestSocket_SendHelpers(t *testing.T) {
+	conn := newMockConnection()
+	sock := NewSocket(DefaultConfig())
+	sock.setSession(session.New(conn))
+	sock.setState(StateConnected)
 
-		if string(resp.Payload) != "sync_response" {
-			t.Errorf("Unexpected response payload: %s", string(resp.Payload))
+	t.Run("SendUnified Helper", func(t *testing.T) {
+		method := "Test.Method#1"
+		req := &pb.CMsgClientHeartBeat{}
+
+		// Triggers: SendUnified calling Send with Unified builder
+		err := sock.SendUnified(context.Background(), method, req)
+		require.NoError(t, err)
+
+		data := <-conn.sentMsgs
+		pkt, _ := protocol.ParsePacket(bytes.NewReader(data))
+
+		assert.Equal(t, enums.EMsg_ServiceMethodCallFromClient, pkt.EMsg)
+		assert.True(t, pkt.IsProto)
+		hdr := pkt.Header.(*protocol.MsgHdrProtoBuf)
+		assert.Equal(t, method, hdr.Proto.GetTargetJobName())
+	})
+
+	t.Run("SendRaw Helper", func(t *testing.T) {
+		payload := []byte{0x01, 0x02, 0x03}
+
+		// Triggers: SendRaw calling Send with Raw builder
+		err := sock.SendRaw(context.Background(), enums.EMsg_ClientHeartBeat, payload)
+		require.NoError(t, err)
+
+		data := <-conn.sentMsgs
+		pkt, _ := protocol.ParsePacket(bytes.NewReader(data))
+
+		assert.Equal(t, enums.EMsg_ClientHeartBeat, pkt.EMsg)
+		assert.False(t, pkt.IsProto)
+		assert.Equal(t, payload, pkt.Payload)
+	})
+}
+
+func TestSocket_JobContextCancellation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dialers = map[string]ConnectionDialer{
+		"mock": func(c context.Context, n network.Handler, l log.Logger, s string) (network.Connection, error) {
+			return newMockConnection(), nil
+		},
+	}
+
+	sock := NewSocket(cfg)
+	defer sock.Close()
+
+	// This covers the go routine in registerJob that listens for socket context cancellation
+	require.NoError(t, sock.Connect(CMServer{Type: "mock"}))
+
+	cbCalled := make(chan bool, 1)
+	sock.Send(context.Background(), Raw(enums.EMsg(1), nil), WithCallback(func(p *protocol.Packet, err error) {
+		assert.ErrorIs(t, err, jobs.ErrJobCancelled)
+
+		cbCalled <- true
+	}))
+
+	sock.Disconnect() // This should cancel the job's context
+
+	select {
+	case <-cbCalled:
+		// success
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("callback not called on disconnect")
+	}
+}
+
+func TestSocket_InternalCoverage(t *testing.T) {
+	t.Run("Job_Abortion_on_Build_Fail", func(t *testing.T) {
+		sock := NewSocket(DefaultConfig())
+		defer sock.Close()
+
+		sock.setSession(session.New(newMockConnection()))
+
+		cbCalled := make(chan struct{})
+		errBuild := errors.New("build error")
+
+		err := sock.Send(context.Background(), func(s Session, b *bytes.Buffer, j uint64, t string) error {
+			return errBuild
+		}, WithCallback(func(p *protocol.Packet, e error) {
+			assert.ErrorIs(t, e, errBuild)
+			close(cbCalled)
+		}))
+
+		assert.ErrorIs(t, err, errBuild)
+
+		select {
+		case <-cbCalled:
+			// Success
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Callback was not called on build failure")
 		}
 	})
 
-	t.Run("Timeout", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
+	t.Run("Buffer Pool Capacity Guard", func(t *testing.T) {
+		sock := NewSocket(DefaultConfig())
+		hugeBuf := bytes.NewBuffer(make([]byte, 70*1024))
+		sock.putBuffer(hugeBuf) // Should not be put back into pool
+		assert.NotNil(t, sock.getBuffer())
+	})
+}
 
-		_, err := sock.SendSync(ctx, Raw(enums.EMsg_ClientHeartBeat, []byte("req")))
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Expected context.Canceled, got %v", err)
+func TestSocket_JobCancellationPaths(t *testing.T) {
+	sock := NewSocket(DefaultConfig())
+	conn := newMockConnection()
+	sock.setSession(session.New(conn))
+	sock.setState(StateConnected)
+
+	t.Run("Job_Cancelled_via_Socket_Close", func(t *testing.T) {
+		cbErr := make(chan error, 1)
+		_ = sock.Send(context.Background(), Raw(enums.EMsg(1), nil), WithCallback(func(p *protocol.Packet, err error) {
+			cbErr <- err
+		}))
+
+		// When we close the socket, the job manager is closed.
+		// We should accept either "manager closed" or "context canceled"
+		// depending on which internal goroutine wins the race.
+		sock.Close()
+
+		select {
+		case err := <-cbErr:
+			// The manager's own closure error is expected here
+			assert.True(t, errors.Is(err, context.Canceled) ||
+				assert.Contains(t, err.Error(), "closed"), "Error should be cancellation or closure")
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("Job callback was not notified of socket closure")
 		}
 	})
+}
+
+func TestIsFatalNetworkError_AllBranches(t *testing.T) {
+	assert.True(t, isFatalNetworkError(syscall.ECONNRESET))
+	assert.True(t, isFatalNetworkError(syscall.EPIPE))
+	assert.True(t, isFatalNetworkError(syscall.ECONNABORTED))
+	assert.True(t, isFatalNetworkError(syscall.ETIMEDOUT))
+
+	// Negative cases
+	assert.False(t, isFatalNetworkError(nil))
+	assert.False(t, isFatalNetworkError(errors.New("generic")))
+	assert.False(t, isFatalNetworkError(syscall.EINVAL))
 }

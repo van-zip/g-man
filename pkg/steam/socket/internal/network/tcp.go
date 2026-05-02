@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,16 +73,22 @@ func NewTCP(ctx context.Context, handler Handler, logger log.Logger, endpoint st
 func (t *TCP) Name() string { return "TCP" }
 
 // SetEncryptionKey enables symmetric encryption for all subsequent messages.
-func (t *TCP) SetEncryptionKey(key []byte) {
+func (t *TCP) SetEncryptionKey(key []byte) bool {
 	t.keyMu.Lock()
 	t.sessionKey = key
 	t.keyMu.Unlock()
 	t.logger.Debug("Encryption enabled")
+
+	return true
 }
 
 // Send encrypts (if a key is set) and frames the data before sending it over the TCP socket.
 // The frame format is: [4-byte length][4-byte magic][payload].
 func (t *TCP) Send(ctx context.Context, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	t.keyMu.RLock()
 	key := t.sessionKey
 	t.keyMu.RUnlock()
@@ -146,7 +153,10 @@ func (t *TCP) readLoop() {
 
 	for {
 		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
-			t.handler.OnNetError(err)
+			if !isIgnorableError(err) {
+				t.handler.OnNetError(err)
+			}
+
 			return
 		}
 
@@ -199,5 +209,16 @@ func (t *TCP) readLoop() {
 
 // isIgnorableError checks for errors that are expected during a normal connection closure.
 func isIgnorableError(err error) bool {
-	return errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
+	if err == nil {
+		return true
+	}
+
+	// Robust check for closure/EOF across different platforms/types of conns
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+
+	s := err.Error()
+
+	return strings.Contains(s, "use of closed") || strings.Contains(s, "closed pipe")
 }

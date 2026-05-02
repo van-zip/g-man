@@ -33,7 +33,7 @@ type State int32
 
 const (
 	// StateStopped indicates that polling is not active.
-	StateStopped int32 = iota
+	StateStopped State = iota
 	// StatePolling indicates that the module is actively checking for confirmations.
 	StatePolling
 	// StateClosed indicates the module has been shut down.
@@ -42,7 +42,7 @@ const (
 
 // String returns a human-readable representation of the State.
 func (s State) String() string {
-	switch int32(s) {
+	switch s {
 	case StateStopped:
 		return "stopped"
 	case StatePolling:
@@ -222,7 +222,7 @@ func New(cfg Config) (*Guardian, error) {
 		rateLimiter:   rate.NewLimiter(rate.Every(cfg.RateLimit), 1),
 	}
 
-	g.State.Store(StateStopped)
+	g.State.Store(int32(StateStopped))
 
 	return g, nil
 }
@@ -278,7 +278,7 @@ func (g *Guardian) StartAuthed(ctx context.Context, authCtx module.AuthContext) 
 
 // Close gracefully shuts down the module and waits for all goroutines.
 func (g *Guardian) Close() error {
-	g.State.Store(StateClosed)
+	g.State.Store(int32(StateClosed))
 	return g.Base.Close()
 }
 
@@ -354,29 +354,25 @@ func (g *Guardian) FetchConfirmations(ctx context.Context) ([]*Confirmation, err
 
 // Accept approves a single confirmation.
 func (g *Guardian) Accept(ctx context.Context, conf *Confirmation) error {
-	return g.respond(ctx, conf, true)
+	return g.respond(ctx, []*Confirmation{conf}, true)
 }
 
 // AcceptMultiple accepts multiple confirmations at once (uses multiajaxop).
 func (g *Guardian) AcceptMultiple(ctx context.Context, confs []*Confirmation) error {
-	return g.respondMultiple(ctx, confs, true)
+	return g.respond(ctx, confs, true)
 }
 
 // Cancel declines a single confirmation.
 func (g *Guardian) Cancel(ctx context.Context, conf *Confirmation) error {
-	return g.respond(ctx, conf, false)
+	return g.respond(ctx, []*Confirmation{conf}, false)
 }
 
 // CancelMultiple rejects multiple confirmations at once.
 func (g *Guardian) CancelMultiple(ctx context.Context, confs []*Confirmation) error {
-	return g.respondMultiple(ctx, confs, false)
+	return g.respond(ctx, confs, false)
 }
 
-func (g *Guardian) respond(ctx context.Context, conf *Confirmation, accept bool) error {
-	if g.service == nil {
-		return ErrNotAuthenticated
-	}
-
+func (g *Guardian) respond(ctx context.Context, confs []*Confirmation, accept bool) error {
 	if err := g.rateLimiter.Wait(ctx); err != nil {
 		return err
 	}
@@ -393,55 +389,14 @@ func (g *Guardian) respond(ctx context.Context, conf *Confirmation, accept bool)
 		return err
 	}
 
-	err = g.service.RespondToConfirmation(ctx, conf, accept, g.config.DeviceID, g.steamID, key, timestamp)
-	if err != nil {
-		g.metrics.TotalErrors.Add(1)
-
-		return err
-	}
-
-	g.mu.Lock()
-	delete(g.confirmations, conf.ID)
-	g.mu.Unlock()
-
-	if accept {
-		g.metrics.TotalAccepted.Add(1)
+	if len(confs) == 1 {
+		err = g.service.RespondToConfirmation(ctx, confs[0], accept, g.config.DeviceID, g.steamID, key, timestamp)
 	} else {
-		g.metrics.TotalRejected.Add(1)
+		err = g.service.RespondToMultiple(ctx, confs, accept, g.config.DeviceID, g.steamID, key, timestamp)
 	}
 
-	return nil
-}
-
-func (g *Guardian) respondMultiple(ctx context.Context, confs []*Confirmation, accept bool) error {
-	if g.service == nil {
-		return ErrNotAuthenticated
-	}
-
-	if len(confs) == 0 {
-		return nil
-	}
-
-	if err := g.rateLimiter.Wait(ctx); err != nil {
-		return err
-	}
-
-	tag := "allow"
-	if !accept {
-		tag = "cancel"
-	}
-
-	timestamp := time.Now().Unix()
-
-	key, err := crypto.GenerateConfirmationKey(g.config.IdentitySecret, timestamp, tag)
-	if err != nil {
-		return err
-	}
-
-	err = g.service.RespondToMultiple(ctx, confs, accept, g.config.DeviceID, g.steamID, key, timestamp)
 	if err != nil {
 		g.metrics.TotalErrors.Add(1)
-
 		return err
 	}
 

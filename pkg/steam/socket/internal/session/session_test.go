@@ -32,8 +32,9 @@ func (m *mockConn) Close() error {
 
 func (m *mockConn) ID() int64 { return 1 }
 
-func (m *mockConn) SetEncryptionKey(key []byte) {
+func (m *mockConn) SetEncryptionKey(key []byte) bool {
 	m.key = append([]byte(nil), key...)
+	return true
 }
 
 func TestBase_GettersSetters(t *testing.T) {
@@ -137,7 +138,7 @@ func TestBase_Concurrency(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			s.SetSteamID(uint64(i))
 			s.SetAccessToken("token")
 		}
@@ -146,7 +147,7 @@ func TestBase_Concurrency(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			_ = s.SteamID()
 			_ = s.AccessToken()
 			_ = s.IsAuthenticated()

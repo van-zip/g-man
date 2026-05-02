@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Lemon4ksan All rights reserved.
-// Use of this source code is governed by a BSD-style
+// Use of a BSD-style
 // license that can be found in the LICENSE file.
 
 package steam
@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
+	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
@@ -29,6 +31,35 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/storage"
 	"github.com/lemon4ksan/g-man/pkg/storage/memory"
 )
+
+// cmSocket defines the interface for socket operations required by the client,
+// allowing for mock implementations in tests.
+type cmSocket interface {
+	Disconnect()
+	Close() error
+	State() socket.State
+	Session() socket.Session
+	RegisterMsgHandler(eMsg enums.EMsg, handler socket.Handler)
+	RegisterServiceHandler(method string, handler socket.Handler)
+	SetSession(session socket.Session)
+}
+
+type authenticator interface {
+	LogOn(ctx context.Context, details *auth.LogOnDetails, server socket.CMServer) error
+}
+
+type webSession interface {
+	HTTP() *http.Client
+	SessionID(baseURL string) string
+	Verify(ctx context.Context) (bool, error)
+	Authenticate(ctx context.Context, platformType pb.EAuthTokenPlatformType, refreshToken, accessToken string) error
+	IsAuthenticated() bool
+}
+
+type communityClient interface {
+	community.Requester
+	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
+}
 
 // Config aggregates configurations for all core subsystems and standard modules.
 type Config struct {
@@ -85,11 +116,12 @@ type Client struct {
 	logger  log.Logger
 	bus     *bus.Bus
 	storage storage.Provider
+	device  *auth.DeviceConfig
 
-	socket     *socket.Socket
-	auth       *auth.Authenticator
-	webSession *websession.WebSession
-	community  *community.Client
+	socket     cmSocket
+	auth       authenticator
+	webSession webSession
+	community  communityClient
 
 	restClient      *rest.Client
 	unifiedClient   *service.Client // WebAPI (HTTP)
@@ -104,7 +136,8 @@ type Client struct {
 	done   chan struct{}
 	wg     sync.WaitGroup
 
-	reauthMu sync.Mutex
+	reauthMu     sync.Mutex
+	verifyTicker *time.Ticker
 }
 
 // NewClient initializes a Steam Client.
@@ -112,14 +145,16 @@ func NewClient(cfg Config, opts ...Option) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Client{
-		cfg:     cfg,
-		logger:  log.Discard,
-		bus:     bus.New(),
-		storage: cfg.Storage,
-		modules: make(map[string]module.Module),
-		ctx:     ctx,
-		cancel:  cancel,
-		done:    make(chan struct{}),
+		cfg:          cfg,
+		logger:       log.Discard,
+		bus:          bus.New(),
+		storage:      cfg.Storage,
+		device:       cfg.Device,
+		modules:      make(map[string]module.Module),
+		ctx:          ctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		verifyTicker: time.NewTicker(5 * time.Minute),
 	}
 
 	for _, opt := range opts {
@@ -127,27 +162,30 @@ func NewClient(cfg Config, opts ...Option) *Client {
 	}
 
 	if cfg.Storage == nil {
-		cfg.Storage = memory.New()
+		c.storage = memory.New()
+	} else {
+		c.storage = cfg.Storage
 	}
 
 	webTransport := tr.NewHTTPTransport(cfg.HTTP, service.WebAPIBase)
 	c.unifiedClient = service.New(webTransport)
 	c.restClient = rest.NewClient(cfg.HTTP)
 
-	c.socket = socket.NewSocket(
+	sock := socket.NewSocket(
 		cfg.Socket,
 		socket.WithBus(c.bus),
 		socket.WithLogger(c.logger),
 	)
+	c.socket = sock
 
 	c.auth = auth.NewAuthenticator(
-		c.socket,
+		sock,
 		auth.NewAuthenticationService(c.unifiedClient, cfg.Device),
 		auth.WithLogger(c.logger),
-		auth.WithStorage(cfg.Storage.Auth()),
+		auth.WithStorage(c.storage.Auth()),
 	)
 
-	socketTransport := tr.NewSocketTransport(c.socket)
+	socketTransport := tr.NewSocketTransport(sock)
 	c.socketAPIClient = service.New(socketTransport)
 
 	for name, mod := range c.modules {
@@ -156,7 +194,9 @@ func NewClient(cfg Config, opts ...Option) *Client {
 		}
 	}
 
-	c.wg.Go(c.run)
+	c.wg.Add(1)
+
+	go c.run()
 
 	return c
 }
@@ -172,13 +212,19 @@ func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, de
 	}
 
 	c.mu.Lock()
-	c.webSession = websession.New(details.SteamID, c.logger)
+	if c.webSession == nil {
+		c.webSession = websession.New(details.SteamID, c.logger)
+	}
+
 	c.mu.Unlock()
 
-	c.wg.Go(func() {
+	c.wg.Add(1)
+
+	go func() {
+		defer c.wg.Done()
 		defer c.startAuthed()
 
-		if err := c.RefreshSession(ctx); err != nil {
+		if err := c.RefreshSession(c.ctx); err != nil {
 			c.logger.Warn("Initial session refresh failed", log.Err(err))
 			return
 		}
@@ -186,11 +232,14 @@ func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, de
 		c.logger.Info("Web session ready")
 
 		c.mu.Lock()
-		comm := community.New(c.webSession.HTTP(), c.webSession.SessionID, community.WithLogger(c.logger))
-		c.community = comm
+		if c.community == nil {
+			comm := community.NewClient(c.webSession.HTTP(), c.webSession.SessionID, community.WithLogger(c.logger))
+			c.community = comm
+		}
+
 		c.mu.Unlock()
 
-		apiKey, err := comm.GetOrRegisterAPIKey(c.ctx, "g-man-bot.dev")
+		apiKey, err := c.community.GetOrRegisterAPIKey(c.ctx, "g-man-bot.dev")
 		if err != nil {
 			c.logger.Warn("Could not auto-fetch API Key", log.Err(err))
 			return
@@ -202,7 +251,7 @@ func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, de
 		c.unifiedClient = c.unifiedClient.WithAPIKey(apiKey)
 		c.socketAPIClient = c.socketAPIClient.WithAPIKey(apiKey)
 		c.mu.Unlock()
-	})
+	}()
 
 	return nil
 }
@@ -245,7 +294,7 @@ func (c *Client) RefreshSession(ctx context.Context) error {
 		return errors.New("cannot refresh session: socket is not connected")
 	}
 
-	socketAuthSvc := auth.NewAuthenticationService(c.socketAPIClient, nil)
+	socketAuthSvc := auth.NewAuthenticationService(c.socketAPIClient, c.device)
 	c.logger.Debug("Exchanging saved Refresh Token for Access Token...", log.SteamID(sess.SteamID()))
 
 	resp, err := socketAuthSvc.GenerateAccessTokenForApp(ctx, sess.RefreshToken(), sess.SteamID())
@@ -301,6 +350,10 @@ func (c *Client) Disconnect() {
 
 // Close shuts down the client, stops all modules, and releases resources.
 func (c *Client) Close() error {
+	if c.State() == StateClosed {
+		return nil
+	}
+
 	c.state.Store(int32(StateClosed))
 	c.cancel()
 	c.wg.Wait()
@@ -323,7 +376,7 @@ func (c *Client) State() State { return State(c.state.Load()) }
 func (c *Client) Bus() *bus.Bus { return c.bus }
 
 // Socket returns the underlying socket manager.
-func (c *Client) Socket() *socket.Socket { return c.socket }
+func (c *Client) Socket() cmSocket { return c.socket }
 
 // Logger returns the client's logger.
 func (c *Client) Logger() log.Logger { return c.logger }
@@ -399,26 +452,32 @@ func (c *Client) performDo(ctx context.Context, req *tr.Request) (*tr.Response, 
 }
 
 func (c *Client) run() {
+	defer c.wg.Done()
+
 	c.state.Store(int32(StateRunning))
 
 	c.mu.RLock()
 
-	for name, mod := range c.modules {
-		if err := mod.Start(c.ctx); err != nil {
-			c.logger.Error("Failed to start module", log.String("name", name), log.Err(err))
-		}
+	currentModules := make([]module.Module, 0, len(c.modules))
+	for _, mod := range c.modules {
+		currentModules = append(currentModules, mod)
 	}
 
 	c.mu.RUnlock()
 
-	verifyTicker := time.NewTicker(5 * time.Minute)
-	defer verifyTicker.Stop()
+	for _, mod := range currentModules {
+		if err := mod.Start(c.ctx); err != nil {
+			c.logger.Error("Failed to start module", log.String("name", mod.Name()), log.Err(err))
+		}
+	}
+
+	defer c.verifyTicker.Stop()
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			goto shutdown
-		case <-verifyTicker.C:
+		case <-c.verifyTicker.C:
 			if c.State() == StateRunning && c.webSession != nil && c.webSession.IsAuthenticated() {
 				go func() {
 					isAlive, _ := c.webSession.Verify(c.ctx)

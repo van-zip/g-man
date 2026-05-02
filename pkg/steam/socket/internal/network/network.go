@@ -60,7 +60,7 @@ type Connection interface {
 type Encryptable interface {
 	// SetEncryptionKey provides the connection with the secret key used to
 	// encrypt outgoing messages and decrypt incoming ones.
-	SetEncryptionKey(key []byte)
+	SetEncryptionKey(key []byte) bool
 }
 
 // BaseConnection provides common functionality and state shared by all connection implementations.

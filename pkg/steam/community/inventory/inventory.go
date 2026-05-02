@@ -62,7 +62,7 @@ func GetUserInventoryContents(
 			return inventory, currency, resp.TotalCount, nil
 		}
 
-		descMap := make(map[string]*InventoryDescription)
+		descMap := make(map[string]*Description)
 		for _, d := range resp.Descriptions {
 			key := fmt.Sprintf("%s_%s", d.ClassID, d.InstanceID)
 			descMap[key] = &d

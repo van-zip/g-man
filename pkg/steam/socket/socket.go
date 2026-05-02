@@ -201,7 +201,7 @@ func DefaultConfig() Config {
 type State int32
 
 const (
-	// StateDisconnected indicates the socket is in it's default not connected state.
+	// StateDisconnected indicates the socket is in its default not connected state.
 	StateDisconnected State = iota
 	// StateConnecting indicates the socket is in the process of connecting.
 	StateConnecting
@@ -345,6 +345,16 @@ func (s *Socket) Session() Session {
 	}
 
 	return container.sess
+}
+
+// SetSession replaces the current session with the new one.
+func (s *Socket) SetSession(session Session) {
+	container := s.session.Load()
+	if container == nil {
+		return
+	}
+
+	container.sess = session
 }
 
 // State returns the current connection state.

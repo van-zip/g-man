@@ -28,7 +28,7 @@ const (
 	ConfTypeGeneric ConfirmationType = iota
 
 	// ConfTypeTrade represents a trade offer confirmation.
-	// Generated when someone sends you a trade offer or you send one.
+	// Generated when someone sends you a trade offer, or you send one.
 	// These are the most common confirmations for trading bots.
 	ConfTypeTrade
 

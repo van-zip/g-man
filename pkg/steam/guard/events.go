@@ -20,20 +20,14 @@ type StateEvent struct {
 	New State
 }
 
-func (e *StateEvent) isGuardEvent() {}
-
 // ConfirmationReceivedEvent is emitted when guardian receives a new confirmation.
 type ConfirmationReceivedEvent struct {
 	bus.BaseEvent
 	Confirmation *Confirmation
 }
 
-func (e *ConfirmationReceivedEvent) isGuardEvent() {}
-
 // NeedAuthEvent is emitted when confirmation is returned with NeedAuth field set to True.
 type NeedAuthEvent struct {
 	bus.BaseEvent
 	Message string
 }
-
-func (e *NeedAuthEvent) isGuardEvent() {}

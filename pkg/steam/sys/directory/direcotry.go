@@ -46,21 +46,21 @@ type CMCfg struct {
 	Realm string
 }
 
-// DirectoryService orchestrates requests to the ISteamDirectory interface.
-type DirectoryService struct {
+// Service orchestrates requests to the ISteamDirectory interface.
+type Service struct {
 	client service.Doer
 }
 
-// NewDirectoryService initializes a new DirectoryService with the provided transport client.
-func NewDirectoryService(client service.Doer) *DirectoryService {
-	return &DirectoryService{
+// New initializes a new DirectoryService with the provided transport client.
+func New(client service.Doer) *Service {
+	return &Service{
 		client: client,
 	}
 }
 
 // GetCMList returns the complete list of TCP and WebSocket servers as raw strings.
 // CellID and MaxCount can be used for geographical optimization and limiting.
-func (d *DirectoryService) GetCMList(ctx context.Context, cellID, maxCount uint32) ([]string, []string, error) {
+func (d *Service) GetCMList(ctx context.Context, cellID, maxCount uint32) ([]string, []string, error) {
 	req := struct {
 		CellID   uint32 `url:"cellid"`
 		MaxCount uint32 `url:"maxcount,omitempty"`
@@ -80,7 +80,7 @@ func (d *DirectoryService) GetCMList(ctx context.Context, cellID, maxCount uint3
 }
 
 // GetCMListForConnect returns a detailed list of CM servers suitable for establishing a connection.
-func (d *DirectoryService) GetCMListForConnect(ctx context.Context, cfg CMCfg) ([]CMServer, error) {
+func (d *Service) GetCMListForConnect(ctx context.Context, cfg CMCfg) ([]CMServer, error) {
 	req := struct {
 		CellID   uint32 `url:"cellid,omitempty"`
 		MaxCount uint32 `url:"maxcount,omitempty"`
@@ -102,7 +102,7 @@ func (d *DirectoryService) GetCMListForConnect(ctx context.Context, cfg CMCfg) (
 
 // GetOptimalCMServer discovers available servers and returns the one with the lowest reported load.
 // It returns an error if no servers are found.
-func (d *DirectoryService) GetOptimalCMServer(ctx context.Context) (socket.CMServer, error) {
+func (d *Service) GetOptimalCMServer(ctx context.Context) (socket.CMServer, error) {
 	cmList, err := d.GetCMListForConnect(ctx, CMCfg{})
 	if err != nil {
 		return socket.CMServer{}, err
@@ -134,7 +134,7 @@ func (d *DirectoryService) GetOptimalCMServer(ctx context.Context) (socket.CMSer
 }
 
 // GetSteamPipeDomains returns a list of domains used by Steam's content delivery system (SteamPipe).
-func (d *DirectoryService) GetSteamPipeDomains(ctx context.Context) ([]string, error) {
+func (d *Service) GetSteamPipeDomains(ctx context.Context) ([]string, error) {
 	type respStruct struct {
 		DomainList []string `json:"domainlist"`
 	}

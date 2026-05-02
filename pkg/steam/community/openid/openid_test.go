@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package openid
+package openid_test
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/lemon4ksan/g-man/pkg/steam/community/openid"
 )
 
 type mockTransport struct {
@@ -116,7 +118,7 @@ func TestLogin(t *testing.T) {
 
 				return m
 			},
-			wantErr: ErrNotSignedIn,
+			wantErr: openid.ErrNotSignedIn,
 		},
 		{
 			name: "Fail_WrongHost",
@@ -135,7 +137,7 @@ func TestLogin(t *testing.T) {
 
 				return m
 			},
-			wantErr: ErrWrongHost,
+			wantErr: openid.ErrWrongHost,
 		},
 		{
 			name: "Fail_NoFormOnPage",
@@ -154,7 +156,7 @@ func TestLogin(t *testing.T) {
 
 				return m
 			},
-			wantErr: ErrNoForm,
+			wantErr: openid.ErrNoForm,
 		},
 	}
 
@@ -167,7 +169,7 @@ func TestLogin(t *testing.T) {
 
 			defer func() { http.DefaultTransport = oldTransport }()
 
-			_, err := Login(context.Background(), targetSite, nil)
+			_, err := openid.Login(context.Background(), targetSite, nil)
 
 			if tt.wantErr != nil {
 				if err == nil || !errors.Is(err, tt.wantErr) && !strings.Contains(err.Error(), tt.wantErr.Error()) {

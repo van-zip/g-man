@@ -16,6 +16,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
@@ -43,10 +44,13 @@ type SocketProvider interface {
 
 // Config aggregates configurations for all core subsystems and standard modules.
 type Config struct {
-	Socket  socket.Config
-	Storage storage.Provider
-	HTTP    rest.HTTPDoer // Optional custom HTTP client
-	Device  *auth.DeviceConfig
+	Socket   socket.Config
+	Storage  storage.Provider
+	HTTP     rest.HTTPDoer // Optional custom HTTP client
+	REST     *rest.Client  // Optional custom REST client (overrides HTTP if provided)
+	Device   *auth.DeviceConfig
+	Registry *api.UnmarshalRegistry
+	Bus      *bus.Bus
 }
 
 // DefaultConfig returns the baseline configuration for core systems.
@@ -131,11 +135,19 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		cfg.Storage = memory.New()
 	}
 
+	if cfg.Registry == nil {
+		cfg.Registry = api.NewUnmarshalRegistry()
+	}
+
+	if cfg.Bus == nil {
+		cfg.Bus = bus.New()
+	}
+
 	c := &Client{
 		cfg:    cfg,
 		ctx:    ctx,
 		cancel: cancel,
-		bus:    bus.New(),
+		bus:    cfg.Bus,
 		logger: log.Discard,
 		closed: make(chan struct{}),
 	}
@@ -154,7 +166,12 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 	c.socket = socket.NewSocket(cfg.Socket, c.logger)
 	c.session = NewSessionManager(cfg, c.bus, c.logger, c.socket)
 	c.router = NewServiceRouter(c.session, c.socket)
-	c.rest = rest.NewClient(cfg.HTTP)
+
+	if cfg.REST != nil {
+		c.rest = cfg.REST
+	} else {
+		c.rest = rest.NewClient(cfg.HTTP)
+	}
 
 	if err := c.run(); err != nil {
 		return nil, err

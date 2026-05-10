@@ -13,6 +13,7 @@ import (
 )
 
 // Option is a common pattern used for configuration of components.
+// It defines a functional option that can be passed to a constructor.
 type Option[T any] func(T)
 
 // Event is the marker interface for all events in the system.

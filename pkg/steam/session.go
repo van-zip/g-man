@@ -16,6 +16,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth/websession"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
@@ -58,6 +59,7 @@ type SessionManager struct {
 
 	unified   *service.Client // WebAPI (HTTP)
 	socketAPI *service.Client // CM (TCP/WS)
+	registry  *api.UnmarshalRegistry
 
 	verifyTicker *time.Ticker
 	closed       atomic.Bool
@@ -71,6 +73,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 		storage:      cfg.Storage,
 		device:       cfg.Device,
 		verifyTicker: time.NewTicker(5 * time.Minute),
+		registry:     cfg.Registry,
 	}
 
 	if c.storage == nil {
@@ -78,7 +81,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 	}
 
 	webTransport := tr.NewHTTPTransport(cfg.HTTP, service.WebAPIBase)
-	c.unified = service.New(webTransport)
+	c.unified = service.New(webTransport, service.WithRegistry(cfg.Registry))
 
 	c.auth = auth.NewAuthenticator(
 		sock,
@@ -89,7 +92,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 	)
 
 	socketTransport := tr.NewSocketTransport(sock)
-	c.socketAPI = service.New(socketTransport)
+	c.socketAPI = service.New(socketTransport, service.WithRegistry(cfg.Registry))
 
 	return c
 }
@@ -127,8 +130,12 @@ func (c *SessionManager) LogOn(
 
 	c.mu.Lock()
 	if c.community == nil {
-		comm := community.NewClient(c.web.HTTP(), c.web.SessionID, community.WithLogger(c.logger))
-		c.community = comm
+		c.community = community.NewClient(
+			c.web.HTTP(),
+			c.web.SessionID,
+			community.WithLogger(c.logger),
+			community.WithRegistry(c.registry),
+		)
 	}
 
 	c.mu.Unlock()

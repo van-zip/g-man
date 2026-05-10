@@ -58,17 +58,27 @@ var ErrAPITokenNotFound = errors.New(
 	"community: could not find api key or registration form (account might be limited)",
 )
 
+// Option defines a functional configuration for the Client.
+type Option = bus.Option[*Client]
+
 // WithLogger sets a custom logger for the client.
-func WithLogger(l log.Logger) bus.Option[*Client] {
+func WithLogger(l log.Logger) Option {
 	return func(c *Client) {
 		c.logger = l.With(log.Module("community"))
 	}
 }
 
 // WithREST sets a custom rest client for performing requests.
-func WithREST(r rest.Requester) bus.Option[*Client] {
+func WithREST(r rest.Requester) Option {
 	return func(c *Client) {
 		c.restClient = r
+	}
+}
+
+// WithRegistry sets a custom unmarshal registry for the client.
+func WithRegistry(r *api.UnmarshalRegistry) Option {
+	return func(c *Client) {
+		c.registry = r
 	}
 }
 
@@ -91,7 +101,7 @@ type Client struct {
 
 // NewClient creates a new Community Client.
 // It initializes a rest.Client with the required default browser-like headers.
-func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...bus.Option[*Client]) *Client {
+func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
 	rc := rest.NewClient(httpClient).
 		WithBaseURL(BaseURL).
 		WithHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").

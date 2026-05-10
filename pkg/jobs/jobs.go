@@ -300,21 +300,12 @@ func (m *Manager[T]) WaitFor(ctx context.Context, id uint64) (T, error) {
 	}
 }
 
-// Close shuts down the manager and cancels all currently pending jobs
-// with ErrJobClosed. Once closed, no new jobs can be added.
-func (m *Manager[T]) Close() error {
+// CancelAll cancels all the pending jobs.
+func (m *Manager[T]) CancelAll(err error) {
 	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return nil
-	}
-
-	m.closed = true
 	pending := m.jobs
-	m.jobs = nil
 	m.mu.Unlock()
 
-	// Cancel all pending jobs
 	for _, e := range pending {
 		if e.timerStop != nil {
 			e.timerStop()
@@ -330,9 +321,25 @@ func (m *Manager[T]) Close() error {
 		}
 
 		if e.callback != nil {
-			e.callback(*new(T), ErrJobClosed)
+			e.callback(*new(T), err)
 		}
 	}
+}
+
+// Close shuts down the manager and cancels all currently pending jobs
+// with ErrJobClosed. Once closed, no new jobs can be added.
+func (m *Manager[T]) Close() error {
+	m.CancelAll(ErrJobClosed)
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+
+	m.closed = true
+	m.jobs = nil
+	m.mu.Unlock()
 
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -34,6 +35,9 @@ type Doer interface {
 
 // NoResponse is a sentinel type that indicates that the marshaling should be skipped entirely.
 type NoResponse struct{}
+
+// Option defines a functional configuration for the Client.
+type Option = bus.Option[*Client]
 
 // Client is the primary entry point for calling Steam Services.
 // It acts as a decorator for a [tr.Transport], automatically injecting
@@ -62,10 +66,23 @@ func (c *Client) AccessToken() string {
 }
 
 // New initializes a new Service Client.
-func New(tr tr.Transport) *Client {
-	return &Client{
+func New(tr tr.Transport, opts ...Option) *Client {
+	c := &Client{
 		transport: tr,
 		registry:  api.NewUnmarshalRegistry(),
+	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c
+}
+
+// WithRegistry sets a custom unmarshal registry for the client.
+func WithRegistry(r *api.UnmarshalRegistry) Option {
+	return func(c *Client) {
+		c.registry = r
 	}
 }
 
@@ -85,7 +102,7 @@ func (c *Client) WithAccessToken(token string) *Client {
 	return &clone
 }
 
-// WithRegistry returns a copy of the client with a custom registry of decoders.
+// WithRegistry returns a copy of the client with a custom unmarshal registry.
 func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
 	clone := *c
 	clone.registry = r

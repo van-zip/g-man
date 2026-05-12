@@ -17,6 +17,10 @@ func TestParse(t *testing.T) {
 		{"3 rec", "1 ref"},
 		{"9 scrap", "1 ref"},
 		{"1.5 keys", "1.5 keys"},
+		{"1.5 rec", "0.56 ref"},   // 1.5 * 3 = 4.5 -> 5 scrap -> 0.56 ref
+		{"0.5 scrap", "0.11 ref"}, // 0.5 -> 1 scrap -> 0.11 ref
+		{"1 key, 2.33ref", "1 key, 2.33 ref"},
+		{"5 keys, 10 scrap", "5 keys, 1.11 ref"},
 	}
 
 	for _, tc := range cases {

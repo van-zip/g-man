@@ -6,6 +6,7 @@ package currency
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,11 +45,14 @@ func Parse(input string) (*Currency, error) {
 			res.Metal = AddRefined(res.Metal, val)
 
 		case strings.HasPrefix(suffix, "rec"):
-			metalFromRec := float64(Scrap(val)*ScrapInRec) / float64(ScrapInRef)
+			// Use math.Round to avoid truncation issues (e.g. 1.5 rec -> 4.5 scrap -> 5 scrap)
+			scrap := math.Round(val * float64(ScrapInRec))
+			metalFromRec := scrap / float64(ScrapInRef)
 			res.Metal = AddRefined(res.Metal, metalFromRec)
 
 		case strings.HasPrefix(suffix, "scr") || strings.HasPrefix(suffix, "s"):
-			metalFromScrap := float64(Scrap(val)) / float64(ScrapInRef)
+			scrap := math.Round(val)
+			metalFromScrap := scrap / float64(ScrapInRef)
 			res.Metal = AddRefined(res.Metal, metalFromScrap)
 
 		default:

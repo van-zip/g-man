@@ -21,7 +21,7 @@ import (
 
 func TestTCP_NewTCP_Fail(t *testing.T) {
 	// Dialing a non-existent endpoint
-	_, err := NewTCP(context.Background(), NewMockHandler(), log.Discard, "127.0.0.1:1")
+	_, err := NewTCP(context.Background(), log.Discard, "127.0.0.1:1")
 	assert.Error(t, err)
 }
 
@@ -41,9 +41,15 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 	logger := log.Discard
 
 	t.Run("Decryption Branch", func(t *testing.T) {
-		handler := NewMockHandler()
 		s, c := net.Pipe()
-		tcp := &TCP{conn: c, handler: handler, logger: logger, BaseConnection: NewBaseConnection("TCP")}
+		tcp := &TCP{
+			conn:           c,
+			logger:         logger,
+			BaseConnection: NewBaseConnection("TCP"),
+			msgChan:        make(chan NetMessage, 10),
+			errChan:        make(chan error, 10),
+			closedChan:     make(chan struct{}),
+		}
 
 		key := make([]byte, 32)
 		tcp.SetEncryptionKey(key)
@@ -60,7 +66,7 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 		_, _ = s.Write(data)
 
 		select {
-		case err := <-handler.ErrChan():
+		case err := <-tcp.Errors():
 			assert.ErrorContains(t, err, "tcp: decrypt failed")
 		case <-time.After(time.Second):
 			t.Fatal("timeout")
@@ -68,10 +74,16 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 	})
 
 	t.Run("Payload Unexpected EOF", func(t *testing.T) {
-		handler := NewMockHandler()
 		s, c := net.Pipe()
 
-		tcp := &TCP{conn: c, handler: handler, logger: logger, BaseConnection: NewBaseConnection("TCP")}
+		tcp := &TCP{
+			conn:           c,
+			logger:         logger,
+			BaseConnection: NewBaseConnection("TCP"),
+			msgChan:        make(chan NetMessage, 10),
+			errChan:        make(chan error, 10),
+			closedChan:     make(chan struct{}),
+		}
 		go tcp.readLoop()
 
 		header := make([]byte, 8)
@@ -83,7 +95,7 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 		_ = s.Close()
 
 		select {
-		case err := <-handler.ErrChan():
+		case err := <-tcp.Errors():
 			// io.ReadFull returns ErrUnexpectedEOF if at least 1 byte was read
 			assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 		case <-time.After(time.Second):
@@ -92,16 +104,21 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 	})
 
 	t.Run("Magic Mismatch", func(t *testing.T) {
-		h := NewMockHandler()
 		s, c := net.Pipe()
 
-		tcp := &TCP{conn: c, handler: h, logger: log.Discard}
+		tcp := &TCP{
+			conn:       c,
+			logger:     log.Discard,
+			msgChan:    make(chan NetMessage, 10),
+			errChan:    make(chan error, 10),
+			closedChan: make(chan struct{}),
+		}
 		go tcp.readLoop()
 
 		_, _ = s.Write([]byte{4, 0, 0, 0, 'B', 'A', 'A', 'D'})
 
 		select {
-		case err := <-h.ErrChan():
+		case err := <-tcp.Errors():
 			assert.ErrorContains(t, err, "invalid magic")
 		case <-time.After(time.Second):
 			t.Fatal("timeout")
@@ -109,19 +126,29 @@ func TestTCP_ReadLoop_Coverage(t *testing.T) {
 	})
 
 	t.Run("Read Header Error", func(t *testing.T) {
-		h := NewMockHandler()
 		s, c := net.Pipe()
 
-		tcp := &TCP{conn: c, handler: h, logger: log.Discard}
+		tcp := &TCP{
+			conn:       c,
+			logger:     log.Discard,
+			msgChan:    make(chan NetMessage, 10),
+			errChan:    make(chan error, 10),
+			closedChan: make(chan struct{}),
+		}
 		go tcp.readLoop()
 
 		_ = s.Close() // Immediate EOF on header read
 
 		// Should not send error to handler because EOF is ignorable
 		time.Sleep(50 * time.Millisecond)
-		h.mu.Lock()
-		assert.Empty(t, h.errors)
-		h.mu.Unlock()
+
+		select {
+		case err, ok := <-tcp.Errors():
+			if ok {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		default:
+		}
 	})
 }
 
@@ -171,9 +198,14 @@ func TestTCP_Send_Deadline(t *testing.T) {
 }
 
 func TestTCP_ReadLoop_ErrorBranches(t *testing.T) {
-	h := NewMockHandler()
 	s, c := net.Pipe()
-	tcp := &TCP{conn: c, handler: h, logger: log.Discard}
+	tcp := &TCP{
+		conn:       c,
+		logger:     log.Discard,
+		msgChan:    make(chan NetMessage, 10),
+		errChan:    make(chan error, 10),
+		closedChan: make(chan struct{}),
+	}
 
 	t.Run("Packet Too Large", func(t *testing.T) {
 		go tcp.readLoop()
@@ -184,7 +216,7 @@ func TestTCP_ReadLoop_ErrorBranches(t *testing.T) {
 		_, _ = s.Write(header)
 
 		select {
-		case err := <-h.ErrChan():
+		case err := <-tcp.Errors():
 			assert.Contains(t, err.Error(), "too large")
 		case <-time.After(time.Second):
 			t.Fatal("timeout")

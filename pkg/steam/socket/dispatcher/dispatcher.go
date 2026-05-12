@@ -382,19 +382,7 @@ func (d *Dispatcher) registerJob(ctx context.Context, cb jobs.Callback[*protocol
 
 	id := d.jobManager.NextID()
 
-	// Clean up job if context expires or socket closes
-	var once sync.Once
-
-	stopRequest := context.AfterFunc(ctx, func() {
-		d.jobManager.Resolve(id, nil, ctx.Err())
-	})
-
-	_ = d.jobManager.Add(id, func(response *protocol.Packet, err error) {
-		once.Do(func() {
-			stopRequest()
-			cb(response, err)
-		})
-	})
+	_ = d.jobManager.Add(id, cb, jobs.WithContext[*protocol.Packet](ctx))
 
 	return id
 }

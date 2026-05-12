@@ -39,9 +39,12 @@ var (
 // It handles length-prefixed message framing and optional symmetric encryption.
 type TCP struct {
 	BaseConnection
-	conn    net.Conn
-	handler Handler
-	logger  log.Logger
+	conn   net.Conn
+	logger log.Logger
+
+	msgChan    chan NetMessage
+	errChan    chan error
+	closedChan chan struct{}
 
 	writeMu    sync.Mutex   // Ensures atomic writes of header + payload.
 	keyMu      sync.RWMutex // Protects sessionKey for concurrent reads/writes.
@@ -49,7 +52,7 @@ type TCP struct {
 }
 
 // NewTCP establishes a TCP connection to the given endpoint and starts its read loop.
-func NewTCP(ctx context.Context, handler Handler, logger log.Logger, endpoint string) (*TCP, error) {
+func NewTCP(ctx context.Context, logger log.Logger, endpoint string) (*TCP, error) {
 	dialer := &net.Dialer{}
 
 	conn, err := dialer.DialContext(ctx, "tcp", endpoint)
@@ -60,8 +63,10 @@ func NewTCP(ctx context.Context, handler Handler, logger log.Logger, endpoint st
 	t := &TCP{
 		BaseConnection: NewBaseConnection("TCP"),
 		conn:           conn,
-		handler:        handler,
 		logger:         logger.With(log.String("transport", "TCP"), log.String("endpoint", endpoint)),
+		msgChan:        make(chan NetMessage, 100),
+		errChan:        make(chan error, 10),
+		closedChan:     make(chan struct{}),
 	}
 
 	go t.readLoop()
@@ -71,6 +76,15 @@ func NewTCP(ctx context.Context, handler Handler, logger log.Logger, endpoint st
 
 // Name returns the "TCP" string.
 func (t *TCP) Name() string { return "TCP" }
+
+// Messages returns the incoming message channel.
+func (t *TCP) Messages() <-chan NetMessage { return t.msgChan }
+
+// Errors returns the transport error channel.
+func (t *TCP) Errors() <-chan error { return t.errChan }
+
+// Closed returns the connection closure channel.
+func (t *TCP) Closed() <-chan struct{} { return t.closedChan }
 
 // SetEncryptionKey enables symmetric encryption for all subsequent messages.
 func (t *TCP) SetEncryptionKey(key []byte) bool {
@@ -144,7 +158,9 @@ func (t *TCP) Close() error {
 func (t *TCP) readLoop() {
 	defer func() {
 		_ = t.conn.Close()
-		t.handler.OnNetClose()
+		close(t.closedChan)
+		close(t.msgChan)
+		close(t.errChan)
 	}()
 
 	reader := bufio.NewReaderSize(t.conn, 64*1024)
@@ -154,7 +170,10 @@ func (t *TCP) readLoop() {
 	for {
 		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
 			if !isIgnorableError(err) {
-				t.handler.OnNetError(err)
+				select {
+				case t.errChan <- err:
+				default:
+				}
 			}
 
 			return
@@ -163,27 +182,42 @@ func (t *TCP) readLoop() {
 		// Read the fixed-size header first.
 		if _, err := io.ReadFull(reader, header[:]); err != nil {
 			if !isIgnorableError(err) {
-				t.handler.OnNetError(err)
+				select {
+				case t.errChan <- err:
+				default:
+				}
 			}
 
 			return
 		}
 
 		if string(header[4:8]) != Magic {
-			t.handler.OnNetError(errors.New("tcp: invalid magic bytes"))
+			select {
+			case t.errChan <- errors.New("tcp: invalid magic bytes"):
+			default:
+			}
+
 			return
 		}
 
 		length := binary.LittleEndian.Uint32(header[0:4])
 		if length > 10*1024*1024 { // 10MB sanity limit
-			t.handler.OnNetError(fmt.Errorf("tcp: packet too large (%d bytes)", length))
+			select {
+			case t.errChan <- fmt.Errorf("tcp: packet too large (%d bytes)", length):
+			default:
+			}
+
 			return
 		}
 
 		// Read the variable-length payload.
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(reader, payload); err != nil {
-			t.handler.OnNetError(err)
+			select {
+			case t.errChan <- err:
+			default:
+			}
+
 			return
 		}
 
@@ -196,14 +230,22 @@ func (t *TCP) readLoop() {
 
 			payload, err = crypto.SymmetricDecrypt(payload, key, true)
 			if err != nil {
-				t.handler.OnNetError(fmt.Errorf("tcp: decrypt failed: %w", err))
+				select {
+				case t.errChan <- fmt.Errorf("tcp: decrypt failed: %w", err):
+				default:
+				}
+
 				// Don't return, as this might be a single corrupt packet.
 				// Depending on the protocol, you might want to continue or disconnect.
 				continue
 			}
 		}
 
-		t.handler.OnNetMessage(payload)
+		select {
+		case t.msgChan <- payload:
+		case <-t.closedChan:
+			return
+		}
 	}
 }
 

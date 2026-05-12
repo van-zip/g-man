@@ -22,7 +22,7 @@ import (
 
 func TestWS_NewWS(t *testing.T) {
 	// Attempt to dial a bad endpoint
-	_, err := NewWS(context.Background(), NewMockHandler(), log.Discard, "invalid:80", nil)
+	_, err := NewWS(context.Background(), log.Discard, "invalid:80", nil)
 	assert.Error(t, err)
 }
 
@@ -39,7 +39,6 @@ func TestWS_Send_Deadline(t *testing.T) {
 }
 
 func TestWS_ReadLoop(t *testing.T) {
-	handler := NewMockHandler()
 	upgrader := websocket.Upgrader{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,16 +70,18 @@ func TestWS_ReadLoop(t *testing.T) {
 		ws := &WS{
 			BaseConnection: NewBaseConnection("WS"),
 			conn:           conn,
-			handler:        handler,
 			logger:         log.Discard,
+			msgChan:        make(chan NetMessage, 10),
+			errChan:        make(chan error, 10),
+			closedChan:     make(chan struct{}),
 		}
 
 		go ws.readLoop()
 		defer ws.Close()
 
 		select {
-		case msg := <-handler.msgChan:
-			assert.Equal(t, []byte("bin"), msg)
+		case msg := <-ws.Messages():
+			assert.Equal(t, NetMessage("bin"), msg)
 		case <-time.After(2 * time.Second):
 			t.Fatal("timeout")
 		}
@@ -88,16 +89,15 @@ func TestWS_ReadLoop(t *testing.T) {
 
 	t.Run("NewWS Handshake Failure", func(t *testing.T) {
 		// This hits the error branch in NewWS
-		_, err := NewWS(context.Background(), handler, log.Discard, "localhost:1", nil)
+		_, err := NewWS(context.Background(), log.Discard, "localhost:1", nil)
 		assert.Error(t, err)
 	})
 }
 
 func TestWS_Dial_CustomDialer(t *testing.T) {
-	handler := NewMockHandler()
 	// Trigger handshake timeout
 	dialer := &websocket.Dialer{HandshakeTimeout: time.Nanosecond}
-	_, err := NewWS(context.Background(), handler, log.Discard, "google.com:80", dialer)
+	_, err := NewWS(context.Background(), log.Discard, "google.com:80", dialer)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dial failed")
 }
@@ -121,8 +121,10 @@ func TestWS_Close_MultipleTimes(t *testing.T) {
 	ws := &WS{
 		BaseConnection: NewBaseConnection("WS"),
 		conn:           conn,
-		handler:        NewMockHandler(),
 		logger:         log.Discard,
+		msgChan:        make(chan NetMessage, 10),
+		errChan:        make(chan error, 10),
+		closedChan:     make(chan struct{}),
 	}
 
 	// First close

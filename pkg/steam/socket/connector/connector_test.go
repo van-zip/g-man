@@ -23,12 +23,27 @@ type mockConnection struct {
 	sendFunc   func(ctx context.Context, data []byte) error
 	closeFunc  func() error
 	setKeyFunc func(key []byte) bool
+
+	msgChan    chan network.NetMessage
+	errChan    chan error
+	closedChan chan struct{}
+}
+
+func newMockConnection() *mockConnection {
+	return &mockConnection{
+		msgChan:    make(chan network.NetMessage, 10),
+		errChan:    make(chan error, 10),
+		closedChan: make(chan struct{}),
+	}
 }
 
 func (m *mockConnection) Send(ctx context.Context, data []byte) error { return m.sendFunc(ctx, data) }
 func (m *mockConnection) Close() error                                { return m.closeFunc() }
 func (m *mockConnection) Name() string                                { return "mock" }
 func (m *mockConnection) SetEncryptionKey(key []byte) bool            { return m.setKeyFunc(key) }
+func (m *mockConnection) Messages() <-chan network.NetMessage         { return m.msgChan }
+func (m *mockConnection) Errors() <-chan error                        { return m.errChan }
+func (m *mockConnection) Closed() <-chan struct{}                     { return m.closedChan }
 
 func TestConnector_Initialization(t *testing.T) {
 	c := connector.New(connector.DefaultConfig(), log.Discard)
@@ -39,12 +54,15 @@ func TestConnector_Initialization(t *testing.T) {
 
 func TestConnector_Connect(t *testing.T) {
 	t.Run("Successful Connection", func(t *testing.T) {
-		conn := &mockConnection{
-			closeFunc: func() error { return nil },
-		}
+		var conn *mockConnection
 
 		dialers := map[string]connector.Dialer{
-			"mock": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+			"mock": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
+				if conn == nil {
+					conn = newMockConnection()
+					conn.closeFunc = func() error { return nil }
+				}
+
 				return conn, nil
 			},
 		}
@@ -74,7 +92,7 @@ func TestConnector_Connect(t *testing.T) {
 
 	t.Run("Dialer Error", func(t *testing.T) {
 		dialers := map[string]connector.Dialer{
-			"fail": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+			"fail": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
 				return nil, errors.New("dial failed")
 			},
 		}
@@ -89,9 +107,9 @@ func TestConnector_Connect(t *testing.T) {
 	t.Run("Concurrent Connection Attempt", func(t *testing.T) {
 		start := make(chan struct{})
 		dialers := map[string]connector.Dialer{
-			"slow": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+			"slow": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
 				<-start
-				return &mockConnection{closeFunc: func() error { return nil }}, nil
+				return newMockConnection(), nil
 			},
 		}
 		cfg := connector.DefaultConfig()
@@ -118,15 +136,19 @@ func TestConnector_Send(t *testing.T) {
 
 	// Send when connected
 	sent := atomic.Bool{}
-	conn := &mockConnection{
-		sendFunc: func(ctx context.Context, data []byte) error {
-			sent.Store(true)
-			return nil
-		},
-	}
-	// Inject connection manually for testing
+
+	var conn *mockConnection
+
 	dialers := map[string]connector.Dialer{
-		"mock": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
+			if conn == nil {
+				conn = newMockConnection()
+				conn.sendFunc = func(ctx context.Context, data []byte) error {
+					sent.Store(true)
+					return nil
+				}
+			}
+
 			return conn, nil
 		},
 	}
@@ -142,15 +164,19 @@ func TestConnector_Send(t *testing.T) {
 
 func TestConnector_Encryption(t *testing.T) {
 	keyReceived := atomic.Pointer[[]byte]{}
-	conn := &mockConnection{
-		setKeyFunc: func(key []byte) bool {
-			keyReceived.Store(&key)
-			return true
-		},
-	}
+
+	var conn *mockConnection
 
 	dialers := map[string]connector.Dialer{
-		"mock": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
+			if conn == nil {
+				conn = newMockConnection()
+				conn.setKeyFunc = func(key []byte) bool {
+					keyReceived.Store(&key)
+					return true
+				}
+			}
+
 			return conn, nil
 		},
 	}
@@ -169,7 +195,7 @@ func TestConnector_ReconnectLoop(t *testing.T) {
 		dialCount := atomic.Int32{}
 
 		dialers := map[string]connector.Dialer{
-			"fail": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+			"fail": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
 				dialCount.Add(1)
 				return nil, errors.New("perma-fail")
 			},
@@ -191,9 +217,6 @@ func TestConnector_ReconnectLoop(t *testing.T) {
 
 		// Initial connect to set "lastServer"
 		_ = c.Connect(context.Background(), connector.CMServer{Type: "fail", Endpoint: "ep1"})
-
-		// Trigger reconnect
-		c.OnNetClose()
 	})
 }
 

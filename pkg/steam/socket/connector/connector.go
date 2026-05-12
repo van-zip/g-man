@@ -82,16 +82,16 @@ type CMServer struct {
 }
 
 // Dialer defines a function for establishing various network connections.
-type Dialer func(ctx context.Context, nh network.Handler, logger log.Logger, endpoint string) (network.Connection, error)
+type Dialer func(ctx context.Context, logger log.Logger, endpoint string) (network.Connection, error)
 
 // DefaultDialers provides implementations for TCP and WebSockets.
 func DefaultDialers() map[string]Dialer {
 	return map[string]Dialer{
-		"tcp": func(ctx context.Context, nh network.Handler, l log.Logger, s string) (network.Connection, error) {
-			return network.NewTCP(ctx, nh, l, s)
+		"tcp": func(ctx context.Context, l log.Logger, s string) (network.Connection, error) {
+			return network.NewTCP(ctx, l, s)
 		},
-		"websockets": func(ctx context.Context, nh network.Handler, l log.Logger, s string) (network.Connection, error) {
-			return network.NewWS(ctx, nh, l, s, nil)
+		"websockets": func(ctx context.Context, l log.Logger, s string) (network.Connection, error) {
+			return network.NewWS(ctx, l, s, nil)
 		},
 	}
 }
@@ -138,12 +138,6 @@ type Connector struct {
 	isConnecting atomic.Bool
 	lastServer   CMServer
 	servers      []CMServer
-}
-
-// DataHandler is an interface for handling network messages.
-type DataHandler interface {
-	// OnNetMessage is called when a complete message is framed and received.
-	OnNetMessage(msg network.NetMessage)
 }
 
 // New initializes a new Connector with a lifecycle tied to the provided context.
@@ -193,7 +187,7 @@ func (c *Connector) Connect(ctx context.Context, server CMServer) error {
 		return fmt.Errorf("%w: %s", ErrUnsupportedType, server.Type)
 	}
 
-	conn, err := dialer(ctx, c, c.logger, server.Endpoint)
+	conn, err := dialer(ctx, c.logger, server.Endpoint)
 	if err != nil {
 		return err
 	}
@@ -206,6 +200,8 @@ func (c *Connector) Connect(ctx context.Context, server CMServer) error {
 	c.conn = conn
 	c.lastServer = server
 	c.mu.Unlock()
+
+	go c.monitorConnection(conn)
 
 	c.logger.Info("Transport connected", log.String("endpoint", server.Endpoint), log.Int64("conn_id", conn.ID()))
 
@@ -272,21 +268,39 @@ func (c *Connector) Close() error {
 	return c.Disconnect()
 }
 
-// OnNetMessage routes raw incoming messages to the registered data handler.
-func (c *Connector) OnNetMessage(msg network.NetMessage) {
-	select {
-	case c.incoming <- msg:
-	case <-c.ctx.Done():
+// monitorConnection pipes events from the network connection into the connector.
+func (c *Connector) monitorConnection(conn network.Connection) {
+	for {
+		select {
+		case msg, ok := <-conn.Messages():
+			if !ok {
+				return
+			}
+
+			select {
+			case c.incoming <- msg:
+			case <-c.ctx.Done():
+				return
+			}
+
+		case err, ok := <-conn.Errors():
+			if !ok {
+				return
+			}
+
+			c.logger.Error("Transport error", log.Err(err))
+
+		case <-conn.Closed():
+			c.handleDisconnect()
+			return
+		case <-c.ctx.Done():
+			return
+		}
 	}
 }
 
-// OnNetError logs underlying transport errors.
-func (c *Connector) OnNetError(err error) {
-	c.logger.Error("Transport error", log.Err(err))
-}
-
-// OnNetClose handles connection loss by notifying the bus and initiating the reconnect loop.
-func (c *Connector) OnNetClose() {
+// handleDisconnect coordinates reconnection when a transport is lost.
+func (c *Connector) handleDisconnect() {
 	c.mu.Lock()
 	c.conn = nil
 	policy := c.cfg.ReconnectPolicy

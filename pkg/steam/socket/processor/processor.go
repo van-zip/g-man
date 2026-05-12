@@ -103,7 +103,6 @@ func (p *Processor) Stop() {
 
 // Process takes raw decrypted data from the network and parses it into a packet.
 // The packet is then queued for asynchronous dispatching.
-// This method implements the network.Handler interface's OnNetMessage.
 func (p *Processor) Process(data network.NetMessage) {
 	if p.ctx.Err() != nil {
 		return

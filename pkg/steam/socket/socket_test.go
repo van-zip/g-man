@@ -27,6 +27,19 @@ type mockConnection struct {
 	network.BaseConnection
 	sendErr  error
 	sentMsgs chan []byte
+
+	msgChan    chan network.NetMessage
+	errChan    chan error
+	closedChan chan struct{}
+}
+
+func newMockConnection() *mockConnection {
+	return &mockConnection{
+		sentMsgs:   make(chan []byte, 100),
+		msgChan:    make(chan network.NetMessage, 100),
+		errChan:    make(chan error, 10),
+		closedChan: make(chan struct{}),
+	}
 }
 
 func (m *mockConnection) Name() string { return "mock" }
@@ -39,13 +52,16 @@ func (m *mockConnection) Send(_ context.Context, d []byte) error {
 
 	return nil
 }
-func (m *mockConnection) Close() error { return nil }
+func (m *mockConnection) Close() error                        { return nil }
+func (m *mockConnection) Messages() <-chan network.NetMessage { return m.msgChan }
+func (m *mockConnection) Errors() <-chan error                { return m.errChan }
+func (m *mockConnection) Closed() <-chan struct{}             { return m.closedChan }
 
 func setupMockSocket(t *testing.T) (*Socket, *mockConnection) {
-	mConn := &mockConnection{sentMsgs: make(chan []byte, 100)}
+	mConn := newMockConnection()
 	cfg := DefaultConfig()
 	cfg.Connector.Dialers = map[string]connector.Dialer{
-		"mock": func(ctx context.Context, nh network.Handler, l log.Logger, ep string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
 			return mConn, nil
 		},
 	}
@@ -140,8 +156,9 @@ func TestSocket_SendSync(t *testing.T) {
 			resp.Payload = []byte("payload")
 
 			buf := new(bytes.Buffer)
+
 			_ = resp.SerializeTo(buf)
-			s.conn.OnNetMessage(buf.Bytes())
+			mConn.msgChan <- buf.Bytes()
 		}()
 
 		resp, err := s.SendSync(context.Background(), Proto(enums.EMsg_ClientLogon, nil))

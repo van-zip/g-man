@@ -107,7 +107,7 @@ func TestDispatcher_Send_Logic(t *testing.T) {
 
 		select {
 		case err := <-errChan:
-			assert.ErrorIs(t, err, context.Canceled)
+			assert.ErrorIs(t, err, jobs.ErrJobCancelled)
 		case <-time.After(time.Second):
 			t.Fatal("job not resolved on context cancel")
 		}

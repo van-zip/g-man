@@ -25,9 +25,12 @@ var _ Connection = (*WS)(nil)
 type WS struct {
 	BaseConnection
 
-	conn    *websocket.Conn
-	handler Handler
-	logger  log.Logger
+	conn   *websocket.Conn
+	logger log.Logger
+
+	msgChan    chan NetMessage
+	errChan    chan error
+	closedChan chan struct{}
 
 	writeMu   sync.Mutex // Protects conn for concurrent writes.
 	closeOnce sync.Once  // Ensures Close actions are performed only once.
@@ -36,7 +39,6 @@ type WS struct {
 // NewWS establishes a WebSocket connection using the provided context.
 func NewWS(
 	ctx context.Context,
-	handler Handler,
 	logger log.Logger,
 	endpoint string,
 	dialer *websocket.Dialer,
@@ -62,8 +64,10 @@ func NewWS(
 	w := &WS{
 		BaseConnection: NewBaseConnection("WS"),
 		conn:           conn,
-		handler:        handler,
 		logger:         logger.With(log.String("transport", "WS"), log.String("endpoint", endpoint)),
+		msgChan:        make(chan NetMessage, 100),
+		errChan:        make(chan error, 10),
+		closedChan:     make(chan struct{}),
 	}
 
 	go w.readLoop()
@@ -73,6 +77,15 @@ func NewWS(
 
 // Name returns the transport identifier.
 func (w *WS) Name() string { return "WS" }
+
+// Messages returns the incoming message channel.
+func (w *WS) Messages() <-chan NetMessage { return w.msgChan }
+
+// Errors returns the transport error channel.
+func (w *WS) Errors() <-chan error { return w.errChan }
+
+// Closed returns the connection closure channel.
+func (w *WS) Closed() <-chan struct{} { return w.closedChan }
 
 // Send transmits data as a binary message over the WebSocket connection.
 func (w *WS) Send(ctx context.Context, data []byte) error {
@@ -121,7 +134,9 @@ func (w *WS) Close() error {
 func (w *WS) readLoop() {
 	defer func() {
 		_ = w.Close()
-		w.handler.OnNetClose()
+		close(w.closedChan)
+		close(w.msgChan)
+		close(w.errChan)
 	}()
 
 	for {
@@ -129,14 +144,21 @@ func (w *WS) readLoop() {
 		if err != nil {
 			// Filter out expected close errors to avoid noisy logs.
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				w.handler.OnNetError(err)
+				select {
+				case w.errChan <- err:
+				default:
+				}
 			}
 
 			return
 		}
 
 		if msgType == websocket.BinaryMessage {
-			w.handler.OnNetMessage(data)
+			select {
+			case w.msgChan <- data:
+			case <-w.closedChan:
+				return
+			}
 		}
 	}
 }

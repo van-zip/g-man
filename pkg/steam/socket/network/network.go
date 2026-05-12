@@ -16,23 +16,8 @@ var globalConnectionID atomic.Int64
 // It is a slice of bytes that a Handler can process.
 type NetMessage []byte
 
-// Handler defines the event-driven callbacks that a network connection will invoke.
-// This interface decouples the raw network I/O from the application's logic.
-type Handler interface {
-	// OnNetMessage is called when a complete message is framed and received.
-	OnNetMessage(msg NetMessage)
-
-	// OnNetError is called when a non-fatal error occurs on the connection.
-	// Fatal errors typically result in the connection being closed automatically.
-	OnNetError(err error)
-
-	// OnNetClose is called exactly once when the connection is terminated,
-	// either by the remote peer or due to an unrecoverable local error.
-	OnNetClose()
-}
-
 // Connection defines the standard interface that all network connection types must implement.
-// It provides methods for sending data, closing the connection, and identification.
+// It provides methods for sending data, closing the connection, and event notification via channels.
 type Connection interface {
 	// Send transmits the provided data over the connection. It is
 	// the responsibility of the implementation to handle message
@@ -53,6 +38,17 @@ type Connection interface {
 
 	// Name returns the protocol name (e.g., "TCP", "WS") for this connection.
 	Name() string
+
+	// Messages returns a channel that receives incoming raw network messages.
+	// The channel is closed when the connection is terminated.
+	Messages() <-chan NetMessage
+
+	// Errors returns a channel that receives non-fatal transport errors.
+	// The channel is closed when the connection is terminated.
+	Errors() <-chan error
+
+	// Closed returns a channel that is closed when the connection is terminated.
+	Closed() <-chan struct{}
 }
 
 // Encryptable is an optional interface that connections can implement to support

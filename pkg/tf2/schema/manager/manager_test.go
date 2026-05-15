@@ -5,7 +5,9 @@
 package manager
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,12 +27,12 @@ func setupSchema(t *testing.T, cfg Config) (*Manager, *requester.Mock) {
 
 	// Merge with default config to ensure URLs are set
 	defaultCfg := DefaultConfig()
-	if cfg.ItemsGameURL == "" {
-		cfg.ItemsGameURL = defaultCfg.ItemsGameURL
+	if cfg.ItemsGameMirrorURL == "" {
+		cfg.ItemsGameMirrorURL = defaultCfg.ItemsGameMirrorURL
 	}
 
-	if cfg.PaintKitMirrorURL == "" {
-		cfg.PaintKitMirrorURL = defaultCfg.PaintKitMirrorURL
+	if cfg.PaintKitURL == "" {
+		cfg.PaintKitURL = defaultCfg.PaintKitURL
 	}
 
 	mockAPI := requester.New()
@@ -151,6 +153,73 @@ func TestSchemaManager_Refresh_Success(t *testing.T) {
 		// OK
 	case <-time.After(100 * time.Millisecond):
 		t.Error("SchemaUpdatedEvent was not published")
+	}
+}
+
+func TestSchemaManager_Refresh_PriceDB_Success(t *testing.T) {
+	sm, mockAPI := setupSchema(t, Config{})
+
+	// Mock PriceDB response
+	priceDBResp := map[string]any{
+		"version": "4.5.3",
+		"time":    1778817514050.0,
+		"raw": map[string]any{
+			"schema": map[string]any{
+				"items": []any{
+					map[string]any{"defindex": 5021, "name": "Mann Co. Supply Crate Key", "item_name": "Mann Co. Supply Crate Key"},
+				},
+				"paintkits": map[string]any{
+					"0": "Red Rock Roscoe",
+				},
+				"items_game_url": "https://example.com/items_game.txt",
+			},
+		},
+	}
+
+	mockAPI.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		if strings.Contains(path, "pricedb.io/api/schema") {
+			respBody, _ := json.Marshal(priceDBResp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(respBody)),
+			}, nil
+		}
+
+		if strings.Contains(path, "items_game.txt") {
+			content := "\"items_game\"\n{\n\t\"valid_key\" \"value\"\n}\n"
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(content)),
+			}, nil
+		}
+
+		return nil, fmt.Errorf("unexpected REST path: %s", path)
+	}
+
+	err := sm.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error during Refresh: %v", err)
+	}
+
+	schema := sm.Get()
+	if schema == nil {
+		t.Fatal("expected schema to be populated, got nil")
+	}
+
+	if schema.Version != "4.5.3" {
+		t.Errorf("expected version 4.5.3, got %s", schema.Version)
+	}
+
+	if len(schema.Raw.Schema.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(schema.Raw.Schema.Items))
+	}
+
+	if schema.Raw.Schema.Items[0].Defindex != 5021 {
+		t.Errorf("expected item defindex 5021, got %d", schema.Raw.Schema.Items[0].Defindex)
+	}
+
+	if schema.GetSkinById(0) != "Red Rock Roscoe" {
+		t.Errorf("expected paintkit 0 to be Red Rock Roscoe, got %s", schema.GetSkinById(0))
 	}
 }
 

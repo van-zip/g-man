@@ -26,6 +26,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
+	"github.com/lemon4ksan/g-man/pkg/tf2/pricedb"
 	"github.com/lemon4ksan/g-man/pkg/tf2/schema"
 )
 
@@ -40,24 +41,24 @@ type Config struct {
 	LiteMode bool
 	// CachePath is the path to the local schema cache file.
 	CachePath string
+	// PaintKitURL is the URL to use for fetching paintkit data.
+	PaintKitURL string
 	// SchemaMirrorURL is the URL to use for fetching schema data in case the default URL is not reachable.
 	SchemaMirrorURL string
-	// PaintKitMirrorURL is the URL to use for fetching paintkit data in case the default URL is not reachable.
-	PaintKitMirrorURL string
 	// ItemsMirrorURL is the URL to use for fetching items data in case the default URL is not reachable.
 	ItemsMirrorURL string
-	// ItemsGameURL is the URL to use for fetching items_game.txt data.
-	ItemsGameURL string
+	// ItemsGameMirrorURL is the URL to use for fetching items_game.txt data in case pricedb fails to provide it.
+	ItemsGameMirrorURL string
 }
 
 // DefaultConfig returns a default configuration for the schema manager.
 func DefaultConfig() Config {
 	return Config{
-		UpdateInterval:    24 * time.Hour,
-		LiteMode:          false,
-		CachePath:         "cache/tf2/schema.json",
-		PaintKitMirrorURL: "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/resource/tf_proto_obj_defs_english.txt",
-		ItemsGameURL:      "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/scripts/items/items_game.txt",
+		UpdateInterval:     24 * time.Hour,
+		LiteMode:           false,
+		CachePath:          "cache/tf2/schema.json",
+		PaintKitURL:        "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/resource/tf_proto_obj_defs_english.txt",
+		ItemsGameMirrorURL: "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/scripts/items/items_game.txt",
 	}
 }
 
@@ -73,9 +74,10 @@ func WithModule(cfg Config) steam.Option {
 type Manager struct {
 	module.Base
 
-	config     Config
-	svcClient  service.Doer
-	restClient rest.Requester
+	config        Config
+	svcClient     service.Doer
+	restClient    rest.Requester
+	pricedbClient *pricedb.Client
 
 	mu     sync.RWMutex
 	schema *schema.Schema
@@ -104,6 +106,16 @@ func (m *Manager) Init(init module.InitContext) error {
 
 	m.svcClient = init.Service()
 	m.restClient = init.Rest()
+
+	type httpProvider interface {
+		HTTP() rest.HTTPDoer
+	}
+
+	if hp, ok := m.restClient.(httpProvider); ok {
+		m.pricedbClient = pricedb.NewClient(hp.HTTP())
+	} else {
+		m.pricedbClient = pricedb.NewClient(nil)
+	}
 
 	return nil
 }
@@ -164,7 +176,7 @@ func (m *Manager) handleUpdateRequested(req *schema.UpdateRequestedEvent) {
 
 	// Trigger a refresh in a separate goroutine to avoid blocking the bus
 	m.Go(func(ctx context.Context) {
-		if err := m.Refresh(ctx); err != nil {
+		if err := m.refreshLegacy(ctx, req.ItemsGameURL); err != nil {
 			m.Logger.Error("Manual schema refresh failed", log.Err(err))
 		}
 	})
@@ -178,9 +190,77 @@ func (m *Manager) Get() *schema.Schema {
 	return m.schema
 }
 
-// Refresh manually triggers a full schema update from Steam and GitHub sources.
+// Refresh manually triggers a full schema update from PriceDB and GitHub sources.
 func (m *Manager) Refresh(ctx context.Context) error {
-	m.Logger.Debug("Fetching schema components from Steam and GitHub...")
+	m.Logger.Debug("Fetching complete schema from PriceDB...")
+
+	resp, err := m.pricedbClient.GetSchema(ctx)
+	if err != nil {
+		m.Logger.Warn("PriceDB schema fetch failed, falling back to Steam API", log.Err(err))
+		return m.refreshLegacy(ctx, m.config.ItemsGameMirrorURL)
+	}
+
+	raw, ok := resp["raw"].(map[string]any)
+	if !ok {
+		return errors.New("invalid PriceDB response: missing 'raw'")
+	}
+
+	rawSchema, ok := raw["schema"].(map[string]any)
+	if !ok {
+		return errors.New("invalid PriceDB response: missing 'raw.schema'")
+	}
+
+	items, _ := rawSchema["items"].([]any)
+	itemsGameURL, _ := rawSchema["items_game_url"].(string)
+
+	pkMap, _ := rawSchema["paintkits"].(map[string]any)
+	paintKits := make(map[string]string, len(pkMap))
+	for k, v := range pkMap {
+		if s, ok := v.(string); ok {
+			paintKits[k] = s
+		}
+	}
+
+	m.Logger.Debug("Fetching items_game.txt...", log.String("url", itemsGameURL))
+	itemsGame, err := m.getItemsGame(ctx, itemsGameURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch items_game.txt: %w", err)
+	}
+
+	// Use the existing buildSchema logic to ensure indices are built and memory is optimized
+	overview := map[string]any{"result": rawSchema}
+	if err := m.buildSchema(overview, items, paintKits, itemsGame); err != nil {
+		return err
+	}
+
+	// Override version and time if provided by PriceDB
+	m.mu.Lock()
+	if v, ok := resp["version"].(string); ok && v != "" {
+		m.schema.Version = v
+	}
+
+	if t, ok := resp["time"].(float64); ok && t > 0 {
+		m.schema.Time = time.Unix(0, int64(t)*int64(time.Millisecond))
+	}
+
+	m.mu.Unlock()
+
+	if err := m.saveToCache(); err != nil {
+		m.Logger.Warn("Failed to save schema to cache", log.Err(err))
+	}
+
+	m.Logger.Info("TF2 Schema updated successfully via PriceDB",
+		log.String("version", m.schema.Version),
+		log.Int("items", len(m.schema.Raw.Schema.Items)),
+	)
+	m.Bus.Publish(&schema.UpdatedEvent{Timestamp: time.Now()})
+
+	return nil
+}
+
+// refreshLegacy is the original refresh logic using Steam WebAPI as a fallback.
+func (m *Manager) refreshLegacy(ctx context.Context, itemsGameURL string) error {
+	m.Logger.Debug("Fetching schema components from Steam and GitHub (Legacy)...")
 
 	overview, err := m.getSchemaOverview(ctx)
 	if err != nil {
@@ -203,20 +283,18 @@ func (m *Manager) Refresh(ctx context.Context) error {
 		var err error
 
 		paintkits, err = m.getPaintKits(gCtx)
-
 		return err
 	})
 	g.Go(func() error {
 		var err error
 
-		itemsGame, err = m.getItemsGame(gCtx)
-
+		itemsGame, err = m.getItemsGame(gCtx, itemsGameURL)
 		return err
 	})
 
 	if err := g.Wait(); err != nil {
 		m.Bus.Publish(&schema.UpdateFailedEvent{Error: err})
-		return fmt.Errorf("parallel fetch failed: %w", err)
+		return fmt.Errorf("parallel legacy fetch failed: %w", err)
 	}
 
 	if err := m.buildSchema(overview, items, paintkits, itemsGame); err != nil {
@@ -227,7 +305,7 @@ func (m *Manager) Refresh(ctx context.Context) error {
 		m.Logger.Warn("Failed to save schema to cache", log.Err(err))
 	}
 
-	m.Logger.Info("TF2 Schema updated successfully", log.Int("items", len(m.schema.Raw.ItemsGame)))
+	m.Logger.Info("TF2 Schema updated successfully via Legacy API", log.Int("items", len(m.schema.Raw.Schema.Items)))
 	m.Bus.Publish(&schema.UpdatedEvent{Timestamp: time.Now()})
 
 	return nil
@@ -424,9 +502,7 @@ func (m *Manager) getSchemaItems(ctx context.Context) ([]any, error) {
 }
 
 func (m *Manager) getPaintKits(ctx context.Context) (map[string]string, error) {
-	url := m.config.PaintKitMirrorURL
-
-	resp, err := m.restClient.Request(ctx, "GET", url, nil, nil)
+	resp, err := m.restClient.Request(ctx, "GET", m.config.PaintKitURL, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch paint kits: %w", err)
 	}
@@ -492,8 +568,10 @@ func (m *Manager) getPaintKits(ctx context.Context) (map[string]string, error) {
 	return paintKits, nil
 }
 
-func (m *Manager) getItemsGame(ctx context.Context) (map[string]any, error) {
-	url := m.config.ItemsGameURL
+func (m *Manager) getItemsGame(ctx context.Context, url string) (map[string]any, error) {
+	if url == "" {
+		url = m.config.ItemsGameMirrorURL
+	}
 
 	resp, err := m.restClient.Request(ctx, "GET", url, nil, nil)
 	if err != nil {

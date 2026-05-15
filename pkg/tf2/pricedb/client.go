@@ -128,3 +128,13 @@ func (c *Client) ResolveSKU(ctx context.Context, sku string) (map[string]any, er
 
 	return *resp, nil
 }
+
+// GetSchema fetches the complete TF2 schema from PriceDB.
+func (c *Client) GetSchema(ctx context.Context) (map[string]any, error) {
+	resp, err := rest.GetJSON[map[string]any](ctx, c.skuClient, "/api/schema", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return *resp, nil
+}

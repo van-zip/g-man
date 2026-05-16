@@ -246,7 +246,7 @@ func TestNewSchema(t *testing.T) {
 func TestGetItemByDef(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	item := s.GetItemByDef(5022)
+	item := s.ItemByDef(5022)
 	if item == nil {
 		t.Fatal("item 5022 not found")
 	}
@@ -259,7 +259,7 @@ func TestGetItemByDef(t *testing.T) {
 func TestGetItemByName(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	item := s.GetItemByName("Mann Co. Supply Crate")
+	item := s.ItemByName("Mann Co. Supply Crate")
 	if item == nil {
 		t.Fatal("item not found")
 	}
@@ -269,7 +269,7 @@ func TestGetItemByName(t *testing.T) {
 	}
 
 	// case insensitivity
-	item = s.GetItemByName("mann co. supply crate")
+	item = s.ItemByName("mann co. supply crate")
 	if item == nil {
 		t.Error("case insensitive lookup failed")
 	}
@@ -289,20 +289,20 @@ func TestGetQualityByIdAndName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if name := s.GetQualityById(tt.id); name != tt.name {
+		if name := s.QualityById(tt.id); name != tt.name {
 			t.Errorf("GetQualityById(%d): expected %s, got %s", tt.id, tt.name, name)
 		}
 
-		if id := s.GetQualityIdByName(tt.name); id != tt.id {
+		if id := s.QualityIdByName(tt.name); id != tt.id {
 			t.Errorf("GetQualityIdByName(%s): expected %d, got %d", tt.name, tt.id, id)
 		}
 	}
 
-	if name := s.GetQualityById(99); name != "" {
+	if name := s.QualityById(99); name != "" {
 		t.Errorf("expected empty for unknown id, got %s", name)
 	}
 
-	if id := s.GetQualityIdByName("nonexistent"); id != 0 {
+	if id := s.QualityIdByName("nonexistent"); id != 0 {
 		t.Errorf("expected 0, got %d", id)
 	}
 }
@@ -320,21 +320,21 @@ func TestGetEffectByIdAndName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if name := s.GetEffectById(tt.id); name != tt.name {
+		if name := s.EffectById(tt.id); name != tt.name {
 			t.Errorf("GetEffectById(%d): expected %s, got %s", tt.id, tt.name, name)
 		}
 
-		if id := s.GetEffectIdByName(tt.name); id != tt.id {
+		if id := s.EffectIdByName(tt.name); id != tt.id {
 			t.Errorf("GetEffectIdByName(%s): expected %d, got %d", tt.name, tt.id, id)
 		}
 
 		// Case insensitivity
-		if id := s.GetEffectIdByName(strings.ToLower(tt.name)); id != tt.id {
+		if id := s.EffectIdByName(strings.ToLower(tt.name)); id != tt.id {
 			t.Errorf("Case insensitive GetEffectIdByName failed for %s", tt.name)
 		}
 	}
 
-	if name := s.GetEffectById(999); name != "" {
+	if name := s.EffectById(999); name != "" {
 		t.Errorf("expected empty for unknown effect, got %s", name)
 	}
 }
@@ -356,7 +356,7 @@ func TestGetSpellIdByName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spell, ok := s.GetSpellIdByName(tt.name)
+			spell, ok := s.SpellIdByName(tt.name)
 			if ok != tt.shouldFind {
 				t.Errorf("GetSpellIdByName(%s) ok = %v, want %v", tt.name, ok, tt.shouldFind)
 			}
@@ -371,19 +371,19 @@ func TestGetSpellIdByName(t *testing.T) {
 func TestGetSkinByIdAndName(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	if name := s.GetSkinById(15013); name != "Pistol Skin" {
+	if name := s.SkinById(15013); name != "Pistol Skin" {
 		t.Errorf("expected Pistol Skin, got %s", name)
 	}
 
-	if name := s.GetSkinById(999); name != "" {
+	if name := s.SkinById(999); name != "" {
 		t.Errorf("expected empty, got %s", name)
 	}
 
-	if id := s.GetSkinIdByName("Pistol Skin"); id != 15013 {
+	if id := s.SkinIdByName("Pistol Skin"); id != 15013 {
 		t.Errorf("expected 15013, got %d", id)
 	}
 
-	if id := s.GetSkinIdByName("pistol skin"); id != 15013 {
+	if id := s.SkinIdByName("pistol skin"); id != 15013 {
 		t.Errorf("case insensitive failed, got %d", id)
 	}
 }
@@ -568,7 +568,7 @@ func TestGetName_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			name := s.GetName(tt.item, true, false, tt.scmFormat)
+			name := s.ItemName(tt.item, true, false, tt.scmFormat)
 			if name != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, name)
 			}
@@ -642,7 +642,7 @@ func TestGetItemObjectFromName_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item := s.GetItemObjectFromName(tt.name)
+			item := s.ItemFromName(tt.name)
 
 			// Compare essential fields
 			if item.Defindex != tt.expected.Defindex ||
@@ -677,7 +677,7 @@ func TestGetSkuFromName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skuStr := s.GetSkuFromName(tt.name)
+			skuStr := s.SkuFromName(tt.name)
 			if skuStr != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, skuStr)
 			}
@@ -688,7 +688,7 @@ func TestGetSkuFromName(t *testing.T) {
 func TestCrateSeriesList(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	series := s.GetCrateSeriesList()
+	series := s.CrateSeriesList()
 	if val, ok := series[5022]; !ok || val != 1 {
 		t.Errorf("expected series 1 for def 5022, got %v", val)
 	}
@@ -700,7 +700,7 @@ func TestCrateSeriesList(t *testing.T) {
 
 func TestGetCraftableWeaponsSchema(t *testing.T) {
 	s := New(minimalRawSchema())
-	weapons := s.GetCraftableWeaponsSchema()
+	weapons := s.CraftableWeaponsSchema()
 
 	if len(weapons) != 2 {
 		t.Errorf("expected 2 weapons, got %d", len(weapons))
@@ -723,12 +723,12 @@ func TestGetCraftableWeaponsSchema(t *testing.T) {
 func TestGetWeaponsForCraftingByClass(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	skus := s.GetWeaponsForCraftingByClass("Scout")
+	skus := s.WeaponsForCraftingByClass("Scout")
 	if len(skus) != 2 || skus[0] != "5021;6" || skus[1] != "38;6" {
 		t.Errorf("expected[5021;6 38;6], got %v", skus)
 	}
 
-	skusDemo := s.GetWeaponsForCraftingByClass("Demoman")
+	skusDemo := s.WeaponsForCraftingByClass("Demoman")
 	if len(skusDemo) != 0 {
 		t.Errorf("expected[], got %v", skusDemo)
 	}
@@ -736,7 +736,7 @@ func TestGetWeaponsForCraftingByClass(t *testing.T) {
 
 func TestGetUnusualEffects(t *testing.T) {
 	s := New(minimalRawSchema())
-	effects := s.GetUnusualEffects()
+	effects := s.UnusualEffects()
 
 	// Should include all non-empty effects
 	if len(effects) < 4 {
@@ -759,7 +759,7 @@ func TestGetUnusualEffects(t *testing.T) {
 
 func TestGetPaintableItemDefindexes(t *testing.T) {
 	s := New(minimalRawSchema())
-	paintable := s.GetPaintableItemDefindexes()
+	paintable := s.PaintableItemDefindexes()
 
 	if len(paintable) == 0 {
 		t.Fatal("expected at least 1 paintable item")
@@ -964,29 +964,29 @@ func TestSchema_Getters(t *testing.T) {
 	s := New(minimalRawSchema())
 
 	t.Run("Qualities", func(t *testing.T) {
-		assert.Equal(t, "Unique", s.GetQualityById(6))
-		assert.Equal(t, 6, s.GetQualityIdByName("Unique"))
-		assert.NotEmpty(t, s.GetQualities())
+		assert.Equal(t, "Unique", s.QualityById(6))
+		assert.Equal(t, 6, s.QualityIdByName("Unique"))
+		assert.NotEmpty(t, s.Qualities())
 	})
 
 	t.Run("Effects", func(t *testing.T) {
-		assert.Equal(t, "Orbiting Fire", s.GetEffectById(33))
-		assert.Equal(t, 33, s.GetEffectIdByName("Orbiting Fire"))
-		assert.NotEmpty(t, s.GetParticleEffects())
+		assert.Equal(t, "Orbiting Fire", s.EffectById(33))
+		assert.Equal(t, 33, s.EffectIdByName("Orbiting Fire"))
+		assert.NotEmpty(t, s.ParticleEffects())
 	})
 
 	t.Run("Skins", func(t *testing.T) {
-		assert.Equal(t, "Woodsy Widowmaker", s.GetSkinById(102))
-		assert.Equal(t, 102, s.GetSkinIdByName("Woodsy Widowmaker"))
-		assert.NotEmpty(t, s.GetPaintKits())
+		assert.Equal(t, "Woodsy Widowmaker", s.SkinById(102))
+		assert.Equal(t, 102, s.SkinIdByName("Woodsy Widowmaker"))
+		assert.NotEmpty(t, s.PaintKits())
 	})
 
 	t.Run("Items", func(t *testing.T) {
-		item := s.GetItemByDef(5021)
+		item := s.ItemByDef(5021)
 		assert.NotNil(t, item)
 		assert.Equal(t, "Scattergun", item.ItemName)
 
-		itemByName := s.GetItemByName("Scattergun")
+		itemByName := s.ItemByName("Scattergun")
 		assert.Equal(t, item, itemByName)
 	})
 }
@@ -1120,7 +1120,7 @@ func TestGetSKUFromEconItem_Variations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := s.GetSKUFromEconItem(tt.item)
+			got := s.SKUFromEconItem(tt.item)
 			t.Logf("Name: %s, Got SKU: %s, Descriptions: %d", tt.name, got, len(tt.item.Descriptions))
 
 			if got != tt.expected {
@@ -1215,7 +1215,7 @@ func TestGetItemObjectFromName_MoreVariations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := s.GetItemObjectFromName(tt.input)
+			got := s.ItemFromName(tt.input)
 			if got == nil {
 				t.Fatalf("failed to parse %q", tt.input)
 			}
@@ -1267,14 +1267,14 @@ func TestGetStrangeParts_Mapping(t *testing.T) {
 		Type: 10, TypeName: "Airborne Enemies Killed",
 	})
 
-	parts := s.GetStrangeParts()
+	parts := s.StrangeParts()
 	assert.Equal(t, "sp10", parts["Airborne Enemies Killed"])
 }
 
 func TestGetItemByNameWithThe_SpecialCases(t *testing.T) {
 	s := New(minimalRawSchema())
 
-	item := s.GetItemByNameWithThe("The Scattergun")
+	item := s.ItemByNameWithThe("The Scattergun")
 	assert.NotNil(t, item)
 	assert.Equal(t, 5021, item.Defindex)
 
@@ -1283,6 +1283,6 @@ func TestGetItemByNameWithThe_SpecialCases(t *testing.T) {
 	})
 	s.buildIndices()
 
-	itemStock := s.GetItemByName("Scattergun")
+	itemStock := s.ItemByName("Scattergun")
 	assert.Equal(t, 5021, itemStock.Defindex)
 }

@@ -336,16 +336,9 @@ func (s *Schema) buildSpellIndices() {
 		idKey := fmt.Sprintf("%d-%d", spell.Attribute, spell.Value)
 		s.spellsByID[idKey] = name
 
-		// Also index without "Halloween: " prefix and common suffixes for convenience
-		if strings.HasPrefix(lowerName, "halloween: ") {
-			shortName := strings.TrimPrefix(lowerName, "halloween: ")
-			s.spellsByName[shortName] = spell
-
-			// Strip common suffixes like "(paint)", "(footprints)", etc.
-			if idx := strings.Index(shortName, " ("); idx != -1 {
-				veryShortName := shortName[:idx]
-				s.spellsByName[veryShortName] = spell
-			}
+		// Also index with common prefixes stripped
+		if spellObj, ok := IdentifySpell(lowerName); ok {
+			s.spellsByName[lowerName] = spellObj
 		}
 	}
 }
@@ -407,53 +400,53 @@ func (s *Schema) buildCrateSeriesList() map[int]int {
 	return series
 }
 
-// GetItemByDef returns the item with the given defindex.
-func (s *Schema) GetItemByDef(def int) *Item {
+// ItemByDef returns the item with the given defindex.
+func (s *Schema) ItemByDef(def int) *Item {
 	return s.itemsByDef[def]
 }
 
-// GetItemByName returns the item with the given name.
-func (s *Schema) GetItemByName(name string) *Item {
+// ItemByName returns the item with the given name.
+func (s *Schema) ItemByName(name string) *Item {
 	return s.itemsByName[strings.ToLower(name)]
 }
 
-// GetAttributeByDef returns the attribute with the given defindex.
-func (s *Schema) GetAttributeByDef(def int) *AttributeSchema {
+// AttributeByDef returns the attribute with the given defindex.
+func (s *Schema) AttributeByDef(def int) *AttributeSchema {
 	return s.attrsByDef[def]
 }
 
-// GetQualityById returns the quality name with the given id.
-func (s *Schema) GetQualityById(id int) string {
+// QualityById returns the quality name with the given id.
+func (s *Schema) QualityById(id int) string {
 	return s.qualByID[id]
 }
 
-// GetQualityIdByName returns the quality id with the given name.
-func (s *Schema) GetQualityIdByName(name string) int {
+// QualityIdByName returns the quality id with the given name.
+func (s *Schema) QualityIdByName(name string) int {
 	return s.qualByName[strings.ToLower(name)]
 }
 
-// GetEffectById returns the effect name with the given id.
-func (s *Schema) GetEffectById(id int) string {
+// EffectById returns the effect name with the given id.
+func (s *Schema) EffectById(id int) string {
 	return s.effByID[id]
 }
 
-// GetEffectIdByName returns the ID for a particle effect name.
-func (s *Schema) GetEffectIdByName(name string) int {
+// EffectIdByName returns the ID for a particle effect name.
+func (s *Schema) EffectIdByName(name string) int {
 	return s.effByName[strings.ToLower(name)]
 }
 
-// GetSkinById returns the skin name with the given id.
-func (s *Schema) GetSkinById(id int) string {
+// SkinById returns the skin name with the given id.
+func (s *Schema) SkinById(id int) string {
 	return s.paintKitByID[id]
 }
 
-// GetSkinIdByName returns the skin id with the given name.
-func (s *Schema) GetSkinIdByName(name string) int {
+// SkinIdByName returns the skin id with the given name.
+func (s *Schema) SkinIdByName(name string) int {
 	return s.paintKitByName[strings.ToLower(name)]
 }
 
-// GetPaintNameByDecimal returns the paint name with the given decimal value.
-func (s *Schema) GetPaintNameByDecimal(decimal int) string {
+// PaintNameByDecimal returns the paint name with the given decimal value.
+func (s *Schema) PaintNameByDecimal(decimal int) string {
 	if name, ok := s.paintByDecimal[decimal]; ok {
 		return name
 	}
@@ -469,13 +462,13 @@ func (s *Schema) GetPaintNameByDecimal(decimal int) string {
 	return fmt.Sprintf("#%06X", decimal)
 }
 
-// GetPaintDecimalByName returns the paint decimal value with the given name.
-func (s *Schema) GetPaintDecimalByName(name string) int {
+// PaintDecimalByName returns the paint decimal value with the given name.
+func (s *Schema) PaintDecimalByName(name string) int {
 	return s.paintByName[strings.ToLower(name)]
 }
 
-// GetItemByNameWithThe tries to find an item after stripping "The " from the name.
-func (s *Schema) GetItemByNameWithThe(name string) *Item {
+// ItemByNameWithThe tries to find an item after stripping "The " from the name.
+func (s *Schema) ItemByNameWithThe(name string) *Item {
 	name = strings.ToLower(name)
 	name = strings.TrimPrefix(name, "the ")
 	name = strings.TrimSpace(name)
@@ -483,18 +476,18 @@ func (s *Schema) GetItemByNameWithThe(name string) *Item {
 	return s.itemsByNameStripped[name]
 }
 
-// GetItemBySKU returns the item for a given SKU string.
-func (s *Schema) GetItemBySKU(itemSku string) *Item {
+// ItemBySKU returns the item for a given SKU string.
+func (s *Schema) ItemBySKU(itemSku string) *Item {
 	item, err := sku.FromString(itemSku)
 	if err != nil {
 		return nil
 	}
 
-	return s.GetItemByDef(item.Defindex)
+	return s.ItemByDef(item.Defindex)
 }
 
-// GetUnusualEffects returns all unusual effects as name-id pairs.
-func (s *Schema) GetUnusualEffects() []struct {
+// UnusualEffects returns all unusual effects as name-id pairs.
+func (s *Schema) UnusualEffects() []struct {
 	Name string
 	ID   int
 } {
@@ -513,13 +506,13 @@ func (s *Schema) GetUnusualEffects() []struct {
 	return out
 }
 
-// GetPaints returns a map of paint name to decimal value.
-func (s *Schema) GetPaints() map[string]int {
+// Paints returns a map of paint name to decimal value.
+func (s *Schema) Paints() map[string]int {
 	return s.paintByName
 }
 
-// GetPaintableItemDefindexes returns defindexes of items that can be painted.
-func (s *Schema) GetPaintableItemDefindexes() []int {
+// PaintableItemDefindexes returns defindexes of items that can be painted.
+func (s *Schema) PaintableItemDefindexes() []int {
 	var out []int
 
 	for _, it := range s.Raw.Schema.Items {
@@ -531,8 +524,8 @@ func (s *Schema) GetPaintableItemDefindexes() []int {
 	return out
 }
 
-// GetStrangeParts returns a map of strange part names to their SKU suffix.
-func (s *Schema) GetStrangeParts() map[string]string {
+// StrangeParts returns a map of strange part names to their SKU suffix.
+func (s *Schema) StrangeParts() map[string]string {
 	partsToExclude := map[string]bool{
 		"Ubers": true, "Kill Assists": true, "Sentry Kills": true,
 		"Sodden Victims": true, "Spies Shocked": true, "Heads Taken": true,
@@ -564,8 +557,8 @@ func (s *Schema) GetStrangeParts() map[string]string {
 	return m
 }
 
-// GetSpellName returns the human-readable name of a spell.
-func (s *Schema) GetSpellName(spell sku.Spell) string {
+// SpellNameFromSKU returns the human-readable name of a spell.
+func (s *Schema) SpellNameFromSKU(spell sku.Spell) string {
 	idKey := fmt.Sprintf("%d-%d", spell.Attribute, spell.Value)
 
 	name, ok := s.spellsByID[idKey]
@@ -582,10 +575,9 @@ func (s *Schema) GetSpellName(spell sku.Spell) string {
 	return name
 }
 
-// GetSpellIdByName returns the attribute and value IDs for a spell name.
-func (s *Schema) GetSpellIdByName(name string) (sku.Spell, bool) {
-	spell, ok := s.spellsByName[strings.ToLower(name)]
-	return spell, ok
+// SpellIdByName returns the attribute and value IDs for a spell name.
+func (s *Schema) SpellIdByName(name string) (sku.Spell, bool) {
+	return IdentifySpell(name)
 }
 
 var weaponsToExclude = map[int]bool{
@@ -596,8 +588,8 @@ var weaponsToExclude = map[int]bool{
 	1013: true, 1152: true, 30474: true,
 }
 
-// GetCraftableWeaponsSchema returns all craftable weapon items.
-func (s *Schema) GetCraftableWeaponsSchema() []*Item {
+// CraftableWeaponsSchema returns all craftable weapon items.
+func (s *Schema) CraftableWeaponsSchema() []*Item {
 	var out []*Item
 
 	for _, it := range s.Raw.Schema.Items {
@@ -613,8 +605,8 @@ func (s *Schema) GetCraftableWeaponsSchema() []*Item {
 	return out
 }
 
-// GetWeaponsForCraftingByClass returns SKUs of craftable weapons usable by the given class.
-func (s *Schema) GetWeaponsForCraftingByClass(class string) []string {
+// WeaponsForCraftingByClass returns SKUs of craftable weapons usable by the given class.
+func (s *Schema) WeaponsForCraftingByClass(class string) []string {
 	validClasses := map[string]bool{
 		"Scout": true, "Soldier": true, "Pyro": true, "Demoman": true,
 		"Heavy": true, "Engineer": true, "Medic": true, "Sniper": true, "Spy": true,
@@ -625,21 +617,18 @@ func (s *Schema) GetWeaponsForCraftingByClass(class string) []string {
 
 	var out []string
 
-	for _, it := range s.GetCraftableWeaponsSchema() {
-		for _, uc := range it.UsedByClasses {
-			if uc == class {
-				out = append(out, fmt.Sprintf("%d;6", it.Defindex))
-				break
-			}
+	for _, it := range s.CraftableWeaponsSchema() {
+		if slices.Contains(it.UsedByClasses, class) {
+			out = append(out, fmt.Sprintf("%d;6", it.Defindex))
 		}
 	}
 
 	return out
 }
 
-// GetCraftableWeaponsForTrading returns SKUs of all craftable weapons.
-func (s *Schema) GetCraftableWeaponsForTrading() []string {
-	weapons := s.GetCraftableWeaponsSchema()
+// CraftableWeaponsForTrading returns SKUs of all craftable weapons.
+func (s *Schema) CraftableWeaponsForTrading() []string {
+	weapons := s.CraftableWeaponsSchema()
 
 	out := make([]string, 0, len(weapons))
 	for _, it := range weapons {
@@ -649,13 +638,13 @@ func (s *Schema) GetCraftableWeaponsForTrading() []string {
 	return out
 }
 
-// GetUncraftableWeaponsForTrading returns SKUs of non‑craftable weapons.
-func (s *Schema) GetUncraftableWeaponsForTrading() []string {
+// UncraftableWeaponsForTrading returns SKUs of non‑craftable weapons.
+func (s *Schema) UncraftableWeaponsForTrading() []string {
 	exclude := map[int]bool{348: true, 349: true, 1178: true, 1179: true, 1180: true, 1181: true, 1190: true}
 
 	var out []string
 
-	for _, it := range s.GetCraftableWeaponsSchema() {
+	for _, it := range s.CraftableWeaponsSchema() {
 		if exclude[it.Defindex] {
 			continue
 		}
@@ -666,8 +655,8 @@ func (s *Schema) GetUncraftableWeaponsForTrading() []string {
 	return out
 }
 
-// GetCrateSeriesList returns the crate series map.
-func (s *Schema) GetCrateSeriesList() map[int]int {
+// CrateSeriesList returns the crate series map.
+func (s *Schema) CrateSeriesList() map[int]int {
 	return s.crateSeriesList
 }
 
@@ -686,13 +675,13 @@ func (s *Schema) IsNativeFestive(defindex int) bool {
 	return IsNativeFestive(defindex)
 }
 
-// GetQualities returns the quality name to ID map.
-func (s *Schema) GetQualities() map[string]int {
+// Qualities returns the quality name to ID map.
+func (s *Schema) Qualities() map[string]int {
 	return s.qualByName
 }
 
-// GetWearByName returns the wear ID for a given string (e.g. "Factory New").
-func (s *Schema) GetWearByName(name string) int {
+// WearByName returns the wear ID for a given string (e.g. "Factory New").
+func (s *Schema) WearByName(name string) int {
 	name = strings.TrimSpace(name)
 	if !strings.HasPrefix(name, "(") {
 		name = "(" + name + ")"
@@ -701,24 +690,24 @@ func (s *Schema) GetWearByName(name string) int {
 	return wears[name]
 }
 
-// GetParticleEffects returns the effect name to ID map.
-func (s *Schema) GetParticleEffects() map[string]int {
+// ParticleEffects returns the effect name to ID map.
+func (s *Schema) ParticleEffects() map[string]int {
 	return s.effByName
 }
 
-// GetPaintKitsByName returns the paintkit name to ID map.
-func (s *Schema) GetPaintKitsByName() map[string]int {
+// PaintKitsByName returns the paintkit name to ID map.
+func (s *Schema) PaintKitsByName() map[string]int {
 	return s.paintKitByName
 }
 
-// GetPaintKits returns the paint kit name to ID map.
-func (s *Schema) GetPaintKits() map[string]int {
+// PaintKits returns the paint kit name to ID map.
+func (s *Schema) PaintKits() map[string]int {
 	return s.paintKitByName
 }
 
 // CheckExistence verifies that the given item exists in the schema.
 func (s *Schema) CheckExistence(item *sku.Item) bool {
-	schemaItem := s.GetItemByDef(item.Defindex)
+	schemaItem := s.ItemByDef(item.Defindex)
 	if schemaItem == nil {
 		return false
 	}
@@ -845,9 +834,9 @@ func (s *Schema) CheckExistence(item *sku.Item) bool {
 	return true
 }
 
-// GetName builds the full item name from an item object.
-func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool) string {
-	schemaItem := s.GetItemByDef(item.Defindex)
+// ItemName builds the full item name from an item object.
+func (s *Schema) ItemName(item *sku.Item, proper, usePipeForSkin, scmFormat bool) string {
+	schemaItem := s.ItemByDef(item.Defindex)
 	if schemaItem == nil {
 		return ""
 	}
@@ -863,7 +852,7 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	if item.Quality2 != 0 {
-		qName := s.GetQualityById(item.Quality2)
+		qName := s.QualityById(item.Quality2)
 		if qName != "" {
 			if !scmFormat && (item.Wear != 0 || item.Paintkit != 0) {
 				qName += "(e)"
@@ -884,14 +873,14 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	if addPrimaryQuality {
-		qName := s.GetQualityById(item.Quality)
+		qName := s.QualityById(item.Quality)
 		if qName != "" {
 			parts = append(parts, qName)
 		}
 	}
 
 	if !scmFormat && item.Effect != 0 {
-		effName := s.GetEffectById(item.Effect)
+		effName := s.EffectById(item.Effect)
 		if effName != "" {
 			parts = append(parts, effName)
 		}
@@ -913,21 +902,21 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	if item.Target != 0 {
-		targetItem := s.GetItemByDef(item.Target)
+		targetItem := s.ItemByDef(item.Target)
 		if targetItem != nil {
 			parts = append(parts, targetItem.ItemName)
 		}
 	}
 
 	if item.OutputQuality != 0 && item.OutputQuality != 6 {
-		oqName := s.GetQualityById(item.OutputQuality)
+		oqName := s.QualityById(item.OutputQuality)
 		if oqName != "" {
 			parts = append([]string{oqName}, parts...)
 		}
 	}
 
 	if item.Output != 0 {
-		outItem := s.GetItemByDef(item.Output)
+		outItem := s.ItemByDef(item.Output)
 		if outItem != nil {
 			parts = append(parts, outItem.ItemName)
 		}
@@ -938,7 +927,7 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	if item.Paintkit != 0 {
-		skinName := s.GetSkinById(item.Paintkit)
+		skinName := s.SkinById(item.Paintkit)
 		if skinName != "" {
 			if usePipeForSkin {
 				parts = append(parts, skinName+" |")
@@ -969,7 +958,7 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	for _, spell := range item.Spells {
-		parts = append(parts, "(Spell: "+s.GetSpellName(spell)+")")
+		parts = append(parts, "(Spell: "+s.SpellNameFromSKU(spell)+")")
 	}
 
 	for _, partID := range item.Parts {
@@ -1009,7 +998,7 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	}
 
 	if !scmFormat && item.Paint != 0 {
-		paintName := s.GetPaintNameByDecimal(item.Paint)
+		paintName := s.PaintNameByDecimal(item.Paint)
 		if paintName != "" {
 			parts = append(parts, fmt.Sprintf("(Paint: %s)", paintName))
 		}
@@ -1030,8 +1019,8 @@ func (s *Schema) GetName(item *sku.Item, proper, usePipeForSkin, scmFormat bool)
 	return strings.Join(parts, " ")
 }
 
-// GetItemObjectFromName parses a display name into an item object.
-func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
+// ItemFromName parses a display name into an item object.
+func (s *Schema) ItemFromName(name string) *sku.Item {
 	item := &sku.Item{
 		Craftable: true,
 		Tradable:  true,
@@ -1047,7 +1036,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		strings.Contains(name, "strange filter:") ||
 		strings.Contains(name, "strange count transfer tool") ||
 		strings.Contains(name, "strange bacon grease") {
-		schemaItem := s.GetItemByName(originalName)
+		schemaItem := s.ItemByName(originalName)
 		if schemaItem != nil {
 			item.Defindex = schemaItem.Defindex
 			if item.Quality == 0 {
@@ -1129,7 +1118,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		item.Defindex = 9258
 		item.Quality = QualityUnusual
 
-		schemaItem := s.GetItemByName(name)
+		schemaItem := s.ItemByName(name)
 		if schemaItem != nil {
 			item.Target = schemaItem.Defindex
 		}
@@ -1458,7 +1447,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		}
 
 		if name != "" {
-			schemaItem := s.GetItemByName(name)
+			schemaItem := s.ItemByName(name)
 			if schemaItem != nil {
 				item.Target = schemaItem.Defindex
 				if item.Quality == 0 {
@@ -1499,7 +1488,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 			item.Defindex = 20006
 		}
 
-		schemaItem := s.GetItemByName(name)
+		schemaItem := s.ItemByName(name)
 		if schemaItem != nil {
 			item.Output = schemaItem.Defindex
 
@@ -1521,7 +1510,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		name = strings.ReplaceAll(name, "strangifier chemistry set", "")
 		name = strings.TrimSpace(name)
 
-		schemaItem := s.GetItemByName(name)
+		schemaItem := s.ItemByName(name)
 		if schemaItem != nil {
 			item.Defindex = 20000
 			item.Target = schemaItem.Defindex
@@ -1543,7 +1532,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		name = strings.TrimSpace(name)
 		item.Defindex = 6522
 
-		schemaItem := s.GetItemByName(name)
+		schemaItem := s.ItemByName(name)
 		if schemaItem != nil {
 			item.Target = schemaItem.Defindex
 			if item.Quality == 0 {
@@ -1575,7 +1564,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		}
 
 		if name != "" {
-			schemaItem := s.GetItemByName(name)
+			schemaItem := s.ItemByName(name)
 			if schemaItem != nil {
 				item.Target = schemaItem.Defindex
 			} else {
@@ -1626,8 +1615,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		debugLog("with # before", name, item)
 		parts := strings.SplitN(name, "#", 2)
 		name = strings.TrimSpace(parts[0])
-		numberStr := strings.TrimSpace(parts[1])
-		number = atoi(numberStr)
+		number, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
 
 		debugLog("with # after", name, item)
 	}
@@ -1703,7 +1691,7 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 		}
 	}
 
-	schemaItem := s.GetItemByNameWithThe(name)
+	schemaItem := s.ItemByNameWithThe(name)
 	if schemaItem == nil {
 		debugLog("return no schema item", name, item)
 		return item
@@ -1757,17 +1745,17 @@ func (s *Schema) GetItemObjectFromName(name string) *sku.Item {
 	return item
 }
 
-// GetSkuFromName returns the SKU string for the given item name.
+// SkuFromName returns the SKU string for the given item name.
 // NOTE: This method relies on string parsing and is subject to naming variations.
 // Use GetSKUFromObject for direct data-driven identification whenever possible.
-func (s *Schema) GetSkuFromName(name string) string {
-	item := s.GetItemObjectFromName(name)
+func (s *Schema) SkuFromName(name string) string {
+	item := s.ItemFromName(name)
 	return sku.FromObject(item)
 }
 
-// GetSKUFromObject normalizes the given SKU item and returns its string representation.
+// SKUFromItem normalizes the given SKU item and returns its string representation.
 // This is the preferred method for generating SKUs from structured data.
-func (s *Schema) GetSKUFromObject(item *sku.Item) string {
+func (s *Schema) SKUFromItem(item *sku.Item) string {
 	if item == nil {
 		return ""
 	}
@@ -1777,16 +1765,16 @@ func (s *Schema) GetSKUFromObject(item *sku.Item) string {
 	return sku.FromObject(item)
 }
 
-// GetSKUFromEconItem converts a generic Steam WebAPI item into a strict TF2 SKU string.
+// SKUFromEconItem converts a generic Steam WebAPI item into a strict TF2 SKU string.
 // NOTE: This method relies on MarketHashName parsing and is maintained for
 // legacy WebAPI compatibility. For internal bot logic, use tf2.Item.GetSKU(s).
-func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
+func (s *Schema) SKUFromEconItem(item *trading.Item) string {
 	nameToParse := item.MarketHashName
 	if nameToParse == "" {
 		nameToParse = item.MarketName
 	}
 
-	skuItem := s.GetItemObjectFromName(nameToParse)
+	skuItem := s.ItemFromName(nameToParse)
 	if skuItem == nil {
 		return "unknown"
 	}
@@ -1794,7 +1782,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 	// Tags detection (Reliable for Wear/Quality)
 	for _, tag := range item.Tags {
 		if tag.Category == "Exterior" {
-			if wearID := s.GetWearByName(tag.LocalizedName); wearID != 0 {
+			if wearID := s.WearByName(tag.LocalizedName); wearID != 0 {
 				skuItem.Wear = wearID
 			}
 		}
@@ -1822,7 +1810,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 
 		// Exterior (Wear): "Exterior: Factory New"
 		if wearName, ok := strings.CutPrefix(val, "Exterior: "); ok {
-			if wearID := s.GetWearByName(wearName); wearID != 0 {
+			if wearID := s.WearByName(wearName); wearID != 0 {
 				skuItem.Wear = wearID
 			}
 
@@ -1844,7 +1832,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 			skuItem.Quality == QualityDecorated
 		if isUnusual && skuItem.Effect == 0 {
 			if after, ok := strings.CutPrefix(val, "★ Unusual Effect: "); ok {
-				if id := s.GetEffectIdByName(after); id != 0 {
+				if id := s.EffectIdByName(after); id != 0 {
 					skuItem.Effect = id
 				}
 			}
@@ -1864,7 +1852,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 
 		// Paint
 		if paintName, ok := strings.CutPrefix(val, "Paint Color: "); ok {
-			if paintID := s.GetPaintDecimalByName(paintName); paintID != 0 {
+			if paintID := s.PaintDecimalByName(paintName); paintID != 0 {
 				skuItem.Paint = paintID
 			}
 		}
@@ -1889,7 +1877,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 			clean := strings.Trim(val, "()")
 			if before, _, ok := strings.Cut(clean, ":"); ok {
 				partName := strings.TrimSpace(before)
-				for name, suffix := range s.GetStrangeParts() {
+				for name, suffix := range s.StrangeParts() {
 					if strings.Contains(partName, name) {
 						if partID, err := strconv.Atoi(strings.TrimPrefix(suffix, "sp")); err == nil {
 							skuItem.Parts = append(skuItem.Parts, partID)
@@ -1904,7 +1892,7 @@ func (s *Schema) GetSKUFromEconItem(item *trading.Item) string {
 		// Spells (Color: 7ea9d1)
 		if strings.ToLower(d.Color) == "7ea9d1" {
 			spellName := strings.TrimSpace(val)
-			if spell, ok := s.GetSpellIdByName(spellName); ok {
+			if spell, ok := s.SpellIdByName(spellName); ok {
 				skuItem.Spells = append(skuItem.Spells, spell)
 			}
 		}
@@ -1941,7 +1929,7 @@ func (s *Schema) NormalizeItem(item *sku.Item) {
 	// We do this BEFORE schema lookup because we want to normalize even if the old ID isn't in schema
 	item.Defindex = NormalizeDefindex(item.Defindex)
 
-	schemaItem := s.GetItemByDef(item.Defindex)
+	schemaItem := s.ItemByDef(item.Defindex)
 	if schemaItem == nil {
 		return
 	}
@@ -2004,11 +1992,4 @@ func (s *Schema) ToJSON() map[string]any {
 		"time":    s.Time.Unix(),
 		"raw":     s.Raw,
 	}
-}
-
-func atoi(s string) int {
-	s = strings.TrimSpace(s)
-	val, _ := strconv.Atoi(s)
-
-	return val
 }

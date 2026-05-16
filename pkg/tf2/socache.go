@@ -190,7 +190,7 @@ func (i *Item) Position() uint32 {
 
 // GetSchema returns data about an item from the provided schema.
 func (i *Item) GetSchema(s *schema.Schema) *schema.Item {
-	return s.GetItemByDef(int(i.DefIndex))
+	return s.ItemByDef(int(i.DefIndex))
 }
 
 // IsWeapon checks if an item is a weapon using the schema.
@@ -263,7 +263,7 @@ func (i *Item) GetSKU(s *schema.Schema) string {
 		return i.SKU
 	}
 
-	return s.GetSKUFromObject(i.ToSKUObject())
+	return s.SKUFromItem(i.ToSKUObject())
 }
 
 // Fix applies schema-based fixes and normalizations to the item.

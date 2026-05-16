@@ -23,7 +23,6 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/sys/apps"
 	"github.com/lemon4ksan/g-man/pkg/steam/sys/gc"
 	"github.com/lemon4ksan/g-man/pkg/tf2/schema"
-	"github.com/lemon4ksan/g-man/pkg/tf2/schema/manager"
 	"github.com/lemon4ksan/g-man/test/module"
 )
 
@@ -130,7 +129,7 @@ func setupTF2(t *testing.T) (*TF2, *module.InitContext, *mockCoordinator) {
 	ictx.SetModule(apps.ModuleName, &mockAppsProvider{})
 
 	mSchema := &mockSchemaProvider{schema: &schema.Schema{}}
-	ictx.SetModule(manager.ModuleName, mSchema)
+	ictx.SetModule(schema.ModuleName, mSchema)
 
 	tf := New()
 	if err := tf.Init(ictx); err != nil {

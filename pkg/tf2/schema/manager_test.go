@@ -223,8 +223,8 @@ func TestSchemaManager_Refresh_PriceDB_Success(t *testing.T) {
 		t.Errorf("expected item defindex 5021, got %d", schema.Raw.Schema.Items[0].Defindex)
 	}
 
-	if schema.GetSkinById(0) != "Red Rock Roscoe" {
-		t.Errorf("expected paintkit 0 to be Red Rock Roscoe, got %s", schema.GetSkinById(0))
+	if schema.SkinById(0) != "Red Rock Roscoe" {
+		t.Errorf("expected paintkit 0 to be Red Rock Roscoe, got %s", schema.SkinById(0))
 	}
 }
 

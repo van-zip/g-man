@@ -303,6 +303,49 @@ var SpellDefinitions = map[string]sku.Spell{
 	"Halloween: Sentry Quad-Pumpkins": {Attribute: 1007, Value: 1}, // Alias
 }
 
+// IdentifySpell tries to find a spell by its name, stripping common prefixes.
+func IdentifySpell(name string) (sku.Spell, bool) {
+	lowerName := strings.ToLower(name)
+
+	prefixes := []string{"halloween: ", "weapon spell: ", "footprints spell: ", "vocal spell: "}
+
+	if s, ok := SpellDefinitions[name]; ok {
+		return s, true
+	}
+
+	shortName := lowerName
+	for _, p := range prefixes {
+		shortName = strings.TrimPrefix(shortName, p)
+	}
+
+	if s, ok := SpellDefinitions[shortName]; ok {
+		return s, true
+	}
+
+	if veryShortName, _, ok := strings.Cut(shortName, " ("); ok {
+		if s, ok := SpellDefinitions[veryShortName]; ok {
+			return s, true
+		}
+	}
+
+	for k, s := range SpellDefinitions {
+		kLower := strings.ToLower(k)
+		for _, p := range prefixes {
+			kLower = strings.TrimPrefix(kLower, p)
+		}
+
+		if kLower == shortName {
+			return s, true
+		}
+
+		if vsk, _, ok := strings.Cut(kLower, " ("); ok && vsk == shortName {
+			return s, true
+		}
+	}
+
+	return sku.Spell{}, false
+}
+
 var retiredKeysNames []string
 
 // GlobalNormalizationMap maps retired/legacy defindexes to their canonical counterparts.

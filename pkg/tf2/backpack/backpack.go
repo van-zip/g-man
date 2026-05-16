@@ -7,7 +7,9 @@ package backpack
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
@@ -16,8 +18,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/tf2"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
 	"github.com/lemon4ksan/g-man/pkg/tf2/schema"
-	"github.com/lemon4ksan/g-man/pkg/tf2/schema/manager"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
+	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
 // ModuleName is the name of the module.
@@ -39,7 +40,7 @@ const (
 
 // TradingProvider is an interface for getting active sent offers.
 type TradingProvider interface {
-	GetActiveSentOffers(ctx context.Context) ([]offer.TradeOffer, error)
+	GetActiveSentOffers(ctx context.Context) ([]trading.TradeOffer, error)
 }
 
 // SchemaProvider defines the interface for getting the current schema.
@@ -109,7 +110,7 @@ func (m *Backpack) Init(init module.InitContext) error {
 	m.tf2 = tf2Mod
 	m.cache = tf2Mod.Cache()
 
-	managerMod, ok := init.Module(manager.ModuleName).(*manager.Manager)
+	managerMod, ok := init.Module(schema.ModuleName).(*schema.Manager)
 	if !ok || managerMod == nil {
 		return errors.New("schema manager module not registered or invalid")
 	}
@@ -130,6 +131,18 @@ func (m *Backpack) StartAuthed(ctx context.Context, authCtx module.AuthContext) 
 	if m.trading != nil {
 		m.Go(func(ctx context.Context) {
 			m.cleanupStaleLocks(ctx, m.trading)
+
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					m.cleanupStaleLocks(ctx, m.trading)
+				}
+			}
 		})
 	}
 
@@ -157,9 +170,8 @@ func (m *Backpack) UnlockItems(ids []uint64) {
 }
 
 // GetItem returns the item with the given ID.
-func (m *Backpack) GetItem(id uint64) *tf2.Item {
-	item, _ := m.cache.GetItem(id)
-	return item
+func (m *Backpack) GetItem(id uint64) (*tf2.Item, bool) {
+	return m.cache.GetItem(id)
 }
 
 // GetItemsBySKU returns all AssetIDs of items that match the SKU.
@@ -200,6 +212,87 @@ func (m *Backpack) GetPureStock() currency.PureStock {
 	}
 
 	return stock
+}
+
+// FindCraftableItems returns a list of AssetIDs for items that can be used in crafting.
+func (m *Backpack) FindCraftableItems(defIndex uint32, count int) []uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []uint64
+	for _, item := range m.cache.GetItems() {
+		if item.DefIndex == defIndex && item.IsCraftable && !m.locked[item.ID] {
+			result = append(result, item.ID)
+			if len(result) == count {
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// GetTotalCount returns the total number of items in the backpack.
+func (m *Backpack) GetTotalCount() int {
+	return len(m.cache.GetItems())
+}
+
+// GetStock returns the current stock count for a specific SKU.
+func (m *Backpack) GetStock(sku string) int {
+	s := m.manager.Get()
+	if s == nil {
+		return 0
+	}
+
+	count := 0
+	for _, item := range m.cache.GetItems() {
+		if item.GetSKU(s) == sku {
+			count++
+		}
+	}
+
+	return count
+}
+
+// FindWeaponsByClass returns all craftable weapons that can be used by the given class.
+func (m *Backpack) FindWeaponsByClass(class string) []*tf2.Item {
+	s := m.manager.Get()
+	if s == nil {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []*tf2.Item
+	for _, item := range m.cache.GetItems() {
+		if !item.IsCraftable || !item.IsTradable || m.locked[item.ID] {
+			continue
+		}
+
+		sch := s.ItemByDef(int(item.DefIndex))
+		if sch == nil || sch.CraftClass != "weapon" {
+			continue
+		}
+
+		if slices.Contains(sch.UsedByClasses, class) {
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
+// GetMetalCount returns the number of items with the given DefIndex.
+func (m *Backpack) GetMetalCount(defIndex uint32) int {
+	count := 0
+	for _, item := range m.cache.GetItems() {
+		if item.DefIndex == defIndex {
+			count++
+		}
+	}
+
+	return count
 }
 
 // GetAssetIDs returns a list of available item IDs for a specific SKU.

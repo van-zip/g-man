@@ -143,6 +143,36 @@ func PricerMiddleware(mgr *pricedb.Manager, logger log.Logger) engine.Middleware
 	}
 }
 
+// EscrowChecker is an interface for checking if a trade offer has a trade hold (escrow).
+type EscrowChecker interface {
+	CheckEscrow(ctx context.Context, offer *trading.TradeOffer) (bool, error)
+}
+
+// EscrowMiddleware checks if there is a trade hold (escrow) on the offer.
+// If either party has a trade hold, the offer is declined.
+func EscrowMiddleware(checker EscrowChecker, logger log.Logger) engine.Middleware {
+	return func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			hasEscrow, err := checker.CheckEscrow(ctx, ctx.Offer)
+			if err != nil {
+				logger.Warn("Failed to check escrow", log.Err(err))
+				// It's safer to review if we can't determine escrow status
+				ctx.Review(reason.ReviewEscrowCheckFailed)
+
+				return nil
+			}
+
+			if hasEscrow {
+				logger.Warn("Trade has escrow (trade hold)", log.Uint64("offerID", ctx.Offer.ID))
+				ctx.Decline(reason.DeclineEscrow)
+				return nil
+			}
+
+			return next(ctx)
+		}
+	}
+}
+
 // DupeCheckMiddleware checks the history of high-value items to identify duplicates.
 func DupeCheckMiddleware(checker *bptf.BackpackTFChecker, logger log.Logger) engine.Middleware {
 	return func(next engine.Handler) engine.Handler {
@@ -158,8 +188,12 @@ func DupeCheckMiddleware(checker *bptf.BackpackTFChecker, logger log.Logger) eng
 				// Basic check: is it Unusual?
 				// SKU format: 5021;5;... (5 is quality unusual)
 				if isUnusual(item.SKU) {
-					logger.Info("Checking history for Unusual item", log.String("sku", item.SKU), log.Uint64("assetid", item.AssetID))
-					
+					logger.Info(
+						"Checking history for Unusual item",
+						log.String("sku", item.SKU),
+						log.Uint64("assetid", item.AssetID),
+					)
+
 					status, err := checker.CheckHistory(ctx, item.AssetID)
 					if err != nil {
 						logger.Warn("Failed to check item history", log.Err(err))
@@ -169,7 +203,7 @@ func DupeCheckMiddleware(checker *bptf.BackpackTFChecker, logger log.Logger) eng
 					if status.Recorded && status.IsDuped {
 						logger.Warn("Item is DUPED!", log.Uint64("assetid", item.AssetID))
 						ctx.Review(reason.ReviewDupedItems)
-						// We don't return nil here, we just mark for review 
+						// We don't return nil here, we just mark for review
 						// and let subsequent middlewares decide if they want to decline or continue.
 					}
 				}
@@ -193,17 +227,17 @@ func BanCheckMiddleware(bans *rep.BansManager, logger log.Logger) engine.Middlew
 			}
 
 			if res.IsBanned {
-				logger.Warn("Partner is banned!", 
+				logger.Warn("Partner is banned!",
 					log.String("steamid", ctx.Offer.OtherSteamID.String()),
 					log.Any("details", res.Details),
 				)
-				
+
 				if _, ok := res.Details["steamrep.com"]; ok {
 					ctx.Decline(reason.DeclineBanned)
 				} else {
 					ctx.Decline(reason.DeclineBannedBptf)
 				}
-				
+
 				return nil
 			}
 

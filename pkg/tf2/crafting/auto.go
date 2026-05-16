@@ -8,9 +8,20 @@ import (
 	"context"
 	"time"
 
+	"github.com/lemon4ksan/g-man/pkg/behavior"
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 )
+
+// BehaviorName is the name of the pure liquidator behavior.
+const BehaviorName = "pure_liquidator"
+
+// WithPureLiquidator returns an option that registers the pure liquidator behavior with the orchestrator.
+func WithPureLiquidator(mgr *Manager, inv InventoryProvider) behavior.Option {
+	return func(o *behavior.Orchestrator) {
+		o.Register(NewAutomator(mgr, inv, WithLogger(o.Logger())))
+	}
+}
 
 // Automator is a high-level orchestrator that monitors the state of your
 // backpack and automatically maintains metal reserves and weapon recrafting.
@@ -23,6 +34,8 @@ type Automator struct {
 	minRec   int
 	maxScrap int
 	maxRec   int
+
+	checkInterval time.Duration
 }
 
 // Option defines a functional configuration for the Automator.
@@ -38,13 +51,14 @@ func WithLogger(l log.Logger) Option {
 // NewAutomator creates a new orchestrator for monitoring metal reserve.
 func NewAutomator(mgr *Manager, inv InventoryProvider, opts ...Option) *Automator {
 	a := &Automator{
-		manager:  mgr,
-		inv:      inv,
-		logger:   log.Discard,
-		minScrap: 3,
-		minRec:   3,
-		maxScrap: 9,
-		maxRec:   9,
+		manager:       mgr,
+		inv:           inv,
+		logger:        log.Discard,
+		minScrap:      3,
+		minRec:        3,
+		maxScrap:      9,
+		maxRec:        9,
+		checkInterval: 30 * time.Minute,
 	}
 
 	for _, opt := range opts {
@@ -52,6 +66,43 @@ func NewAutomator(mgr *Manager, inv InventoryProvider, opts ...Option) *Automato
 	}
 
 	return a
+}
+
+// Name returns the unique name of the behavior.
+func (a *Automator) Name() string {
+	return "pure_liquidator"
+}
+
+// Run starts the background task for monitoring and maintaining metal.
+func (a *Automator) Run(ctx context.Context) error {
+	a.logger.Info("Pure Liquidator behavior started", log.Duration("interval", a.checkInterval))
+
+	ticker := time.NewTicker(a.checkInterval)
+	defer ticker.Stop()
+
+	// Initial run
+	if err := a.Tick(ctx); err != nil {
+		a.logger.Error("Initial tick failed", log.Err(err))
+	}
+
+	if err := a.CleanInventory(ctx); err != nil {
+		a.logger.Error("Initial clean failed", log.Err(err))
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := a.Tick(ctx); err != nil {
+				a.logger.Error("Tick failed", log.Err(err))
+			}
+
+			if err := a.CleanInventory(ctx); err != nil {
+				a.logger.Error("Clean failed", log.Err(err))
+			}
+		}
+	}
 }
 
 // Tick performs one check and one action (if needed).

@@ -99,7 +99,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 			switch tag.Category {
 			case "Quality":
 				if item.Quality == 0 {
-					item.Quality = s.GetQualityIdByName(tag.LocalizedTagName)
+					item.Quality = s.QualityIdByName(tag.LocalizedTagName)
 				}
 			case "Type":
 			}
@@ -119,7 +119,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 
 		// Exterior (Wear): "Exterior: Factory New"
 		if wearName, ok := strings.CutPrefix(val, "Exterior: "); ok {
-			if wearID := s.GetWearByName(wearName); wearID != 0 {
+			if wearID := s.WearByName(wearName); wearID != 0 {
 				item.Attributes = append(item.Attributes, TF2Attribute{
 					Defindex: schema.AttrWear,
 					Value:    float64(wearID),
@@ -130,7 +130,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 		}
 
 		if effectName, ok := strings.CutPrefix(val, "★ Unusual Effect: "); ok {
-			if effectID := s.GetEffectIdByName(effectName); effectID != 0 {
+			if effectID := s.EffectIdByName(effectName); effectID != 0 {
 				item.Attributes = append(item.Attributes, TF2Attribute{
 					Defindex: schema.AttrUnusualEffect,
 					Value:    float64(effectID),
@@ -160,7 +160,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 		}
 
 		if paintName, ok := strings.CutPrefix(val, "Paint Color: "); ok {
-			if paintID := s.GetPaintDecimalByName(paintName); paintID != 0 {
+			if paintID := s.PaintDecimalByName(paintName); paintID != 0 {
 				item.Attributes = append(item.Attributes, TF2Attribute{
 					Defindex: schema.AttrPaintColor,
 					Value:    float64(paintID),
@@ -197,7 +197,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 			if before, _, ok := strings.Cut(clean, ":"); ok {
 				partName := strings.TrimSpace(before)
 				// Match against schema parts
-				for name, suffix := range s.GetStrangeParts() {
+				for name, suffix := range s.StrangeParts() {
 					if strings.Contains(partName, name) {
 						if partID, err := strconv.Atoi(strings.TrimPrefix(suffix, "sp")); err == nil {
 							item.Attributes = append(item.Attributes, TF2Attribute{
@@ -215,7 +215,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 		// Spells (Color: 7ea9d1)
 		if d.Color == "7ea9d1" {
 			spellName := strings.TrimSpace(val)
-			if spell, ok := s.GetSpellIdByName(spellName); ok {
+			if spell, ok := s.SpellIdByName(spellName); ok {
 				item.Attributes = append(item.Attributes, TF2Attribute{
 					Defindex: schema.DefSpellProxy + len(item.Attributes),
 					Value:    spell,
@@ -227,7 +227,7 @@ func mapCEconToTF2(econ inventory.CEconItem, s *schema.Schema) TF2Item {
 	// Paintkit detection for Decorated Weapons
 	if item.Quality == 15 {
 		name := strings.ToLower(desc.MarketHashName)
-		for pkName, pkID := range s.GetPaintKitsByName() {
+		for pkName, pkID := range s.PaintKitsByName() {
 			if strings.Contains(name, pkName) {
 				item.Attributes = append(item.Attributes, TF2Attribute{
 					Defindex: schema.AttrPaintkit,

@@ -50,6 +50,7 @@ func (m *BansManager) CheckBans(ctx context.Context, steamID id.ID) (*BanResult,
 					result.IsBanned = true
 					result.Details["backpack.tf"] = "banned"
 				}
+
 				if user.Bans.SteamRepScammer == 1 {
 					result.IsBanned = true
 					result.Details["steamrep.com"] = "scammer"

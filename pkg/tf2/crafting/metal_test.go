@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/tf2"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
 )
 
@@ -27,6 +28,20 @@ func (m *mockFetcher) GetAssetIDs(sku string) []uint64 {
 func (m *mockFetcher) GetPureStock() currency.PureStock {
 	args := m.Called()
 	return args.Get(0).(currency.PureStock)
+}
+
+func (m *mockFetcher) FindWeaponsByClass(class string) []*tf2.Item {
+	args := m.Called(class)
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Get(0).([]*tf2.Item)
+}
+
+func (m *mockFetcher) GetMetalCount(defIndex uint32) int {
+	args := m.Called(defIndex)
+	return args.Int(0)
 }
 
 func TestMetalManager_SelectChange(t *testing.T) {

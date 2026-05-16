@@ -13,6 +13,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/tf2/pricedb"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
+	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
 
 // SafetyMiddleware checks bans and user trust levels on backpack.tf.
@@ -43,7 +44,7 @@ func SafetyMiddleware(bptfClient *Client, cache *memory.TTLCache, logger log.Log
 			}
 
 			if user.Bans != nil {
-				ctx.Decline("Partner is banned on backpack.tf")
+				ctx.Decline(reason.DeclineBannedBptf)
 				return nil
 			}
 

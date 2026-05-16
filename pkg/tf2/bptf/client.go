@@ -181,3 +181,162 @@ func (c *Client) CreateAlert(ctx context.Context, itemName, intent, currency str
 
 	return *resp, nil
 }
+
+// GetListings returns a list of active listings for the current account.
+// It uses a scrollable cursor for pagination.
+func (c *Client) GetListings(ctx context.Context, skip, limit int) (ListingsResponse, error) {
+	req := struct {
+		Skip  int `url:"skip,omitempty"`
+		Limit int `url:"limit,omitempty"`
+	}{skip, limit}
+
+	resp, err := rest.GetJSON[ListingsResponse](ctx, c.restClient, "/v2/classifieds/listings", req)
+	if err != nil {
+		return ListingsResponse{}, err
+	}
+
+	return *resp, nil
+}
+
+// DeleteListing deletes a single listing by its ID.
+func (c *Client) DeleteListing(ctx context.Context, id string) error {
+	path := "/v2/classifieds/listings/" + id
+	_, err := rest.DeleteJSON[any, any](ctx, c.restClient, path, nil, nil)
+	return err
+}
+
+// BatchDeleteListings deletes multiple listings at once (up to 100).
+func (c *Client) BatchDeleteListings(ctx context.Context, ids []string) error {
+	req := struct {
+		IDs []string `json:"listing_ids"`
+	}{IDs: ids}
+
+	_, err := rest.DeleteJSON[any, any](ctx, c.restClient, "/v2/classifieds/listings/batch", req, nil)
+
+	return err
+}
+
+// Pulse sends a heartbeat to backpack.tf to keep the bot online and bump listings.
+func (c *Client) Pulse(ctx context.Context) (UserAgentStatus, error) {
+	resp, err := rest.PostJSON[any, UserAgentStatus](ctx, c.restClient, "/agent/pulse", nil, nil)
+	if err != nil {
+		return UserAgentStatus{}, err
+	}
+
+	return *resp, nil
+}
+
+// StopAgent declares the user as no longer under control of the agent.
+func (c *Client) StopAgent(ctx context.Context) (UserAgentStatus, error) {
+	resp, err := rest.PostJSON[any, UserAgentStatus](ctx, c.restClient, "/agent/stop", nil, nil)
+	if err != nil {
+		return UserAgentStatus{}, err
+	}
+
+	return *resp, nil
+}
+
+// GetAgentStatus returns the current status of the user agent.
+func (c *Client) GetAgentStatus(ctx context.Context) (UserAgentStatus, error) {
+	resp, err := rest.PostJSON[any, UserAgentStatus](ctx, c.restClient, "/agent/status", nil, nil)
+	if err != nil {
+		return UserAgentStatus{}, err
+	}
+
+	return *resp, nil
+}
+
+// GetNotifications returns user notifications.
+func (c *Client) GetNotifications(ctx context.Context, skip, limit int, unread bool) (NotificationsResponse, error) {
+	unreadInt := 0
+	if unread {
+		unreadInt = 1
+	}
+
+	req := struct {
+		Skip   int `url:"skip,omitempty"`
+		Limit  int `url:"limit,omitempty"`
+		Unread int `url:"unread,omitempty"`
+	}{skip, limit, unreadInt}
+
+	resp, err := rest.GetJSON[NotificationsResponse](ctx, c.restClient, "/notifications", req)
+	if err != nil {
+		return NotificationsResponse{}, err
+	}
+
+	return *resp, nil
+}
+
+// MarkNotificationsRead marks all unread notifications as read.
+func (c *Client) MarkNotificationsRead(ctx context.Context) (NotificationMarkResponse, error) {
+	resp, err := rest.PostJSON[any, NotificationMarkResponse](ctx, c.restClient, "/notifications/mark", nil, nil)
+	if err != nil {
+		return NotificationMarkResponse{}, err
+	}
+
+	return *resp, nil
+}
+
+// DeleteNotification deletes a notification by ID.
+func (c *Client) DeleteNotification(ctx context.Context, id string) error {
+	path := "/notifications/" + id
+	_, err := rest.DeleteJSON[any, any](ctx, c.restClient, path, nil, nil)
+	return err
+}
+
+// GetPriceHistory returns price history for an item.
+func (c *Client) GetPriceHistory(
+	ctx context.Context,
+	appid int,
+	item, quality, tradable, craftable, priceindex string,
+) (PriceHistoryResponse, error) {
+	req := struct {
+		AppID      int    `url:"appid"`
+		Item       string `url:"item"`
+		Quality    string `url:"quality"`
+		Tradable   string `url:"tradable"`
+		Craftable  string `url:"craftable"`
+		PriceIndex string `url:"priceindex,omitempty"`
+	}{appid, item, quality, tradable, craftable, priceindex}
+
+	resp, err := rest.GetJSON[PriceHistoryResponse](ctx, c.restClient, "/IGetPriceHistory/v1", req)
+	if err != nil {
+		return PriceHistoryResponse{}, err
+	}
+
+	return *resp, nil
+}
+
+// DeleteAlertByID deletes an alert by its ID.
+func (c *Client) DeleteAlertByID(ctx context.Context, id string) error {
+	path := "/classifieds/alerts/" + id
+	_, err := rest.DeleteJSON[any, any](ctx, c.restClient, path, nil, nil)
+	return err
+}
+
+// DeleteAlertByItem deletes an alert by item name and intent.
+func (c *Client) DeleteAlertByItem(ctx context.Context, itemName, intent string) error {
+	req := struct {
+		ItemName string `url:"item_name"`
+		Intent   string `url:"intent"`
+	}{itemName, intent}
+
+	_, err := rest.DeleteJSON[any, any](ctx, c.restClient, "/classifieds/alerts", nil, req)
+
+	return err
+}
+
+// GetArchiveListings returns archived listings for the current account.
+func (c *Client) GetArchiveListings(ctx context.Context, skip, limit int) (ListingsResponse, error) {
+	req := struct {
+		Skip  int `url:"skip,omitempty"`
+		Limit int `url:"limit,omitempty"`
+	}{skip, limit}
+
+	resp, err := rest.GetJSON[ListingsResponse](ctx, c.restClient, "/v2/classifieds/archive", req)
+	if err != nil {
+		return ListingsResponse{}, err
+	}
+
+	return *resp, nil
+}

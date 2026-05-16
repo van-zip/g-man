@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/tf2"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
 )
 
@@ -20,6 +22,8 @@ var ErrNotEnoughChange = errors.New("tf2econ: not enough pure metal to make exac
 type AssetFetcher interface {
 	GetAssetIDs(sku string) []uint64
 	GetPureStock() currency.PureStock
+	FindWeaponsByClass(class string) []*tf2.Item
+	GetMetalCount(defIndex uint32) int
 }
 
 // MetalManager manages the selection and crafting of metal.
@@ -140,7 +144,56 @@ func (m *MetalManager) TryToSmeltForChange(ctx context.Context, needed currency.
 
 	_, finalRemaining := m.greedySelect(int(needed))
 	if finalRemaining > 0 {
+		// If we still need change, try smelting duplicate weapons
+		m.logger.Info(
+			"Still need change after smelting metal, checking for duplicate weapons...",
+			log.Int("remaining", finalRemaining),
+		)
+
+		if err := m.SmeltDuplicates(ctx, currency.Scrap(finalRemaining)); err == nil {
+			// Check again after smelting weapons
+			_, afterWeapons := m.greedySelect(int(needed))
+			if afterWeapons == 0 {
+				return nil
+			}
+		}
+
 		return fmt.Errorf("tf2econ: smelting didn't resolve the change problem, still need %d scrap", finalRemaining)
+	}
+
+	return nil
+}
+
+// SmeltDuplicates finds duplicate weapons and smelts them into scrap metal.
+func (m *MetalManager) SmeltDuplicates(ctx context.Context, needed currency.Scrap) error {
+	classes := []string{"Scout", "Soldier", "Pyro", "Demoman", "Heavy", "Engineer", "Medic", "Sniper", "Spy"}
+	smelted := 0
+
+	for _, class := range classes {
+		for {
+			weapons := m.fetcher.FindWeaponsByClass(class)
+			if len(weapons) < 2 {
+				break
+			}
+
+			m.logger.Info("Smelting duplicate weapons for change", log.String("class", class))
+
+			if _, err := m.craft.SmeltWeapons(ctx, weapons[0].ID, weapons[1].ID); err != nil {
+				return err
+			}
+
+			smelted++
+			if currency.Scrap(smelted) >= needed {
+				return nil
+			}
+
+			// Small delay between crafts to be safe with GC
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	if smelted == 0 {
+		return errors.New("no duplicate weapons found to smelt")
 	}
 
 	return nil

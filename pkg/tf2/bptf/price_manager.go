@@ -13,22 +13,37 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
+	"github.com/lemon4ksan/g-man/pkg/behavior"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/tf2/schema"
 	"github.com/lemon4ksan/g-man/pkg/tf2/sku"
 )
 
+// BehaviorName is the name of the price manager behavior.
+const BehaviorName = "bptf_prices"
+
+// WithPriceManager returns an option that registers the price manager behavior with the orchestrator.
+func WithPriceManager(client *Client, cfg Config) behavior.Option {
+	return func(o *behavior.Orchestrator) {
+		o.Register(NewPriceManager(client, o.Logger(), cfg))
+	}
+}
+
 // Config holds the configuration for the price manager.
 type Config struct {
 	// CachePath is the path to the local price cache file.
 	CachePath string
+	// SyncInterval is the interval between price updates.
+	SyncInterval time.Duration
 }
 
 // DefaultConfig returns a Config with production-ready defaults.
 func DefaultConfig() Config {
 	return Config{
-		CachePath: "cache/tf2/prices.json",
+		CachePath:    "cache/tf2/prices.json",
+		SyncInterval: 2 * time.Hour,
 	}
 }
 
@@ -47,8 +62,43 @@ func NewPriceManager(c *Client, l log.Logger, cfg Config) *PriceManager {
 	return &PriceManager{
 		config: cfg,
 		client: c,
-		logger: l.With(log.Module("bptf_prices")),
+		logger: l.With(log.Module(BehaviorName)),
 		index:  make(map[string]PriceEntry),
+	}
+}
+
+// Name returns the unique name of the behavior.
+func (m *PriceManager) Name() string {
+	return BehaviorName
+}
+
+// Run starts the automated price synchronization loop.
+func (m *PriceManager) Run(ctx context.Context) error {
+	m.logger.Info("BPTF Price Sync behavior started", log.Duration("interval", m.config.SyncInterval))
+
+	ticker := time.NewTicker(m.config.SyncInterval)
+	defer ticker.Stop()
+
+	// Initial update if index is empty
+	m.mu.RLock()
+	empty := len(m.index) == 0
+	m.mu.RUnlock()
+
+	if empty {
+		if err := m.Update(ctx); err != nil {
+			m.logger.Error("Initial price update failed", log.Err(err))
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := m.Update(ctx); err != nil {
+				m.logger.Error("Price update failed", log.Err(err))
+			}
+		}
 	}
 }
 

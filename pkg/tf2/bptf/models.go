@@ -43,18 +43,32 @@ type CurrenciesResponseV1 struct {
 type ListingResolvable struct {
 	ID         uint64             `json:"id,omitempty"`
 	Item       any                `json:"item,omitempty"`
+	Intent     string             `json:"intent,omitempty"` // "buy" or "sell"
 	Details    string             `json:"details,omitempty"`
 	Currencies map[string]float64 `json:"currencies"` // e.g. {"keys": 1, "metal": 25.33}
 }
 
 // ListingResponse represents a listing.
 type ListingResponse struct {
-	ID         string             `json:"id"`
-	SteamID    string             `json:"steamid"`
-	AppID      int                `json:"appid"`
-	Intent     string             `json:"intent"` // "buy" or "sell"
-	Details    string             `json:"details"`
-	Currencies map[string]float64 `json:"currencies"`
+	ID                   string             `json:"id"`
+	SteamID              string             `json:"steamid"`
+	AppID                int                `json:"appid"`
+	Intent               string             `json:"intent"` // "buy" or "sell"
+	Details              string             `json:"details"`
+	Currencies           map[string]float64 `json:"currencies"`
+	Count                int                `json:"count"`
+	Promoted             bool               `json:"promoted"`
+	TradeOffersPreferred bool               `json:"tradeOffersPreferred"`
+	BuyoutOnly           bool               `json:"buyoutOnly"`
+	ListedAt             int64              `json:"listedAt,string"`
+	BumpedAt             int64              `json:"bumpedAt,string"`
+	Item                 ItemDocument       `json:"item"`
+}
+
+// ListingsResponse represents a scrollable response of listings.
+type ListingsResponse struct {
+	Results []ListingResponse `json:"results"`
+	Cursor  Cursor            `json:"cursor"`
 }
 
 // ListingBatchCreateResult represents a batch create result.
@@ -108,9 +122,16 @@ type V1User struct {
 	Admin      int            `json:"admin,omitempty"`
 	Donated    float64        `json:"donated,omitempty"`
 	Premium    int            `json:"premium,omitempty"`
-	Bans       any            `json:"bans,omitempty"` // Can be complex object or string
+	Bans       *UserBans      `json:"bans,omitempty"`
 	Trust      UserTrust      `json:"trust"`
 	Inventory  map[string]any `json:"inventory,omitempty"`
+}
+
+// UserBans represents ban information for a user.
+type UserBans struct {
+	All             string `json:"all,omitempty"`
+	SteamRepScammer int    `json:"steamrep_scammer,omitempty"`
+	BPTF            string `json:"bptf_banned,omitempty"`
 }
 
 // UserTrust represents user trust information.
@@ -170,4 +191,44 @@ type Notification struct {
 	Unread  int            `json:"unread"`
 	Message string         `json:"message"`
 	Bundle  map[string]any `json:"bundle,omitempty"`
+}
+
+// PriceHistoryResponse represents a response from the bptf price history API.
+type PriceHistoryResponse struct {
+	Success int                `json:"success"`
+	History []PriceHistoryNode `json:"history"`
+}
+
+// PriceHistoryNode represents a single point in price history.
+type PriceHistoryNode struct {
+	Value     float64 `json:"value"`
+	ValueHigh float64 `json:"value_high,omitempty"`
+	Currency  string  `json:"currency"`
+	Timestamp int64   `json:"timestamp"`
+}
+
+// NotificationMarkResponse represents a response from marking notifications as read.
+type NotificationMarkResponse struct {
+	Modified int `json:"modified"`
+}
+
+// Entity represents an item attribute that usually has a name and an ID.
+type Entity struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// ItemDocument represents the V2 item document.
+type ItemDocument struct {
+	BaseName        string  `json:"baseName"`
+	Name            string  `json:"name"`
+	Quantity        int     `json:"quantity"`
+	Quality         Entity  `json:"quality"`
+	Rarity          Entity  `json:"rarity"`
+	Paint           *Entity `json:"paint,omitempty"`
+	Particle        *Entity `json:"particle,omitempty"`
+	ElevatedQuality *Entity `json:"elevatedQuality,omitempty"`
+	Tradable        bool    `json:"tradable"`
+	Craftable       bool    `json:"craftable"`
 }

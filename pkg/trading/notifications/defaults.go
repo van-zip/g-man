@@ -4,33 +4,57 @@
 
 package notifications
 
-import "github.com/lemon4ksan/g-man/pkg/trading/reason"
+import (
+	"sync"
 
-// defaultTemplates provides the fallback messages if they are not defined in the user's config.
-var defaultTemplates = map[string]string{
-	// Success
-	"success":        "/pre ✅ Success! The trade offer has been accepted.",
-	"success_escrow": "✅ The trade was accepted, but your items are held in escrow by Steam. Please enable the Steam Guard Mobile Authenticator to avoid this in the future.",
+	"github.com/lemon4ksan/g-man/pkg/trading/reason"
+)
 
-	// Canceled
-	"cancel.by_user": "/pre ❌ The offer is no longer available because it was canceled by the user.",
-	"cancel.generic": "/pre ❌ The offer is no longer available. This can happen due to Steam issues. Please try again.",
+var (
+	templatesMu      sync.RWMutex
+	defaultTemplates = map[string]string{
+		// Success
+		"success":        "/pre ✅ Success! The trade offer has been accepted.",
+		"success_escrow": "✅ The trade was accepted, but your items are held in escrow by Steam. Please enable the Steam Guard Mobile Authenticator to avoid this in the future.",
 
-	// Invalid
-	"invalid_trade": "/pre ❌ This trade is no longer valid. The items may have been traded away.",
+		// Canceled
+		"cancel.by_user": "/pre ❌ The offer is no longer available because it was canceled by the user.",
+		"cancel.generic": "/pre ❌ The offer is no longer available. This can happen due to Steam issues. Please try again.",
 
-	// Declines (General)
-	"decline.general":                          "/pre ❌ Your trade offer has been declined.",
-	"decline." + reason.DeclineManual.String(): "/pre ❌ Your trade offer has been declined by the owner.",
-	"decline." + reason.DeclineEscrow.String(): "/pre ❌ Your offer was declined because it would result in a trade hold (escrow). Please enable the Steam Guard Mobile Authenticator.",
+		// Invalid
+		"invalid_trade": "/pre ❌ This trade is no longer valid. The items may have been traded away.",
 
-	// Declines (Value & Items)
-	"decline." + reason.ReviewInvalidValue.String(): "/pre ❌ Your offer was declined due to an invalid value. {{if .MissingValue}}Missing: {{.MissingValue}}{{end}}",
-	"decline." + reason.ReviewInvalidItems.String(): "/pre ❌ Your offer was declined because it contains items I am not currently trading for.",
-	"decline." + reason.ReviewOverstocked.String():  "/pre ❌ Your offer was declined because I am overstocked on the items you are offering.",
-	"decline." + reason.ReviewUnderstocked.String(): "/pre ❌ Your offer was declined because I am understocked on the items you are requesting.",
+		// Declines (General)
+		"decline.general":                          "/pre ❌ Your trade offer has been declined.",
+		"decline." + reason.DeclineManual.String(): "/pre ❌ Your trade offer has been declined by the owner.",
+		"decline." + reason.DeclineEscrow.String(): "/pre ❌ Your offer was declined because it would result in a trade hold (escrow). Please enable the Steam Guard Mobile Authenticator.",
 
-	// Declines (TF2 Specific - example of extension)
-	"decline." + reason.DeclineNonTF2.String():       "/pre ❌ This bot only trades TF2 items. Your offer was declined.",
-	"decline." + reason.DeclineCrimeAttempt.String(): "/pre ❌ Your offer was declined for attempting to take items for free.",
+		// Declines (Value & Items)
+		"decline." + reason.ReviewInvalidValue.String():   "/pre ❌ Your offer was declined due to an invalid value. {{if .MissingValue}}Missing: {{.MissingValue}}{{end}}",
+		"decline." + reason.ReviewInvalidItems.String():   "/pre ❌ Your offer was declined because it contains items I am not currently trading for.",
+		"decline." + reason.ReviewOverstocked.String():    "/pre ❌ Your offer was declined because I am overstocked on the items you are offering.",
+		"decline." + reason.ReviewUnderstocked.String():   "/pre ❌ Your offer was declined because I am understocked on the items you are requesting.",
+		"decline." + reason.DeclineBlacklisted.String():   "/pre ❌ You are blacklisted from using this bot.",
+		"decline." + reason.DeclineBegging.String():       "/pre ❌ You are asking for items for free. Please provide equivalent value.",
+		"decline." + reason.DeclineNoChange.String():      "/pre ❌ I don't have enough small items to give you change right now. Please try again later.",
+		"decline." + reason.DeclineBannedBptf.String():    "/pre ❌ You are banned on backpack.tf. I do not trade with banned users.",
+		"decline." + reason.DeclineUnderpaid.String():     "/pre ❌ You have underpaid for the items. Please check the prices and try again.",
+		"decline." + reason.DeclineInternalError.String(): "/pre ❌ An internal error occurred while processing your trade. Please try again in a few minutes.",
+	}
+)
+
+// RegisterDefaultTemplate adds or updates a fallback template.
+// This allows game-specific packages (like tf2) to register their own reasons.
+func RegisterDefaultTemplate(key, content string) {
+	templatesMu.Lock()
+	defer templatesMu.Unlock()
+
+	defaultTemplates[key] = content
+}
+
+// GetDefaultTemplate retrieves a fallback template by key.
+func GetDefaultTemplate(key string) string {
+	templatesMu.RLock()
+	defer templatesMu.RUnlock()
+	return defaultTemplates[key]
 }

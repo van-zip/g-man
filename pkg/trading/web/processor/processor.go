@@ -16,7 +16,6 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/trading"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 )
 
 var (
@@ -64,9 +63,9 @@ type BackpackProvider interface {
 // The Processor will call these methods sequentially.
 type OfferHandler interface {
 	// ProcessOffer analyzes the offer and decides what to do.
-	ProcessOffer(ctx context.Context, offer *offer.TradeOffer) (offer.ActionDecision, error)
+	ProcessOffer(ctx context.Context, offer *trading.TradeOffer) (trading.ActionDecision, error)
 	// OnActionFailed is called if the SDK completely fails to execute the action after all retries.
-	OnActionFailed(ctx context.Context, offer *offer.TradeOffer, action offer.ActionType, reason string, err error)
+	OnActionFailed(ctx context.Context, offer *trading.TradeOffer, action trading.ActionType, reason string, err error)
 }
 
 // Option defines a functional configuration for the Processor.
@@ -88,7 +87,7 @@ type Processor struct {
 	handler  OfferHandler
 	logger   log.Logger
 
-	queue chan *offer.TradeOffer
+	queue chan *trading.TradeOffer
 
 	// ItemsInTrade tracks assetIDs that are currently involved in active offers.
 	processing sync.Map
@@ -106,7 +105,7 @@ func NewProcessor(
 		handler:  handler,
 		backpack: backpack,
 		logger:   log.Discard,
-		queue:    make(chan *offer.TradeOffer, 500), // Buffered queue for incoming offers
+		queue:    make(chan *trading.TradeOffer, 500), // Buffered queue for incoming offers
 	}
 }
 
@@ -116,7 +115,7 @@ func (p *Processor) Start(ctx context.Context) {
 }
 
 // Enqueue adds an offer to the processing queue if it isn't already handled.
-func (p *Processor) Enqueue(off *offer.TradeOffer) {
+func (p *Processor) Enqueue(off *trading.TradeOffer) {
 	if _, loaded := p.processing.LoadOrStore(off.ID, true); loaded {
 		return
 	}
@@ -131,7 +130,7 @@ func (p *Processor) Enqueue(off *offer.TradeOffer) {
 }
 
 // CheckEscrow checks if the partner has a Trade Hold.
-func (p *Processor) CheckEscrow(ctx context.Context, offer *offer.TradeOffer) (bool, error) {
+func (p *Processor) CheckEscrow(ctx context.Context, offer *trading.TradeOffer) (bool, error) {
 	if offer.EscrowEndDate > 0 {
 		return true, nil
 	}
@@ -168,12 +167,16 @@ func (p *Processor) worker(ctx context.Context) {
 			return
 		case off := <-p.queue:
 			p.processSingleOffer(ctx, off)
-			p.processing.Delete(off.ID)
+			// Keep the offer ID in 'processing' for a short while (5s) after completion
+			// to prevent re-processing if Steam API is slow to update the state.
+			time.AfterFunc(5*time.Second, func() {
+				p.processing.Delete(off.ID)
+			})
 		}
 	}
 }
 
-func (p *Processor) processSingleOffer(ctx context.Context, off *offer.TradeOffer) {
+func (p *Processor) processSingleOffer(ctx context.Context, off *trading.TradeOffer) {
 	start := time.Now()
 	l := p.logger.With(log.Uint64("offerID", off.ID))
 
@@ -201,9 +204,15 @@ func (p *Processor) processSingleOffer(ctx context.Context, off *offer.TradeOffe
 	err = p.applyAction(ctx, off, decision)
 	if err != nil {
 		p.handler.OnActionFailed(ctx, off, decision.Action, decision.Reason, err)
+
+		// If accept failed, we MUST unlock items so they can be used in other trades
+		if decision.Action == trading.ActionAccept && len(ourItemIDs) > 0 {
+			p.backpack.UnlockItems(ourItemIDs)
+			l.Debug("Unlocked our items after failed accept")
+		}
 	}
 
-	if decision.Action == offer.ActionDecline || decision.Action == offer.ActionSkip {
+	if decision.Action == trading.ActionDecline || decision.Action == trading.ActionSkip {
 		if len(ourItemIDs) > 0 {
 			p.backpack.UnlockItems(ourItemIDs)
 			l.Debug("Unlocked our items after decline/skip")
@@ -214,17 +223,17 @@ func (p *Processor) processSingleOffer(ctx context.Context, off *offer.TradeOffe
 }
 
 // applyAction executes the decision and handles retries automatically.
-func (p *Processor) applyAction(ctx context.Context, off *offer.TradeOffer, decision offer.ActionDecision) error {
+func (p *Processor) applyAction(ctx context.Context, off *trading.TradeOffer, decision trading.ActionDecision) error {
 	switch decision.Action {
-	case offer.ActionAccept:
+	case trading.ActionAccept:
 		return p.withRetry(ctx, 5, func() error {
 			return p.manager.AcceptOffer(ctx, off.ID)
 		})
-	case offer.ActionDecline:
+	case trading.ActionDecline:
 		return p.withRetry(ctx, 5, func() error {
 			return p.manager.DeclineOffer(ctx, off.ID)
 		})
-	case offer.ActionCounter:
+	case trading.ActionCounter:
 		if decision.CounterParams == nil {
 			return errors.New("counter params are missing for counter action")
 		}
@@ -242,7 +251,7 @@ func (p *Processor) applyAction(ctx context.Context, off *offer.TradeOffer, deci
 
 		return err
 
-	case offer.ActionSkip:
+	case trading.ActionSkip:
 		return nil
 	default:
 		return errors.New("unknown action type")

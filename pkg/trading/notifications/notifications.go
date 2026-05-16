@@ -65,28 +65,28 @@ func (m *Manager) SendNotification(ctx context.Context, info *TradeInfo) error {
 func (m *Manager) resolveTemplate(info *TradeInfo) (key, defaultTpl string, err error) {
 	switch info.OldState {
 	case StateAccepted:
-		return "success", defaultTemplates["success"], nil
+		return "success", GetDefaultTemplate("success"), nil
 	case StateInEscrow:
-		return "success_escrow", defaultTemplates["success_escrow"], nil
+		return "success_escrow", GetDefaultTemplate("success_escrow"), nil
 	case StateInvalid:
-		return "invalid_trade", defaultTemplates["invalid_trade"], nil
+		return "invalid_trade", GetDefaultTemplate("invalid_trade"), nil
 	case StateDeclined:
 		declineKey := "decline." + string(info.ReasonType)
 
-		defaultDeclineTpl, ok := defaultTemplates[declineKey]
-		if !ok {
+		defaultDeclineTpl := GetDefaultTemplate(declineKey)
+		if defaultDeclineTpl == "" {
 			// Fallback for unknown decline reasons
-			return "decline.general", defaultTemplates["decline.general"], nil
+			return "decline.general", GetDefaultTemplate("decline.general"), nil
 		}
 
 		return declineKey, defaultDeclineTpl, nil
 
 	case StateCanceled:
 		if info.IsCanceledByUser {
-			return "cancel.by_user", defaultTemplates["cancel.by_user"], nil
+			return "cancel.by_user", GetDefaultTemplate("cancel.by_user"), nil
 		}
 
-		return "cancel.generic", defaultTemplates["cancel.generic"], nil
+		return "cancel.generic", GetDefaultTemplate("cancel.generic"), nil
 	}
 
 	return "", "", fmt.Errorf("no template found for trade state: %d", info.OldState)

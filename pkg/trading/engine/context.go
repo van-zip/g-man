@@ -8,8 +8,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 )
 
 // Action represents the final decision made by the engine regarding a trade.
@@ -61,7 +61,7 @@ type Verdict struct {
 type TradeContext struct {
 	context.Context
 
-	Offer   *offer.TradeOffer
+	Offer   *trading.TradeOffer
 	Verdict Verdict
 
 	// Metadata storage
@@ -70,7 +70,7 @@ type TradeContext struct {
 }
 
 // NewTradeContext creates a fresh context for an incoming offer.
-func NewTradeContext(ctx context.Context, offer *offer.TradeOffer) *TradeContext {
+func NewTradeContext(ctx context.Context, offer *trading.TradeOffer) *TradeContext {
 	return &TradeContext{
 		Context: ctx,
 		Offer:   offer,
@@ -110,4 +110,9 @@ func (c *TradeContext) Decline(reason reason.TradeReason) {
 // Review marks the offer for manual review.
 func (c *TradeContext) Review(reason reason.TradeReason) {
 	c.Verdict = Verdict{Action: ActionReview, Reason: reason}
+}
+
+// Counter sets the verdict to COUNTER and provides necessary parameters.
+func (c *TradeContext) Counter(reason reason.TradeReason, params *trading.CounterParams) {
+	c.Verdict = Verdict{Action: ActionCounter, Reason: reason, Data: params}
 }

@@ -7,7 +7,7 @@ package engine
 import (
 	"context"
 
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
+	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
 // Handler represents a function that processes a TradeContext.
@@ -38,7 +38,7 @@ func (e *Engine) Use(mws ...Middleware) {
 
 // Process passes the TradeOffer through the entire middleware chain.
 // It returns the final Verdict reached by the chain.
-func (e *Engine) Process(ctx context.Context, offer *offer.TradeOffer) (*Verdict, error) {
+func (e *Engine) Process(ctx context.Context, offer *trading.TradeOffer) (*Verdict, error) {
 	tCtx := NewTradeContext(ctx, offer)
 
 	// The innermost handler: reached only if no middleware sets a definitive verdict

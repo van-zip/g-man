@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/notifications"
 	"github.com/lemon4ksan/g-man/pkg/trading/review"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 )
 
 // TradeExecutor is an interface for executing actions in Steam (Accept/Decline).
@@ -32,7 +32,7 @@ type Processor struct {
 	logger   log.Logger
 
 	// Queue for sequential processing (to avoid race conditions in inventory)
-	queue chan *offer.TradeOffer
+	queue chan *trading.TradeOffer
 
 	// Tracking busy items
 	mu        busyItemsMu
@@ -51,7 +51,7 @@ func New(ex TradeExecutor, eng *engine.Engine, n *notifications.Manager, r *revi
 		notif:     n,
 		reviewer:  r,
 		logger:    l.With(log.Module("processor")),
-		queue:     make(chan *offer.TradeOffer, 100),
+		queue:     make(chan *trading.TradeOffer, 100),
 		busyItems: make(map[uint64]uint64),
 	}
 }
@@ -71,11 +71,11 @@ func (p *Processor) Start(ctx context.Context) {
 }
 
 // Enqueue adds the offer to the queue for processing.
-func (p *Processor) Enqueue(offer *offer.TradeOffer) {
+func (p *Processor) Enqueue(offer *trading.TradeOffer) {
 	p.queue <- offer
 }
 
-func (p *Processor) handleOffer(ctx context.Context, offer *offer.TradeOffer) {
+func (p *Processor) handleOffer(ctx context.Context, offer *trading.TradeOffer) {
 	start := time.Now()
 
 	p.logger.Info("Processing offer", log.Uint64("id", offer.ID))
@@ -99,7 +99,7 @@ func (p *Processor) handleOffer(ctx context.Context, offer *offer.TradeOffer) {
 
 func (p *Processor) executeVerdict(
 	ctx context.Context,
-	offer *offer.TradeOffer,
+	offer *trading.TradeOffer,
 	v *engine.Verdict,
 	duration time.Duration,
 ) {
@@ -126,7 +126,7 @@ func (p *Processor) executeVerdict(
 }
 
 func (p *Processor) makeNotifInfo(
-	offer *offer.TradeOffer,
+	offer *trading.TradeOffer,
 	state notifications.TradeState,
 	v *engine.Verdict,
 ) *notifications.TradeInfo {
@@ -145,7 +145,7 @@ func (p *Processor) makeReviewMeta(v *engine.Verdict, d time.Duration) *review.T
 	}
 }
 
-func (p *Processor) isAnyItemBusy(offer *offer.TradeOffer) bool {
+func (p *Processor) isAnyItemBusy(offer *trading.TradeOffer) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -158,7 +158,7 @@ func (p *Processor) isAnyItemBusy(offer *offer.TradeOffer) bool {
 	return false
 }
 
-func (p *Processor) lockItems(offer *offer.TradeOffer) {
+func (p *Processor) lockItems(offer *trading.TradeOffer) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -167,7 +167,7 @@ func (p *Processor) lockItems(offer *offer.TradeOffer) {
 	}
 }
 
-func (p *Processor) unlockItems(offer *offer.TradeOffer) {
+func (p *Processor) unlockItems(offer *trading.TradeOffer) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

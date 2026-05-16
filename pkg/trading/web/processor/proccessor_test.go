@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/trading"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 )
 
 type backpackMock struct {
@@ -94,12 +93,12 @@ func (m *mockManager) GetEscrowDuration(ctx context.Context, id uint64) (Details
 type mockOfferHandler struct {
 	mu            sync.Mutex
 	processCalls  int
-	decision      offer.ActionDecision
+	decision      trading.ActionDecision
 	failedCalled  bool
 	sleepDuration time.Duration
 }
 
-func (h *mockOfferHandler) ProcessOffer(ctx context.Context, off *offer.TradeOffer) (offer.ActionDecision, error) {
+func (h *mockOfferHandler) ProcessOffer(ctx context.Context, off *trading.TradeOffer) (trading.ActionDecision, error) {
 	h.mu.Lock()
 	h.processCalls++
 	h.mu.Unlock()
@@ -113,8 +112,8 @@ func (h *mockOfferHandler) ProcessOffer(ctx context.Context, off *offer.TradeOff
 
 func (h *mockOfferHandler) OnActionFailed(
 	ctx context.Context,
-	off *offer.TradeOffer,
-	act offer.ActionType,
+	off *trading.TradeOffer,
+	act trading.ActionType,
 	reason string,
 	err error,
 ) {
@@ -132,7 +131,7 @@ func TestProcessor_DuplicatePrevention(t *testing.T) {
 	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
-	off := &offer.TradeOffer{ID: 111}
+	off := &trading.TradeOffer{ID: 111}
 
 	p.Enqueue(off)
 	p.Enqueue(off)
@@ -155,15 +154,15 @@ func TestProcessor_SequentialProcessing(t *testing.T) {
 	mockMgr := &mockManager{}
 	mockHdl := &mockOfferHandler{
 		sleepDuration: 100 * time.Millisecond,
-		decision:      offer.ActionDecision{Action: offer.ActionSkip},
+		decision:      trading.ActionDecision{Action: trading.ActionSkip},
 	}
 	mockBp := newBackpackMock()
 
 	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
-	p.Enqueue(&offer.TradeOffer{ID: 1})
-	p.Enqueue(&offer.TradeOffer{ID: 2})
+	p.Enqueue(&trading.TradeOffer{ID: 1})
+	p.Enqueue(&trading.TradeOffer{ID: 2})
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -184,25 +183,25 @@ func TestProcessor_SequentialProcessing(t *testing.T) {
 func TestProcessor_LockUnlockLifecycle(t *testing.T) {
 	tests := []struct {
 		name          string
-		action        offer.ActionType
+		action        trading.ActionType
 		expectUnlock  bool
 		expectManager bool
 	}{
-		{"Accept: no unlock (GC handles it)", offer.ActionAccept, false, true},
-		{"Decline: must unlock", offer.ActionDecline, true, true},
-		{"Skip: must unlock", offer.ActionSkip, true, false},
+		{"Accept: no unlock (GC handles it)", trading.ActionAccept, false, true},
+		{"Decline: must unlock", trading.ActionDecline, true, true},
+		{"Skip: must unlock", trading.ActionSkip, true, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockMgr := &mockManager{}
-			mockHdl := &mockOfferHandler{decision: offer.ActionDecision{Action: tt.action}}
+			mockHdl := &mockOfferHandler{decision: trading.ActionDecision{Action: tt.action}}
 			mockBp := newBackpackMock()
 
 			p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
 			p.Start(context.Background())
 
-			off := &offer.TradeOffer{
+			off := &trading.TradeOffer{
 				ID:          999,
 				ItemsToGive: []*trading.Item{{AssetID: 1}},
 			}
@@ -236,15 +235,15 @@ func TestProcessor_CounterAction(t *testing.T) {
 	mockMgr := &mockManager{}
 	mockBp := newBackpackMock()
 
-	counterParams := &offer.CounterParams{
+	counterParams := &trading.CounterParams{
 		Message:     "Balance please",
 		Token:       "xyz",
 		ItemsToGive: []*trading.Item{{AssetID: 1}},
 	}
 
 	mockHdl := &mockOfferHandler{
-		decision: offer.ActionDecision{
-			Action:        offer.ActionCounter,
+		decision: trading.ActionDecision{
+			Action:        trading.ActionCounter,
 			CounterParams: counterParams,
 		},
 	}
@@ -252,7 +251,7 @@ func TestProcessor_CounterAction(t *testing.T) {
 	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
-	p.Enqueue(&offer.TradeOffer{ID: 555, OtherSteamID: 12345})
+	p.Enqueue(&trading.TradeOffer{ID: 555, OtherSteamID: 12345})
 
 	waitForCondition(func() bool {
 		mockMgr.mu.Lock()
@@ -271,7 +270,7 @@ func TestProcessor_CounterAction(t *testing.T) {
 
 func TestProcessor_RetryAndFailure(t *testing.T) {
 	mockMgr := &mockManager{shouldFail: true}
-	mockHdl := &mockOfferHandler{decision: offer.ActionDecision{Action: offer.ActionAccept}}
+	mockHdl := &mockOfferHandler{decision: trading.ActionDecision{Action: trading.ActionAccept}}
 	mockBp := newBackpackMock()
 
 	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
@@ -281,7 +280,7 @@ func TestProcessor_RetryAndFailure(t *testing.T) {
 
 	p.Start(ctx)
 
-	p.Enqueue(&offer.TradeOffer{ID: 777})
+	p.Enqueue(&trading.TradeOffer{ID: 777})
 
 	waitForCondition(func() bool {
 		mockHdl.mu.Lock()

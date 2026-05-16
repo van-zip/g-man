@@ -5,18 +5,12 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
-	"math"
-	"slices"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
-	"github.com/lemon4ksan/g-man/pkg/tf2"
-	"github.com/lemon4ksan/g-man/pkg/tf2/crafting"
-	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
-	"github.com/lemon4ksan/g-man/pkg/tf2/pricedb"
+	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
 
@@ -33,7 +27,7 @@ func RecoverMiddleware(logger log.Logger) Middleware {
 						log.Any("panic", r),
 						log.Uint64("offer_id", ctx.Offer.ID),
 					)
-					ctx.Review("Internal engine error (panic)")
+					ctx.Review(reason.ReviewEngineError)
 				}
 			}()
 
@@ -65,14 +59,13 @@ func LoggerMiddleware(logger log.Logger) Middleware {
 }
 
 // BlacklistMiddleware rejects offers from specific SteamIDs.
-func BlacklistMiddleware(blacklist []id.ID) Middleware {
+func BlacklistMiddleware(blacklist map[id.ID]struct{}) Middleware {
 	return func(next Handler) Handler {
 		return func(ctx *TradeContext) error {
 			// Check precondition
-			if slices.Contains(blacklist, ctx.Offer.OtherSteamID) {
+			if _, blacklisted := blacklist[ctx.Offer.OtherSteamID]; blacklisted {
 				// We found a match! Decline the offer and DO NOT call next(ctx).
-				// This breaks the chain and returns immediately.
-				ctx.Decline("User is blacklisted")
+				ctx.Decline(reason.DeclineBlacklisted)
 				return nil
 			}
 
@@ -84,190 +77,50 @@ func BlacklistMiddleware(blacklist []id.ID) Middleware {
 
 // EmptyOfferMiddleware automatically declines offers where the partner
 // asks for items but offers nothing in return (Begging).
-func EmptyOfferMiddleware() Middleware {
+// It also handles donations (where we take items for free), optionally filtering "junk".
+func EmptyOfferMiddleware(isJunk func(*trading.Item) bool) Middleware {
 	return func(next Handler) Handler {
 		return func(ctx *TradeContext) error {
 			gaveItems := len(ctx.Offer.ItemsToReceive) > 0 // We receive = they gave
 			tookItems := len(ctx.Offer.ItemsToGive) > 0    // We give = they took
 
 			if tookItems && !gaveItems {
-				ctx.Decline("You are asking for free items")
+				ctx.Decline(reason.DeclineBegging)
 				return nil
 			}
 
 			if gaveItems && !tookItems {
-				ctx.Accept("Donation received, thank you!")
+				allJunk := true
+				for _, it := range ctx.Offer.ItemsToReceive {
+					if !it.Tradable {
+						ctx.Decline(reason.DeclineBegging) // Don't even review untradable junk
+						return nil
+					}
+
+					// If we have a validator, use it to check for junk
+					if isJunk != nil {
+						if !isJunk(it) {
+							allJunk = false
+						}
+					} else {
+						// Default: if it has a SKU, it's probably not junk
+						if it.SKU != "" {
+							allJunk = false
+						}
+					}
+				}
+
+				if allJunk {
+					ctx.Decline(reason.DeclineJunkDonation)
+					return nil
+				}
+
+				ctx.Accept(reason.AcceptDonation)
+
 				return nil // Stop chain, accept immediately
 			}
 
 			return next(ctx)
 		}
 	}
-}
-
-// PricerMiddleware enriches trade context with prices from PriceDB.
-func PricerMiddleware(db *pricedb.Client, logger log.Logger) Middleware {
-	return func(next Handler) Handler {
-		return func(ctx *TradeContext) error {
-			skus := make(map[string]bool)
-			for _, item := range append(ctx.Offer.ItemsToGive, ctx.Offer.ItemsToReceive...) {
-				skus[item.SKU] = true
-			}
-
-			skuList := make([]string, 0, len(skus))
-			for sku := range skus {
-				skuList = append(skuList, sku)
-			}
-
-			prices, err := db.GetItemsBulk(ctx, skuList)
-			if err != nil {
-				logger.Warn("Failed to fetch prices, marking for review", log.Err(err))
-				ctx.Review("Pricer API is down")
-
-				return nil
-			}
-
-			priceMap := make(map[string]*pricedb.Price)
-			for _, p := range prices {
-				priceMap[p.SKU] = p
-			}
-
-			ctx.Set("prices", priceMap)
-
-			return next(ctx)
-		}
-	}
-}
-
-// CounterOfferMiddleware automatically adds metal to the trade
-// if the user gives us an item but forgets to put our currency in return.
-func CounterOfferMiddleware(metalMgr *crafting.MetalManager, pricer *pricedb.Client, logger log.Logger) Middleware {
-	return func(next Handler) Handler {
-		return func(ctx *TradeContext) error {
-			err := next(ctx)
-
-			if ctx.Verdict.Action == ActionDecline {
-				return err
-			}
-
-			valueDiffScrap := calculateValueDiff(ctx)
-
-			if valueDiffScrap > 0 {
-				changeIDs, err := metalMgr.SelectChange(valueDiffScrap)
-				if err != nil {
-					if errors.Is(err, crafting.ErrNotEnoughChange) {
-						logger.Warn("Not enough metal for change, triggering auto-crafting...")
-						// TODO: Smelt scrap / duplicates
-						ctx.Decline("I don't have enough small metal for exact change right now.")
-
-						return nil
-					}
-
-					return err
-				}
-
-				ctx.Verdict.Action = ActionCounter
-				ctx.Verdict.Reason = "Added exact change automatically"
-				ctx.Verdict.Data = changeIDs
-			}
-
-			return err
-		}
-	}
-}
-
-// ChangeMiddleware automatically adds metal to the trade if the user gives us an item but forgets to put our currency in return.
-func ChangeMiddleware(metalMgr *crafting.MetalManager, craftingSvc *tf2.TF2, logger log.Logger) Middleware {
-	return func(next Handler) Handler {
-		return func(ctx *TradeContext) error {
-			if err := next(ctx); err != nil {
-				return err
-			}
-
-			if ctx.Verdict.Action != ActionUndecided {
-				return nil
-			}
-
-			diffVar, ok := ctx.Get("value_diff_scrap")
-			if !ok {
-				return nil
-			}
-
-			diff, ok := diffVar.(currency.Scrap)
-			if !ok {
-				return errors.New("invalid or missing value_diff_scrap in context")
-			}
-
-			if diff == 0 {
-				ctx.Accept("Correct value provided")
-				return nil
-			}
-
-			if diff > 0 {
-				ids, err := metalMgr.SelectChange(diff)
-				if err != nil {
-					if err := metalMgr.TryToSmeltForChange(ctx, diff); err == nil {
-						return nil
-					}
-
-					ctx.Decline("I don't have enough small metal to give you change.")
-
-					return nil
-				}
-
-				ctx.Verdict.Action = ActionCounter
-				ctx.Verdict.Reason = "Added change automatically"
-				ctx.Verdict.Data = ids
-			} else {
-				ctx.Decline(
-					reason.TradeReason(
-						fmt.Sprintf("You are missing %f", currency.ToRefined(currency.Scrap(math.Abs(float64(diff))))),
-					),
-				)
-			}
-
-			return nil
-		}
-	}
-}
-
-// calculateValueDiff calculates the difference in value between what we receive and what we give.
-// Result > 0: We were overpaid (need change).
-// Result < 0: We were underpaid (we should reject or request more).
-func calculateValueDiff(ctx *TradeContext) currency.Scrap {
-	pricesRaw, ok := ctx.Get("prices")
-	if !ok {
-		return 0
-	}
-
-	priceMap := pricesRaw.(map[string]*pricedb.Price)
-
-	var keyPriceScrap currency.Scrap
-	if keyPrice, ok := priceMap[currency.SKUKey]; ok {
-		// Convert key buy price to scrap
-		keyPriceScrap = currency.ToScrap(keyPrice.Buy.Metal)
-	}
-
-	var ourTotal, theirTotal currency.Scrap
-
-	for _, item := range ctx.Offer.ItemsToGive {
-		if p, ok := priceMap[item.SKU]; ok {
-			val := currency.Scrap(p.Sell.Keys)*keyPriceScrap + currency.ToScrap(p.Sell.Metal)
-			ourTotal += currency.Scrap(val)
-		}
-	}
-
-	for _, item := range ctx.Offer.ItemsToReceive {
-		if p, ok := priceMap[item.SKU]; ok {
-			val := currency.Scrap(p.Buy.Keys)*keyPriceScrap + currency.ToScrap(p.Buy.Metal)
-			theirTotal += currency.Scrap(val)
-		}
-	}
-
-	diff := currency.NewValueDiff(ourTotal, theirTotal, keyPriceScrap)
-
-	ctx.Set("value_diff_scrap", diff.Diff())
-	ctx.Set("is_profitable", diff.IsProfitable())
-
-	return diff.Diff()
 }

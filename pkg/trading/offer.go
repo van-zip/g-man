@@ -2,30 +2,29 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package offer
+package trading
 
 import (
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
-	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
 // TradeOffer represents a snapshot of a trade offer at a specific time.
 type TradeOffer struct {
-	ID                 uint64             `json:"tradeofferid,string"`
-	OtherSteamID       id.ID              `json:"accountid_other"`
-	Message            string             `json:"message"`
-	ExpirationTime     int64              `json:"expiration_time"`
-	State              trading.OfferState `json:"trade_offer_state"`
-	ItemsToGive        []*trading.Item    `json:"items_to_give"`
-	ItemsToReceive     []*trading.Item    `json:"items_to_receive"`
-	IsOurOffer         bool               `json:"is_our_offer"`
-	TimeCreated        int64              `json:"time_created"`
-	TimeUpdated        int64              `json:"time_updated"`
-	FromRealTimeTrade  bool               `json:"from_real_time_trade"`
-	EscrowEndDate      int64              `json:"escrow_end_date"`
-	ConfirmationMethod int                `json:"confirmation_method"`
+	ID                 uint64     `json:"tradeofferid,string"`
+	OtherSteamID       id.ID      `json:"accountid_other"`
+	Message            string     `json:"message"`
+	ExpirationTime     int64      `json:"expiration_time"`
+	State              OfferState `json:"trade_offer_state"`
+	ItemsToGive        []*Item    `json:"items_to_give"`
+	ItemsToReceive     []*Item    `json:"items_to_receive"`
+	IsOurOffer         bool       `json:"is_our_offer"`
+	TimeCreated        int64      `json:"time_created"`
+	TimeUpdated        int64      `json:"time_updated"`
+	FromRealTimeTrade  bool       `json:"from_real_time_trade"`
+	EscrowEndDate      int64      `json:"escrow_end_date"`
+	ConfirmationMethod int        `json:"confirmation_method"`
 }
 
 // CreatedAt returns TimeCreated as a time.Time.
@@ -45,7 +44,7 @@ func (o *TradeOffer) ExpiresAt() time.Time {
 
 // IsActive returns true if the offer is in a state that can be acted upon.
 func (o *TradeOffer) IsActive() bool {
-	return o.State == trading.OfferStateActive
+	return o.State == OfferStateActive
 }
 
 // IsGlitched returns true if the offer seems malformed (missing items or partner).
@@ -76,8 +75,8 @@ type ActionDecision struct {
 
 // CounterParams tell the processor how to counter offer.
 type CounterParams struct {
-	ItemsToGive    []*trading.Item
-	ItemsToReceive []*trading.Item
+	ItemsToGive    []*Item
+	ItemsToReceive []*Item
 	Message        string
 	Token          string
 }

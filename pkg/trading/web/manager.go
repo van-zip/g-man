@@ -21,11 +21,11 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/community/inventory"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/pkg/trading"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 	"github.com/lemon4ksan/g-man/pkg/trading/web/processor"
 )
 
@@ -305,7 +305,7 @@ func (m *Manager) CancelOffer(ctx context.Context, offerID uint64) error {
 }
 
 // GetOffer fetches details for a single offer.
-func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*offer.TradeOffer, error) {
+func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*trading.TradeOffer, error) {
 	if err := m.rateLimiter.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*offer.TradeOff
 	}{offerID, m.config.Language}
 
 	type respStruct struct {
-		Offer *offer.TradeOffer `json:"offer"`
+		Offer *trading.TradeOffer `json:"offer"`
 	}
 
 	resp, err := service.WebAPI[respStruct](ctx, m.web, "GET", "IEconService", "GetTradeOffer", 1, req)
@@ -329,6 +329,45 @@ func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*offer.TradeOff
 	}
 
 	return resp.Offer, nil
+}
+
+// GetPartnerInventory fetches the inventory of a trade partner for the current game (TF2).
+func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*trading.Item, error) {
+	m.mu.RLock()
+	c := m.community
+	m.mu.RUnlock()
+
+	if c == nil {
+		return nil, processor.ErrCommunityNotReady
+	}
+
+	// For TF2 we use appid 440 and contextid 2
+	inv, _, _, err := inventory.GetUserInventoryContents(ctx, c, uint64(partnerID), 440, 2, true, m.config.Language)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*trading.Item, len(inv))
+	for i, it := range inv {
+		assetID, _ := strconv.ParseUint(it.Asset.AssetID, 10, 64)
+		classID, _ := strconv.ParseUint(it.Asset.ClassID, 10, 64)
+		instanceID, _ := strconv.ParseUint(it.Asset.InstanceID, 10, 64)
+		amount, _ := strconv.ParseInt(it.Asset.Amount, 10, 64)
+
+		result[i] = &trading.Item{
+			AppID:          440,
+			ContextID:      2,
+			AssetID:        assetID,
+			ClassID:        classID,
+			InstanceID:     instanceID,
+			Amount:         amount,
+			Name:           it.Description.Name,
+			MarketHashName: it.Description.MarketHashName,
+			Tradable:       it.Description.Tradable == 1,
+		}
+	}
+
+	return result, nil
 }
 
 // GetEscrowDuration loads the trade page and parses the Trade Hold information.
@@ -403,8 +442,8 @@ func (m *Manager) doPoll(ctx context.Context) {
 	}{1, 1, 1, 0, time.Now().Add(-24 * time.Hour).Unix()}
 
 	type respStruct struct {
-		Sent     []*offer.TradeOffer `json:"trade_offers_sent"`
-		Received []*offer.TradeOffer `json:"trade_offers_received"`
+		Sent     []*trading.TradeOffer `json:"trade_offers_sent"`
+		Received []*trading.TradeOffer `json:"trade_offers_received"`
 	}
 
 	resp, err := service.WebAPI[respStruct](ctx, m.web, "GET", "IEconService", "GetTradeOffers", 1, req)
@@ -421,11 +460,12 @@ func (m *Manager) doPoll(ctx context.Context) {
 
 	now := time.Now()
 
-	allOffers := make([]*offer.TradeOffer, len(resp.Sent)+len(resp.Received))
+	allOffers := make([]*trading.TradeOffer, len(resp.Sent)+len(resp.Received))
 	copy(allOffers, resp.Sent)
 	copy(allOffers[len(resp.Sent):], resp.Received)
 
 	for _, off := range allOffers {
+		m.lastSeenOffers[off.ID] = now
 		oldState, exists := m.knownOffers[off.ID]
 		m.knownOffers[off.ID] = off.State
 
@@ -436,7 +476,6 @@ func (m *Manager) doPoll(ctx context.Context) {
 				m.processor.Enqueue(off)
 			}
 		} else if oldState != off.State {
-			m.knownOffers[off.ID] = off.State
 			m.Bus.Publish(&OfferChangedEvent{
 				Offer:    off,
 				OldState: oldState,

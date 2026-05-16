@@ -52,9 +52,10 @@ type Description struct {
 
 // Tag represents a tag for an item.
 type Tag struct {
-	Category     string `json:"category"`
-	InternalName string `json:"internal_name"`
-	Localized    string `json:"localized_category_name"`
+	Category      string `json:"category"`
+	InternalName  string `json:"internal_name"`
+	Localized     string `json:"localized_category_name"`
+	LocalizedName string `json:"localized_tag_name"`
 }
 
 // Action represents a link and name for an action.

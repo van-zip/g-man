@@ -7,7 +7,6 @@ package web
 import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/trading"
-	"github.com/lemon4ksan/g-man/pkg/trading/web/offer"
 )
 
 // StateEvent is emitted whenever the manager transitions between states.
@@ -19,13 +18,13 @@ type StateEvent struct {
 // NewOfferEvent is emitted when a new trade offer is received.
 type NewOfferEvent struct {
 	bus.BaseEvent
-	Offer *offer.TradeOffer
+	Offer *trading.TradeOffer
 }
 
 // OfferChangedEvent is emitted when a tracked offer changes state (e.g. Accepted, Declined).
 type OfferChangedEvent struct {
 	bus.BaseEvent
-	Offer    *offer.TradeOffer
+	Offer    *trading.TradeOffer
 	OldState trading.OfferState
 }
 

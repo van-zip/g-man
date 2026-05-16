@@ -8,14 +8,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
-	"github.com/lemon4ksan/g-man/pkg/tf2"
 	"github.com/lemon4ksan/g-man/pkg/tf2/backpack"
+	"github.com/lemon4ksan/g-man/pkg/tf2/bptf"
 	"github.com/lemon4ksan/g-man/pkg/tf2/crafting"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
 	"github.com/lemon4ksan/g-man/pkg/tf2/pricedb"
+	"github.com/lemon4ksan/g-man/pkg/tf2/rep"
+	"github.com/lemon4ksan/g-man/pkg/tf2/sku"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
@@ -80,7 +83,7 @@ func StockLimitMiddleware(bp *backpack.Backpack, cfg StockConfig, logger log.Log
 						log.Int("incoming", count),
 						log.Int("max", max),
 					)
-					ctx.Decline(reason.ReviewOverstocked)
+					ctx.Decline(reason.DeclineOverstocked)
 
 					return nil
 				}
@@ -121,9 +124,7 @@ func PricerMiddleware(mgr *pricedb.Manager, logger log.Logger) engine.Middleware
 					return err
 				}
 
-				for sku, p := range fetched {
-					priceMap[sku] = p
-				}
+				maps.Copy(priceMap, fetched)
 			}
 
 			ctx.Set("prices", priceMap)
@@ -142,36 +143,116 @@ func PricerMiddleware(mgr *pricedb.Manager, logger log.Logger) engine.Middleware
 	}
 }
 
-// CounterOfferMiddleware automatically adds metal to the trade
-// if the user gives us an item but forgets to put our currency in return.
-func CounterOfferMiddleware(
+// DupeCheckMiddleware checks the history of high-value items to identify duplicates.
+func DupeCheckMiddleware(checker *bptf.BackpackTFChecker, logger log.Logger) engine.Middleware {
+	return func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			// Only check history for items we RECEIVE
+			for _, item := range ctx.Offer.ItemsToReceive {
+				// We only check history for high-value items (Unusuals)
+				// to avoid excessive scraping/API calls.
+				if item.SKU == "" {
+					continue
+				}
+
+				// Basic check: is it Unusual?
+				// SKU format: 5021;5;... (5 is quality unusual)
+				if isUnusual(item.SKU) {
+					logger.Info("Checking history for Unusual item", log.String("sku", item.SKU), log.Uint64("assetid", item.AssetID))
+					
+					status, err := checker.CheckHistory(ctx, item.AssetID)
+					if err != nil {
+						logger.Warn("Failed to check item history", log.Err(err))
+						continue // Proceed if check fails, but maybe Review is safer?
+					}
+
+					if status.Recorded && status.IsDuped {
+						logger.Warn("Item is DUPED!", log.Uint64("assetid", item.AssetID))
+						ctx.Review(reason.ReviewDupedItems)
+						// We don't return nil here, we just mark for review 
+						// and let subsequent middlewares decide if they want to decline or continue.
+					}
+				}
+			}
+
+			return next(ctx)
+		}
+	}
+}
+
+// BanCheckMiddleware checks the trade partner against various ban lists.
+func BanCheckMiddleware(bans *rep.BansManager, logger log.Logger) engine.Middleware {
+	return func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			res, err := bans.CheckBans(ctx, ctx.Offer.OtherSteamID)
+			if err != nil {
+				logger.Warn("Failed to check partner bans", log.Err(err))
+				// If check fails, we proceed but maybe we should Review?
+				// To be safe, let's just proceed to next middleware.
+				return next(ctx)
+			}
+
+			if res.IsBanned {
+				logger.Warn("Partner is banned!", 
+					log.String("steamid", ctx.Offer.OtherSteamID.String()),
+					log.Any("details", res.Details),
+				)
+				
+				if _, ok := res.Details["steamrep.com"]; ok {
+					ctx.Decline(reason.DeclineBanned)
+				} else {
+					ctx.Decline(reason.DeclineBannedBptf)
+				}
+				
+				return nil
+			}
+
+			return next(ctx)
+		}
+	}
+}
+
+// SmartCounterMiddleware automatically adjusts the trade if there's a value mismatch.
+// 1. If overpaid: Adds our metal change to the trade (smelting if needed).
+// 2. If underpaid: Attempts to find missing currency in the partner's inventory to balance it.
+// 3. If exact: Accepts with AcceptCorrectValue reason.
+func SmartCounterMiddleware(
 	metalMgr *crafting.MetalManager,
 	bp *backpack.Backpack,
-	pricer *pricedb.Client,
 	invProvider PartnerInventoryProvider,
 	logger log.Logger,
 ) engine.Middleware {
 	return func(next engine.Handler) engine.Handler {
 		return func(ctx *engine.TradeContext) error {
-			err := next(ctx)
+			if err := next(ctx); err != nil {
+				return err
+			}
 
+			// If a verdict is already reached, don't intervene
 			if ctx.Verdict.Action != engine.ActionUndecided {
-				return err
+				return nil
 			}
 
-			valueDiffScrap, err := calculateValueDiff(ctx)
+			diff, err := calculateValueDiff(ctx)
 			if err != nil {
-				// If we can't calculate value, stop and don't counter
-				return err
+				// If we can't calculate value (missing prices), calculation logic already set Review status.
+				return nil //nolint:nilerr
 			}
 
-			if valueDiffScrap > 0 {
-				changeIDs, err := metalMgr.SelectChange(valueDiffScrap)
+			if diff == 0 {
+				ctx.Accept(reason.AcceptCorrectValue)
+				return nil
+			}
+
+			if diff > 0 {
+				// We were overpaid -> give change
+				changeIDs, err := metalMgr.SelectChange(diff)
 				if err != nil {
 					if errors.Is(err, crafting.ErrNotEnoughChange) {
 						logger.Warn("Not enough metal for change, triggering auto-crafting...")
 
-						if smeltErr := metalMgr.TryToSmeltForChange(ctx, valueDiffScrap); smeltErr == nil {
+						if smeltErr := metalMgr.TryToSmeltForChange(ctx, diff); smeltErr == nil {
+							// Smelting successful, it will be handled in a retry or next run
 							return nil
 						}
 
@@ -188,20 +269,19 @@ func CounterOfferMiddleware(
 					ItemsToReceive: ctx.Offer.ItemsToReceive,
 					Message:        "I've added the necessary change for you!",
 				})
-			} else if valueDiffScrap < 0 {
+			} else if diff < 0 {
+				// We were underpaid -> try to find their change
 				partnerInv, err := invProvider.GetPartnerInventory(ctx, ctx.Offer.OtherSteamID)
 				if err != nil {
 					logger.Warn("Failed to fetch partner inventory for smart countering", log.Err(err))
 					ctx.Review(reason.ReviewPartnerInventoryFetchFailed)
-					ctx.Decline(reason.DeclineInternalError)
-
 					return nil
 				}
 
 				keyPriceVar, _ := ctx.Get("key_price_scrap")
 				keyPrice, _ := keyPriceVar.(currency.Scrap)
 
-				needed := -valueDiffScrap
+				needed := -diff
 
 				toAdd, ok := FindPartnerCurrency(partnerInv, needed, keyPrice)
 				if ok {
@@ -218,70 +298,6 @@ func CounterOfferMiddleware(
 				} else {
 					ctx.Decline(reason.DeclineUnderpaid)
 				}
-			}
-
-			return err
-		}
-	}
-}
-
-// ChangeMiddleware automatically adds metal to the trade if the user gives us an item but forgets to put our currency in return.
-func ChangeMiddleware(
-	metalMgr *crafting.MetalManager,
-	bp *backpack.Backpack,
-	craftingSvc *tf2.TF2,
-	logger log.Logger,
-) engine.Middleware {
-	return func(next engine.Handler) engine.Handler {
-		return func(ctx *engine.TradeContext) error {
-			if err := next(ctx); err != nil {
-				return err
-			}
-
-			if ctx.Verdict.Action != engine.ActionUndecided {
-				return nil
-			}
-
-			diffVar, ok := ctx.Get("value_diff_scrap")
-			if !ok {
-				// If value_diff_scrap is missing, it means calculation failed (e.g. missing prices)
-				// We MUST NOT proceed to accept.
-				if ctx.Verdict.Action == engine.ActionUndecided {
-					ctx.Review(reason.ReviewUnpricedItem)
-				}
-
-				return nil
-			}
-
-			diff, ok := diffVar.(currency.Scrap)
-			if !ok {
-				return errors.New("invalid or missing value_diff_scrap in context")
-			}
-
-			if diff == 0 {
-				ctx.Accept(reason.AcceptCorrectValue)
-				return nil
-			}
-
-			if diff > 0 {
-				ids, err := metalMgr.SelectChange(diff)
-				if err != nil {
-					if err := metalMgr.TryToSmeltForChange(ctx, diff); err == nil {
-						return nil
-					}
-
-					ctx.Decline(reason.DeclineNoChange)
-
-					return nil
-				}
-
-				ctx.Counter(reason.AcceptCorrectValue, &trading.CounterParams{
-					ItemsToGive:    append(ctx.Offer.ItemsToGive, mapIDsToItems(bp, ids)...),
-					ItemsToReceive: ctx.Offer.ItemsToReceive,
-					Message:        "I've added the necessary change for you!",
-				})
-			} else {
-				ctx.Decline(reason.DeclineUnderpaid)
 			}
 
 			return nil
@@ -380,17 +396,17 @@ func FindPartnerCurrency(items []*trading.Item, needed, keyPrice currency.Scrap)
 	}
 
 	// 2. Take refined
-	for len(refined) > 0 && remaining >= 9 {
+	for len(refined) > 0 && remaining >= currency.ScrapInRef {
 		result = append(result, refined[0])
 		refined = refined[1:]
-		remaining -= 9
+		remaining -= currency.ScrapInRef
 	}
 
 	// 3. Take reclaimed
-	for len(reclaimed) > 0 && remaining >= 3 {
+	for len(reclaimed) > 0 && remaining >= currency.ScrapInRec {
 		result = append(result, reclaimed[0])
 		reclaimed = reclaimed[1:]
-		remaining -= 3
+		remaining -= currency.ScrapInRec
 	}
 
 	// 4. Take scrap
@@ -412,4 +428,13 @@ func mapIDsToItems(bp *backpack.Backpack, ids []uint64) []*trading.Item {
 	}
 
 	return items
+}
+
+func isUnusual(target string) bool {
+	it, err := sku.FromString(target)
+	if err != nil {
+		return false
+	}
+
+	return it.Quality == 5
 }

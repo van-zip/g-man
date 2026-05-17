@@ -201,3 +201,11 @@ func (m *ListingManager) matchesSKU(l *ListingResponse, sku string) bool {
 
 	return m.ItemToSKU(l.Item) == sku
 }
+
+// AddMockListing inserts a listing directly into the internal cache for unit testing.
+func (m *ListingManager) AddMockListing(l *ListingResponse) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.listings[l.ID] = l
+}

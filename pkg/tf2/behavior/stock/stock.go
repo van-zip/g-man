@@ -7,6 +7,8 @@ package stock
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/behavior"
@@ -15,7 +17,9 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/tf2/backpack"
 	"github.com/lemon4ksan/g-man/pkg/tf2/bptf"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
+	"github.com/lemon4ksan/g-man/pkg/tf2/ecp"
 	"github.com/lemon4ksan/g-man/pkg/tf2/pricedb"
+	"github.com/lemon4ksan/g-man/pkg/tf2/sku"
 	"github.com/lemon4ksan/g-man/pkg/tf2/trading"
 )
 
@@ -42,6 +46,7 @@ type Stock struct {
 	logger     log.Logger
 	cfgMgr     *trading.ConfigManager
 	interval   time.Duration
+	ecp        *ecp.EasyCopyPaste
 }
 
 // New creates a new stock management behavior.
@@ -52,6 +57,10 @@ func New(
 	logger log.Logger,
 	cfgMgr *trading.ConfigManager,
 ) *Stock {
+	e := ecp.New()
+	e.SetUseBoldChars(true)
+	e.SetUseWordSwap(true)
+
 	return &Stock{
 		bp:         bp,
 		listingMgr: mgr,
@@ -59,6 +68,7 @@ func New(
 		logger:     logger.With(log.Module(BehaviorName)),
 		cfgMgr:     cfgMgr,
 		interval:   5 * time.Minute,
+		ecp:        e,
 	}
 }
 
@@ -204,20 +214,10 @@ func (s *Stock) getUndercutPrice(
 
 	existing := s.listingMgr.FindListingBySKU(sku, intent)
 
-	var (
-		ourListingID string
-		ourSteamID   string
-	)
-
-	if existing != nil {
-		ourListingID = existing.ID
-		ourSteamID = existing.SteamID
-	}
-
 	if intent == "sell" {
-		return s.getSellUndercut(itemCfg, targetPriceScrap, keyPriceRef, resp.Listings, ourListingID, ourSteamID)
+		return s.getSellUndercut(itemCfg, targetPriceScrap, keyPriceRef, resp.Listings, existing)
 	} else {
-		return s.getBuyUndercut(itemCfg, targetPriceScrap, keyPriceRef, resp.Listings, ourListingID, ourSteamID)
+		return s.getBuyUndercut(itemCfg, targetPriceScrap, keyPriceRef, resp.Listings, existing)
 	}
 }
 
@@ -226,16 +226,30 @@ func (s *Stock) getSellUndercut(
 	targetPriceScrap currency.Scrap,
 	keyPriceRef float64,
 	listings []bptf.ListingResponse,
-	ourListingID, ourSteamID string,
+	existing *bptf.ListingResponse,
 ) (currency.Scrap, error) {
 	minSellScrap, _ := itemCfg.MinSellPrice.ToValue(keyPriceRef)
 	maxSellScrap, _ := itemCfg.MaxSellPrice.ToValue(keyPriceRef)
+	cfg := s.cfgMgr.GetConfig()
+
+	var (
+		ourListingID string
+		ourSteamID   string
+	)
+	if existing != nil {
+		ourListingID = existing.ID
+		ourSteamID = existing.SteamID
+	}
 
 	// Find the lowest competitor price
 	var minCompScrap currency.Scrap
 	for _, l := range listings {
 		// Skip our own listings
 		if l.ID == ourListingID || (ourSteamID != "" && l.SteamID == ourSteamID) {
+			continue
+		}
+
+		if s.shouldIgnoreListing(l, cfg) {
 			continue
 		}
 
@@ -274,6 +288,24 @@ func (s *Stock) getSellUndercut(
 		undercutPrice = maxSellScrap
 	}
 
+	// Apply price swing limits (MaxSellDecrease)
+	if existing != nil && cfg.PriceSwingLimits.MaxSellDecrease > 0 {
+		prevPriceScrap := s.toScrap(existing.Currencies["keys"], existing.Currencies["metal"], keyPriceRef)
+		if prevPriceScrap > 0 && undercutPrice < prevPriceScrap {
+			maxDecreaseScrap := currency.Scrap(float64(prevPriceScrap) * cfg.PriceSwingLimits.MaxSellDecrease)
+
+			minAllowedPrice := prevPriceScrap - maxDecreaseScrap
+			if undercutPrice < minAllowedPrice {
+				s.logger.Info("Sell price undercut exceeded swing limit, capping decrease",
+					log.String("prev", currency.FormatRefined(prevPriceScrap)),
+					log.String("calculated", currency.FormatRefined(undercutPrice)),
+					log.String("capped", currency.FormatRefined(minAllowedPrice)),
+				)
+				undercutPrice = minAllowedPrice
+			}
+		}
+	}
+
 	return undercutPrice, nil
 }
 
@@ -282,16 +314,30 @@ func (s *Stock) getBuyUndercut(
 	targetPriceScrap currency.Scrap,
 	keyPriceRef float64,
 	listings []bptf.ListingResponse,
-	ourListingID, ourSteamID string,
+	existing *bptf.ListingResponse,
 ) (currency.Scrap, error) {
 	minBuyScrap, _ := itemCfg.MinBuyPrice.ToValue(keyPriceRef)
 	maxBuyScrap, _ := itemCfg.MaxBuyPrice.ToValue(keyPriceRef)
+	cfg := s.cfgMgr.GetConfig()
+
+	var (
+		ourListingID string
+		ourSteamID   string
+	)
+	if existing != nil {
+		ourListingID = existing.ID
+		ourSteamID = existing.SteamID
+	}
 
 	// Find the highest competitor price
 	var maxCompScrap currency.Scrap
 	for _, l := range listings {
 		// Skip our own listings
 		if l.ID == ourListingID || (ourSteamID != "" && l.SteamID == ourSteamID) {
+			continue
+		}
+
+		if s.shouldIgnoreListing(l, cfg) {
 			continue
 		}
 
@@ -330,7 +376,46 @@ func (s *Stock) getBuyUndercut(
 		overbidPrice = minBuyScrap
 	}
 
+	// Apply price swing limits (MaxBuyIncrease)
+	if existing != nil && cfg.PriceSwingLimits.MaxBuyIncrease > 0 {
+		prevPriceScrap := s.toScrap(existing.Currencies["keys"], existing.Currencies["metal"], keyPriceRef)
+		if prevPriceScrap > 0 && overbidPrice > prevPriceScrap {
+			maxIncreaseScrap := currency.Scrap(float64(prevPriceScrap) * cfg.PriceSwingLimits.MaxBuyIncrease)
+
+			maxAllowedPrice := prevPriceScrap + maxIncreaseScrap
+			if overbidPrice > maxAllowedPrice {
+				s.logger.Info("Buy price overbid exceeded swing limit, capping increase",
+					log.String("prev", currency.FormatRefined(prevPriceScrap)),
+					log.String("calculated", currency.FormatRefined(overbidPrice)),
+					log.String("capped", currency.FormatRefined(maxAllowedPrice)),
+				)
+				overbidPrice = maxAllowedPrice
+			}
+		}
+	}
+
 	return overbidPrice, nil
+}
+
+func (s *Stock) shouldIgnoreListing(l bptf.ListingResponse, cfg trading.Config) bool {
+	// Skip excluded SteamIDs
+	for _, id := range cfg.ExcludedSteamIDs {
+		if l.SteamID == id {
+			return true
+		}
+	}
+
+	// Skip if details contain any excluded description
+	if l.Details != "" {
+		detailsLower := strings.ToLower(l.Details)
+		for _, desc := range cfg.ExcludedListingDescriptions {
+			if desc != "" && strings.Contains(detailsLower, strings.ToLower(desc)) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (s *Stock) ensureListing(ctx context.Context, sku string, price *pricedb.Price, intent string) error {
@@ -376,14 +461,75 @@ func (s *Stock) ensureListing(ctx context.Context, sku string, price *pricedb.Pr
 		currencies["keys"] = finalCurrency.Keys
 	}
 
+	details := s.getListingDetails(sku, intent, finalCurrency)
+
 	_, err = s.listingMgr.Upsert(ctx, bptf.ListingResolvable{
 		Item:       sku,
 		Intent:     intent,
 		Currencies: currencies,
-		Details:    "SKU: " + sku,
+		Details:    details,
 	})
 
 	return err
+}
+
+func (s *Stock) getListingDetails(sku, intent string, price *currency.Currency) string {
+	template := "⚡ Instantly Accept 📈 Stock: {stock}/{max_stock}"
+	if s.cfgMgr != nil {
+		cfg := s.cfgMgr.GetConfig()
+		if cfg.ListingCommentTemplate != "" {
+			template = cfg.ListingCommentTemplate
+		}
+	}
+
+	currentStock := s.bp.GetStock(sku)
+	maxStock := s.getMaxStock(sku)
+
+	amountTrade := currentStock
+	if intent == "buy" {
+		amountTrade = maxStock - currentStock
+		if amountTrade < 0 {
+			amountTrade = 0
+		}
+	}
+
+	itemName := s.getItemName(sku)
+
+	ecpCmd, err := s.ecp.ToEscapedString(itemName, intent)
+	if err != nil {
+		s.logger.Warn("Failed to encode ECP string, falling back to plaintext", log.Err(err))
+
+		if intent == "buy" {
+			ecpCmd = "!sell " + itemName
+		} else {
+			ecpCmd = "!buy " + itemName
+		}
+	}
+
+	details := template
+	details = strings.ReplaceAll(details, "{sku}", sku)
+	details = strings.ReplaceAll(details, "{price}", price.String())
+	details = strings.ReplaceAll(details, "{intent}", intent)
+	details = strings.ReplaceAll(details, "{stock}", strconv.Itoa(currentStock))
+	details = strings.ReplaceAll(details, "{max_stock}", strconv.Itoa(maxStock))
+	details = strings.ReplaceAll(details, "{amount_trade}", strconv.Itoa(amountTrade))
+	details = strings.ReplaceAll(details, "{ecp_item}", ecpCmd)
+
+	return details
+}
+
+func (s *Stock) getItemName(skuStr string) string {
+	sch := s.bp.Schema().Get()
+	if sch == nil {
+		return skuStr
+	}
+
+	item, err := sku.FromString(skuStr)
+	if err != nil {
+		return skuStr
+	}
+
+	return sch.ItemName(item, true, false, false)
 }
 
 func (s *Stock) removeListing(ctx context.Context, sku, intent string) {

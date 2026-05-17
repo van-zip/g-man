@@ -27,11 +27,22 @@ type ItemConfig struct {
 	MaxSellPrice currency.Currency `json:"max_sell_price"`
 }
 
+// PriceSwingLimits defines the maximum percentage changes allowed in a single update.
+type PriceSwingLimits struct {
+	MaxBuyIncrease  float64 `json:"max_buy_increase"`
+	MaxSellDecrease float64 `json:"max_sell_decrease"`
+}
+
 // Config is the top-level configuration loaded from a JSON file.
 type Config struct {
-	GlobalMaxStock  int                   `json:"global_max_stock"`
-	DefaultMaxStock int                   `json:"default_max_stock"`
-	Items           map[string]ItemConfig `json:"items"`
+	GlobalMaxStock              int                   `json:"global_max_stock"`
+	DefaultMaxStock             int                   `json:"default_max_stock"`
+	ListingCommentTemplate      string                `json:"listing_comment_template,omitempty"`
+	ExcludedSteamIDs            []string              `json:"excluded_steam_ids,omitempty"`
+	TrustedSteamIDs             []string              `json:"trusted_steam_ids,omitempty"`
+	ExcludedListingDescriptions []string              `json:"excluded_listing_descriptions,omitempty"`
+	PriceSwingLimits            PriceSwingLimits      `json:"price_swing_limits,omitempty"`
+	Items                       map[string]ItemConfig `json:"items"`
 }
 
 // ConfigManager handles thread-safe loading and querying of the trading configuration.
@@ -62,7 +73,15 @@ func (cm *ConfigManager) Load() error {
 		cm.cfg = Config{
 			GlobalMaxStock:  3000,
 			DefaultMaxStock: 5,
-			Items:           make(map[string]ItemConfig),
+			ExcludedListingDescriptions: []string{
+				"spell", "spells", "spelled", "exorcism", "pumpkin bombs", "chromatic",
+				"die job", "spectral spectrum", "putrescent pigmentation", "sinister staining",
+			},
+			PriceSwingLimits: PriceSwingLimits{
+				MaxBuyIncrease:  0.10, // 10%
+				MaxSellDecrease: 0.10, // 10%
+			},
+			Items: make(map[string]ItemConfig),
 		}
 
 		if err := os.MkdirAll(filepath.Dir(cm.path), 0o755); err != nil {

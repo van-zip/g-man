@@ -40,8 +40,14 @@ func TestStock_Undercutting(t *testing.T) {
 	defer os.Remove(cfgFile)
 
 	initialConfig := trading.Config{
-		GlobalMaxStock:  3000,
-		DefaultMaxStock: 5,
+		GlobalMaxStock:              3000,
+		DefaultMaxStock:             5,
+		ExcludedSteamIDs:            []string{"excluded_competitor_steam_id"},
+		ExcludedListingDescriptions: []string{"exorcism", "chromatic"},
+		PriceSwingLimits: trading.PriceSwingLimits{
+			MaxBuyIncrease:  0.10, // 10%
+			MaxSellDecrease: 0.10, // 10%
+		},
 		Items: map[string]trading.ItemConfig{
 			"5021;6": {
 				SKU:          "5021;6",
@@ -49,10 +55,10 @@ func TestStock_Undercutting(t *testing.T) {
 				MaxStock:     100,
 				EnableBuy:    true,
 				EnableSell:   true,
-				MinBuyPrice:  currency.Currency{Keys: 0, Metal: 50.0},
-				MaxBuyPrice:  currency.Currency{Keys: 0, Metal: 60.0},
-				MinSellPrice: currency.Currency{Keys: 0, Metal: 55.0},
-				MaxSellPrice: currency.Currency{Keys: 0, Metal: 65.0},
+				MinBuyPrice:  currency.Currency{Keys: 0, Metal: 30.0},
+				MaxBuyPrice:  currency.Currency{Keys: 0, Metal: 80.0},
+				MinSellPrice: currency.Currency{Keys: 0, Metal: 35.0},
+				MaxSellPrice: currency.Currency{Keys: 0, Metal: 85.0},
 			},
 		},
 	}
@@ -95,12 +101,46 @@ func TestStock_Undercutting(t *testing.T) {
 					},
 				},
 				{
+					ID:      "comp_excluded_steam",
+					SteamID: "excluded_competitor_steam_id",
+					Intent:  "sell",
+					Currencies: map[string]float64{
+						"metal": 51.0,
+					},
+				},
+				{
+					ID:      "comp_excluded_desc",
+					SteamID: "competitor_steam_id_2",
+					Intent:  "sell",
+					Currencies: map[string]float64{
+						"metal": 52.0,
+					},
+					Details: "Selling spelled items with exorcism!",
+				},
+				{
 					ID:      "comp3",
 					SteamID: "competitor_steam_id_3",
 					Intent:  "buy",
 					Currencies: map[string]float64{
 						"metal": competitorBuyPrice,
 					},
+				},
+				{
+					ID:      "comp_excluded_buy_steam",
+					SteamID: "excluded_competitor_steam_id",
+					Intent:  "buy",
+					Currencies: map[string]float64{
+						"metal": 59.0,
+					},
+				},
+				{
+					ID:      "comp_excluded_buy_desc",
+					SteamID: "competitor_steam_id_4",
+					Intent:  "buy",
+					Currencies: map[string]float64{
+						"metal": 58.0,
+					},
+					Details: "Looking for chromatic paint spells",
 				},
 			},
 		}
@@ -160,10 +200,10 @@ func TestStock_Undercutting(t *testing.T) {
 	})
 
 	t.Run("Undercut bound checking (floor)", func(t *testing.T) {
-		// Set a competitor price below our MinSellPrice (e.g. 54.0 ref)
-		// MinSellPrice is 55.0 ref (495 scrap).
-		// Undercut should cap at 55.0 ref (495 scrap).
-		competitorSellPrice = 54.0
+		// Set a competitor price below our MinSellPrice (e.g. 34.0 ref)
+		// MinSellPrice is 35.0 ref (315 scrap).
+		// Undercut should cap at 35.0 ref (315 scrap).
+		competitorSellPrice = 34.0
 
 		targetPriceScrap := currency.ToScrap(60.0)
 		finalPriceScrap, err := s.getUndercutPrice(
@@ -174,18 +214,80 @@ func TestStock_Undercutting(t *testing.T) {
 			keyPriceRef,
 		)
 		require.NoError(t, err)
-		assert.Equal(t, currency.ToScrap(55.0), finalPriceScrap)
+		assert.Equal(t, currency.ToScrap(35.0), finalPriceScrap)
 	})
 
 	t.Run("Overbid bound checking (ceiling)", func(t *testing.T) {
-		// Set a competitor price above our MaxBuyPrice (e.g. 61.0 ref)
-		// MaxBuyPrice is 60.0 ref (540 scrap).
-		// Overbid should cap at 60.0 ref (540 scrap).
-		competitorBuyPrice = 61.0
+		// Set a competitor price above our MaxBuyPrice (e.g. 81.0 ref)
+		// MaxBuyPrice is 80.0 ref (720 scrap).
+		// Overbid should cap at 80.0 ref (720 scrap).
+		competitorBuyPrice = 81.0
 
 		targetPriceScrap := currency.ToScrap(50.0)
 		finalPriceScrap, err := s.getUndercutPrice(context.Background(), "5021;6", "buy", targetPriceScrap, keyPriceRef)
 		require.NoError(t, err)
-		assert.Equal(t, currency.ToScrap(60.0), finalPriceScrap)
+		assert.Equal(t, currency.ToScrap(80.0), finalPriceScrap)
+	})
+
+	t.Run("Price swing limits (sell decrease)", func(t *testing.T) {
+		// Set a very low competitor sell price (e.g. 50.0 ref)
+		competitorSellPrice = 50.0
+
+		// Add an existing sell listing with price 60.0 ref (540 scrap)
+		existingSell := &bptf.ListingResponse{
+			ID:      "our_sell_listing",
+			SteamID: "our_steam_id",
+			Intent:  "sell",
+			Details: "5021;6",
+			Currencies: map[string]float64{
+				"metal": 60.0,
+			},
+		}
+		s.listingMgr.AddMockListing(existingSell)
+
+		// MaxSellDecrease in config is 10% (0.10).
+		// Max allowed sell decrease is 6.0 ref (54 scrap).
+		// Capped price should be 60.0 - 6.0 = 54.0 ref (486 scrap).
+		targetPriceScrap := currency.ToScrap(60.0)
+		finalPriceScrap, err := s.getUndercutPrice(
+			context.Background(),
+			"5021;6",
+			"sell",
+			targetPriceScrap,
+			keyPriceRef,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, currency.ToScrap(54.0), finalPriceScrap)
+	})
+
+	t.Run("Price swing limits (buy increase)", func(t *testing.T) {
+		// Set a very high competitor buy price (e.g. 58.0 ref)
+		competitorBuyPrice = 58.0
+
+		// Add an existing buy listing with price 50.0 ref (450 scrap)
+		existingBuy := &bptf.ListingResponse{
+			ID:      "our_buy_listing",
+			SteamID: "our_steam_id",
+			Intent:  "buy",
+			Details: "5021;6",
+			Currencies: map[string]float64{
+				"metal": 50.0,
+			},
+		}
+		s.listingMgr.AddMockListing(existingBuy)
+
+		// MaxBuyIncrease in config is 10% (0.10).
+		// Max allowed buy increase is 5.0 ref (45 scrap).
+		// Capped price should be 50.0 + 5.0 = 55.0 ref (495 scrap).
+		targetPriceScrap := currency.ToScrap(50.0)
+		finalPriceScrap, err := s.getUndercutPrice(
+			context.Background(),
+			"5021;6",
+			"buy",
+			targetPriceScrap,
+			keyPriceRef,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, currency.ToScrap(55.0), finalPriceScrap)
 	})
 }

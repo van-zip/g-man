@@ -35,7 +35,7 @@ func (rt *redirectTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 func TestStock_Undercutting(t *testing.T) {
-	// 1. Create a temporary config file
+	// Create a temporary config file
 	cfgFile := "test_trading_config.json"
 	defer os.Remove(cfgFile)
 
@@ -76,7 +76,7 @@ func TestStock_Undercutting(t *testing.T) {
 		competitorBuyPrice  = 53.0
 	)
 
-	// 2. Set up a mock http server to simulate backpack.tf classified snapshot response
+	// Set up a mock http server to simulate backpack.tf classified snapshot response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/classifieds/listings/snapshot", r.URL.Path)
 		sku := r.URL.Query().Get("sku")
@@ -148,7 +148,7 @@ func TestStock_Undercutting(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// 3. Initialize dependencies with the custom redirect client
+	// Initialize dependencies with the custom redirect client
 	redirectClient := &http.Client{
 		Transport: &redirectTripper{targetURL: server.URL},
 	}
@@ -156,7 +156,7 @@ func TestStock_Undercutting(t *testing.T) {
 	bptfClient := bptf.New(redirectClient, "api-key", "token")
 	listingMgr := bptf.NewListingManager(bptfClient, nil, log.New(log.DefaultConfig(log.ErrorLevel)))
 
-	// 4. Construct behavior
+	// Construct behavior
 	s := &Stock{
 		listingMgr: listingMgr,
 		cfgMgr:     cfgMgr,

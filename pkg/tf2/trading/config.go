@@ -5,11 +5,14 @@
 package trading
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
+	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/tf2/currency"
 )
 
@@ -47,9 +50,10 @@ type Config struct {
 
 // ConfigManager handles thread-safe loading and querying of the trading configuration.
 type ConfigManager struct {
-	mu   sync.RWMutex
-	path string
-	cfg  Config
+	mu           sync.RWMutex
+	path         string
+	cfg          Config
+	lastModified time.Time
 }
 
 // NewConfigManager loads a config manager from the specified path.
@@ -97,6 +101,11 @@ func (cm *ConfigManager) Load() error {
 			return err
 		}
 
+		// Update last modified timestamp
+		if info, err := os.Stat(cm.path); err == nil {
+			cm.lastModified = info.ModTime()
+		}
+
 		return nil
 	}
 
@@ -116,7 +125,48 @@ func (cm *ConfigManager) Load() error {
 
 	cm.cfg = cfg
 
+	// Update last modified timestamp
+	if info, err := os.Stat(cm.path); err == nil {
+		cm.lastModified = info.ModTime()
+	}
+
 	return nil
+}
+
+// StartWatching starts a background goroutine to poll the config file for modifications.
+// It will automatically reload the config file when changes are detected.
+func (cm *ConfigManager) StartWatching(ctx context.Context, interval time.Duration, logger log.Logger) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				info, err := os.Stat(cm.path)
+				if err != nil {
+					// File might be temporarily locked or deleted, just skip
+					continue
+				}
+
+				cm.mu.RLock()
+				lastMod := cm.lastModified
+				cm.mu.RUnlock()
+
+				if info.ModTime().After(lastMod) {
+					logger.Info("Config file modification detected, reloading...", log.String("path", cm.path))
+
+					if err := cm.Load(); err != nil {
+						logger.Error("Failed to auto-reload config file", log.Err(err))
+					} else {
+						logger.Info("Config file reloaded successfully")
+					}
+				}
+			}
+		}
+	}()
 }
 
 // GetConfig returns the full thread-safe copy of the trading configuration.

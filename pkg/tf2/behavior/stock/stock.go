@@ -81,6 +81,9 @@ func (s *Stock) Name() string {
 func (s *Stock) Run(ctx context.Context) error {
 	s.logger.Info("Stock Control behavior started", log.Duration("interval", s.interval))
 
+	// Start auto-watching the configuration file for changes
+	s.cfgMgr.StartWatching(ctx, 5*time.Second, s.logger)
+
 	sub := s.bp.Bus.Subscribe(&tf2.BackpackLoadedEvent{})
 	defer sub.Unsubscribe()
 
@@ -495,7 +498,7 @@ func (s *Stock) getListingDetails(sku, intent string, price *currency.Currency) 
 
 	itemName := s.getItemName(sku)
 
-	ecpCmd, err := s.ecp.ToEscapedString(itemName, intent)
+	ecpCmd, err := s.ecp.ToEcpString(itemName, intent)
 	if err != nil {
 		s.logger.Warn("Failed to encode ECP string, falling back to plaintext", log.Err(err))
 

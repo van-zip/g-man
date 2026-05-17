@@ -45,7 +45,7 @@ func WithModule() steam.Option {
 	}
 }
 
-// AchievementConfig returns the standard strategy config for TF2 achievements for achivements manager.
+// AchievementConfig returns the standard strategy config for TF2 achievements for achievements manager.
 func AchievementConfig() achievements.Config {
 	return achievements.Config{
 		AppID:            AppID,

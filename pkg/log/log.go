@@ -27,26 +27,26 @@ import (
 type Level int8
 
 const (
-	// DebugLevel is typically used in development to trace logic.
-	DebugLevel Level = iota - 1
-	// InfoLevel is the default logging level for general operational events.
-	InfoLevel
-	// WarnLevel represents non-critical issues that might require attention.
-	WarnLevel
-	// ErrorLevel represents high-priority failures.
-	ErrorLevel
+	// LevelDebug is typically used in development to trace logic.
+	LevelDebug Level = iota - 1
+	// LevelInfo is the default logging level for general operational events.
+	LevelInfo
+	// LevelWarn represents non-critical issues that might require attention.
+	LevelWarn
+	// LevelError represents high-priority failures.
+	LevelError
 )
 
 // Short returns a single-character representation of the log level.
 func (l Level) Short() string {
 	switch l {
-	case DebugLevel:
+	case LevelDebug:
 		return "D"
-	case InfoLevel:
+	case LevelInfo:
 		return "I"
-	case WarnLevel:
+	case LevelWarn:
 		return "W"
-	case ErrorLevel:
+	case LevelError:
 		return "E"
 	default:
 		return "?"
@@ -211,16 +211,16 @@ func (l *AsyncLogger) With(fields ...Field) Logger {
 }
 
 // Debug logs a message at the Debug level.
-func (l *AsyncLogger) Debug(msg string, f ...Field) { l.log(DebugLevel, msg, f) }
+func (l *AsyncLogger) Debug(msg string, f ...Field) { l.log(LevelDebug, msg, f) }
 
 // Info logs a message at the Info level.
-func (l *AsyncLogger) Info(msg string, f ...Field) { l.log(InfoLevel, msg, f) }
+func (l *AsyncLogger) Info(msg string, f ...Field) { l.log(LevelInfo, msg, f) }
 
 // Warn logs a message at the Warn level.
-func (l *AsyncLogger) Warn(msg string, f ...Field) { l.log(WarnLevel, msg, f) }
+func (l *AsyncLogger) Warn(msg string, f ...Field) { l.log(LevelWarn, msg, f) }
 
 // Error logs a message at the Error level.
-func (l *AsyncLogger) Error(msg string, f ...Field) { l.log(ErrorLevel, msg, f) }
+func (l *AsyncLogger) Error(msg string, f ...Field) { l.log(LevelError, msg, f) }
 
 func (l *AsyncLogger) log(lvl Level, msg string, fields []Field) {
 	// Fast check for level and closed state
@@ -439,13 +439,13 @@ func (l *AsyncLogger) blockPadding(depth int) int {
 
 func levelColor(lvl Level) string {
 	switch lvl {
-	case DebugLevel:
+	case LevelDebug:
 		return ansiMagenta
-	case InfoLevel:
+	case LevelInfo:
 		return ansiGreen
-	case WarnLevel:
+	case LevelWarn:
 		return ansiYellow
-	case ErrorLevel:
+	case LevelError:
 		return ansiRedBold
 	default:
 		return ansiReset

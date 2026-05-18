@@ -49,7 +49,7 @@ var (
 	)
 	rxSorry      = regexp.MustCompile(`<h1>Sorry!</h1>[\s\S]*?<h3>(.+?)</h3>`)
 	rxTradeError = regexp.MustCompile(`<div id="error_msg">\s*([^<]+)\s*</div>`)
-	rxApiKey     = regexp.MustCompile(`Key: (?i)[0-9A-F]{32}`)
+	rxAPIKey     = regexp.MustCompile(`Key: (?i)[0-9A-F]{32}`)
 )
 
 // ErrAPITokenNotFound is returned when automatic key registration fails.
@@ -182,7 +182,7 @@ func (c *Client) GetOrRegisterAPIKey(ctx context.Context, domain string) (string
 		return "", fmt.Errorf("failed to fetch apikey page: %w", err)
 	}
 
-	key := rxApiKey.FindString(string(body))
+	key := rxAPIKey.FindString(string(body))
 	if key != "" {
 		return key[5:], nil
 	}

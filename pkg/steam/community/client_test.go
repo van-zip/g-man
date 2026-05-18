@@ -65,7 +65,7 @@ func TestNewClient(t *testing.T) {
 	})
 
 	t.Run("WithLogger Option", func(t *testing.T) {
-		logger := log.New(log.DefaultConfig(log.DebugLevel))
+		logger := log.New(log.DefaultConfig(log.LevelDebug))
 		// This test ensures the option can be applied without panicking.
 		c := community.NewClient(mockHTTP, sessionFunc, community.WithLogger(logger))
 		require.NotNil(t, c)

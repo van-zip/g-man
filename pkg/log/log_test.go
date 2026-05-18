@@ -42,16 +42,16 @@ func (w *blockingWriter) Write(p []byte) (n int, err error) {
 }
 
 func TestLevel_Short(t *testing.T) {
-	assert.Equal(t, "D", DebugLevel.Short())
-	assert.Equal(t, "I", InfoLevel.Short())
-	assert.Equal(t, "W", WarnLevel.Short())
-	assert.Equal(t, "E", ErrorLevel.Short())
+	assert.Equal(t, "D", LevelDebug.Short())
+	assert.Equal(t, "I", LevelInfo.Short())
+	assert.Equal(t, "W", LevelWarn.Short())
+	assert.Equal(t, "E", LevelError.Short())
 	assert.Equal(t, "?", Level(100).Short())
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig(InfoLevel)
-	assert.Equal(t, InfoLevel, cfg.Level)
+	cfg := DefaultConfig(LevelInfo)
+	assert.Equal(t, LevelInfo, cfg.Level)
 	assert.True(t, cfg.Colors)
 	assert.False(t, cfg.FullPath)
 }
@@ -59,7 +59,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestLogger_Lifecycle(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := DefaultConfig(DebugLevel)
+	cfg := DefaultConfig(LevelDebug)
 	cfg.Output = &buf
 	cfg.Colors = false
 	cfg.AsyncSize = 10
@@ -92,7 +92,7 @@ func TestLogger_Lifecycle(t *testing.T) {
 func TestLogger_LevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := DefaultConfig(WarnLevel)
+	cfg := DefaultConfig(LevelWarn)
 	cfg.Output = &buf
 	l := New(cfg)
 
@@ -107,7 +107,7 @@ func TestLogger_LevelFiltering(t *testing.T) {
 func TestLogger_With(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := DefaultConfig(InfoLevel)
+	cfg := DefaultConfig(LevelInfo)
 	cfg.Output = &buf
 	cfg.Colors = false
 	cfg.FullPath = true // Crucial: so we can see the whole path in the output string
@@ -178,7 +178,7 @@ func TestLogger_Formatting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 
-			cfg := DefaultConfig(InfoLevel)
+			cfg := DefaultConfig(LevelInfo)
 			cfg.Output = &buf
 			cfg.Colors = false
 			cfg.FullPath = tt.fullPath
@@ -240,7 +240,7 @@ func TestLogger_QueueOverflow(t *testing.T) {
 	bw := &blockingWriter{}
 	bw.mu.Lock() // Lock the writer to force queue to fill
 
-	cfg := DefaultConfig(InfoLevel)
+	cfg := DefaultConfig(LevelInfo)
 	cfg.Output = bw
 	cfg.AsyncSize = 1
 	l := New(cfg)
@@ -263,7 +263,7 @@ func TestLogger_QueueOverflow(t *testing.T) {
 func TestLogger_RaceAndMidClose(t *testing.T) {
 	// Tests the safety check: if l.closed.Load() { ... } inside log()
 	for range 50 {
-		l := New(DefaultConfig(InfoLevel))
+		l := New(DefaultConfig(LevelInfo))
 		l.(*AsyncLogger).cfg.Output = io.Discard
 
 		var wg sync.WaitGroup
@@ -356,7 +356,7 @@ func TestDiscardLogger(t *testing.T) {
 func TestEmptyKeyField(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := DefaultConfig(InfoLevel)
+	cfg := DefaultConfig(LevelInfo)
 	cfg.Output = &buf
 	cfg.Colors = false
 	l := New(cfg)

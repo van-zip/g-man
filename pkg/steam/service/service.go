@@ -65,6 +65,13 @@ func (c *Client) AccessToken() string {
 	return c.accessToken
 }
 
+// WithRegistry sets a custom unmarshal registry for the client.
+func WithRegistry(r *api.UnmarshalRegistry) Option {
+	return func(c *Client) {
+		c.registry = r
+	}
+}
+
 // New initializes a new Service Client.
 func New(tr tr.Transport, opts ...Option) *Client {
 	c := &Client{
@@ -77,13 +84,6 @@ func New(tr tr.Transport, opts ...Option) *Client {
 	}
 
 	return c
-}
-
-// WithRegistry sets a custom unmarshal registry for the client.
-func WithRegistry(r *api.UnmarshalRegistry) Option {
-	return func(c *Client) {
-		c.registry = r
-	}
 }
 
 // WithAPIKey returns a copy of the client with the WebAPI key (v000x style) for subsequent requests.

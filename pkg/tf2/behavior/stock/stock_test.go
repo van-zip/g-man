@@ -154,13 +154,13 @@ func TestStock_Undercutting(t *testing.T) {
 	}
 
 	bptfClient := bptf.New(redirectClient, "api-key", "token")
-	listingMgr := bptf.NewListingManager(bptfClient, nil, log.New(log.DefaultConfig(log.ErrorLevel)))
+	listingMgr := bptf.NewListingManager(bptfClient, nil, log.New(log.DefaultConfig(log.LevelError)))
 
 	// Construct behavior
 	s := &Stock{
 		listingMgr: listingMgr,
 		cfgMgr:     cfgMgr,
-		logger:     log.New(log.DefaultConfig(log.ErrorLevel)),
+		logger:     log.New(log.DefaultConfig(log.LevelError)),
 	}
 
 	keyPriceRef := 60.0 // 1 key = 60.0 ref

@@ -5,6 +5,7 @@
 package rest
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -59,8 +60,10 @@ func NewProxyClient(cfg ProxyConfig) (*http.Client, error) {
 
 // ProxyRotatorConfig defines proxy health checking parameters.
 type ProxyRotatorConfig struct {
-	MaxFails   uint32        // How many errors in a row are allowed before shutdown (for example, 3)
-	RetryAfter time.Duration // The time for which the proxy is excluded from the list (for example, 1 minute)
+	MaxFails            uint32        // How many errors in a row are allowed before shutdown (for example, 3)
+	RetryAfter          time.Duration // The time for which the proxy is excluded from the list (for example, 1 minute)
+	HealthCheckURL      string        // URL for background health checks
+	HealthCheckInterval time.Duration // Interval for background health checks (e.g., 30s)
 }
 
 // StickyKeyFunc defines how to extract a session identifier from a request.
@@ -97,6 +100,10 @@ type ProxyRotator struct {
 
 	stickyKeyFunc StickyKeyFunc
 	sessions      sync.Map // map[string]int (index in clients)
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewProxyRotator initializes the rotator (Round-Robin).
@@ -118,17 +125,74 @@ func NewProxyRotator(config ProxyRotatorConfig, clients ...HTTPDoer) (*ProxyRota
 		tracked[i] = &trackedClient{client: c}
 	}
 
-	return &ProxyRotator{
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &ProxyRotator{
+		ctx:     ctx,
+		cancel:  cancel,
 		clients: tracked,
 		config:  config,
-	}, nil
+	}
+
+	if config.HealthCheckURL != "" {
+		if config.HealthCheckInterval == 0 {
+			r.config.HealthCheckInterval = 1 * time.Minute
+		}
+
+		r.wg.Go(r.healthCheckLoop)
+	}
+
+	return r, nil
+}
+
+// Close stops background health checks.
+func (r *ProxyRotator) Close() error {
+	r.cancel()
+	r.wg.Wait()
+
+	return nil
+}
+
+func (r *ProxyRotator) healthCheckLoop() {
+	ticker := time.NewTicker(r.config.HealthCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			for _, tc := range r.clients {
+				if tc.unhealthy.Load() {
+					r.checkHealth(tc)
+				}
+			}
+		}
+	}
+}
+
+func (r *ProxyRotator) checkHealth(tc *trackedClient) {
+	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, r.config.HealthCheckURL, nil)
+	if err != nil {
+		return
+	}
+
+	resp, err := tc.client.Do(req)
+	if err == nil {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			r.markSuccess(tc)
+		}
+
+		_ = resp.Body.Close()
+	}
 }
 
 // WithStickySessions enables sticky sessions using the provided key extractor.
 // Returns the copy of the proxy rotator with the sticky key function set.
 func (r *ProxyRotator) WithStickySessions(f StickyKeyFunc) *ProxyRotator {
 	c := &ProxyRotator{
-		clients:       make([]*trackedClient, 0, len(r.clients)),
+		ctx:           r.ctx,
+		cancel:        r.cancel,
+		clients:       make([]*trackedClient, len(r.clients)),
 		config:        r.config,
 		stickyKeyFunc: f,
 	}
@@ -238,6 +302,7 @@ func (r *ProxyRotator) markFailed(tc *trackedClient) {
 	fails := tc.failCount.Add(1)
 	if fails >= r.config.MaxFails {
 		tc.unhealthy.Store(true)
+
 		recoveryTime := time.Now().Add(r.config.RetryAfter).UnixNano()
 		tc.recoveredAt.Store(recoveryTime)
 	}

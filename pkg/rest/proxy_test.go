@@ -238,6 +238,38 @@ func TestProxyRotator_HealthCheck(t *testing.T) {
 	}
 }
 
+func TestProxyRotator_BackgroundHealthCheck(t *testing.T) {
+	m1 := &mockDoer{id: 1, forceError: true}
+
+	cfg := ProxyRotatorConfig{
+		MaxFails:            1,
+		RetryAfter:          1 * time.Hour,
+		HealthCheckURL:      "http://health",
+		HealthCheckInterval: 50 * time.Millisecond,
+	}
+
+	rotator, err := NewProxyRotator(cfg, m1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotator.Close()
+
+	req, _ := http.NewRequest("GET", "http://test", nil)
+
+	_, _ = rotator.Do(req)
+	if !rotator.clients[0].unhealthy.Load() {
+		t.Fatal("proxy should be unhealthy")
+	}
+
+	m1.forceError = false
+
+	time.Sleep(150 * time.Millisecond)
+
+	if rotator.clients[0].unhealthy.Load() {
+		t.Error("proxy should be healthy after background check")
+	}
+}
+
 func TestProxyRotator_RetryOnProxyError(t *testing.T) {
 	m1 := &mockDoer{id: 1, statusCode: 407}
 	m2 := &mockDoer{id: 2, statusCode: 200}

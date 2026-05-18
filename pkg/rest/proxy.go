@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -62,6 +63,24 @@ type ProxyRotatorConfig struct {
 	RetryAfter time.Duration // The time for which the proxy is excluded from the list (for example, 1 minute)
 }
 
+// StickyKeyFunc defines how to extract a session identifier from a request.
+// If it returns an empty string, the request is handled via standard Round-Robin.
+type StickyKeyFunc func(req *http.Request) string
+
+// SteamStickyKey is a standard implementation for Steam-based requests.
+// It looks for the 'sessionid' cookie or 'X-Steam-SessionID' header.
+func SteamStickyKey(req *http.Request) string {
+	if cookie, err := req.Cookie("sessionid"); err == nil {
+		return cookie.Value
+	}
+
+	if sid := req.Header.Get("X-Steam-SessionID"); sid != "" {
+		return sid
+	}
+
+	return ""
+}
+
 type trackedClient struct {
 	client      HTTPDoer
 	failCount   atomic.Uint32
@@ -75,6 +94,9 @@ type ProxyRotator struct {
 	clients []*trackedClient
 	config  ProxyRotatorConfig
 	current atomic.Uint64
+
+	stickyKeyFunc StickyKeyFunc
+	sessions      sync.Map // map[string]int (index in clients)
 }
 
 // NewProxyRotator initializes the rotator (Round-Robin).
@@ -102,35 +124,93 @@ func NewProxyRotator(config ProxyRotatorConfig, clients ...HTTPDoer) (*ProxyRota
 	}, nil
 }
 
+// WithStickySessions enables sticky sessions using the provided key extractor.
+// Returns the copy of the proxy rotator with the sticky key function set.
+func (r *ProxyRotator) WithStickySessions(f StickyKeyFunc) *ProxyRotator {
+	c := &ProxyRotator{
+		clients:       make([]*trackedClient, 0, len(r.clients)),
+		config:        r.config,
+		stickyKeyFunc: f,
+	}
+	copy(c.clients, r.clients)
+	c.current.Store(r.current.Load())
+
+	return c
+}
+
 // Do performs an HTTP request using the next available client in the rotation (Round-Robin).
+// If sticky sessions are enabled, it attempts to use the same proxy for the same session ID.
 func (r *ProxyRotator) Do(req *http.Request) (*http.Response, error) {
-	var lastErr error
+	var (
+		lastErr   error
+		n         = uint64(len(r.clients))
+		sessionID string
+		stickyIdx = -1
+	)
 
-	n := uint64(len(r.clients))
+	// Attempt to extract session ID and find a "stuck" proxy
+	if r.stickyKeyFunc != nil {
+		sessionID = r.stickyKeyFunc(req)
+		if sessionID != "" {
+			if val, ok := r.sessions.Load(sessionID); ok {
+				stickyIdx = val.(int)
+			}
+		}
+	}
 
+	// Try the sticky proxy first if it's available
+	if stickyIdx >= 0 && stickyIdx < len(r.clients) {
+		tc := r.clients[stickyIdx]
+		if r.isAvailable(tc) {
+			resp, err := tc.client.Do(req)
+			if !r.isProxyFault(resp, err) {
+				r.markSuccess(tc)
+
+				return resp, err
+			}
+
+			// Sticky proxy failed, mark it and move to general rotation
+			r.markFailed(tc)
+
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+
+			lastErr = err
+		}
+	}
+
+	// General Round-Robin rotation
 	for range n {
 		idx := r.current.Add(1) % n
-		tc := r.clients[idx]
+		if int(idx) == stickyIdx {
+			continue // Already tried above
+		}
 
+		tc := r.clients[idx]
 		if !r.isAvailable(tc) {
 			continue
 		}
 
 		resp, err := tc.client.Do(req)
-
 		if r.isProxyFault(resp, err) {
 			r.markFailed(tc)
 
 			lastErr = err
-			if err == nil && resp != nil {
+
+			if resp != nil {
 				_ = resp.Body.Close()
-				lastErr = fmt.Errorf("rest: proxy returned status %d", resp.StatusCode)
 			}
 
 			continue
 		}
 
 		r.markSuccess(tc)
+
+		// Update or set the sticky association for future requests
+		if sessionID != "" {
+			r.sessions.Store(sessionID, int(idx))
+		}
 
 		return resp, err
 	}
@@ -158,7 +238,6 @@ func (r *ProxyRotator) markFailed(tc *trackedClient) {
 	fails := tc.failCount.Add(1)
 	if fails >= r.config.MaxFails {
 		tc.unhealthy.Store(true)
-		// Устанавливаем время восстановления
 		recoveryTime := time.Now().Add(r.config.RetryAfter).UnixNano()
 		tc.recoveredAt.Store(recoveryTime)
 	}

@@ -26,6 +26,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
@@ -64,16 +65,37 @@ type WebSession struct {
 	domains    []string
 }
 
+type doerRoundTripper struct {
+	doer rest.HTTPDoer
+}
+
+func (d *doerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return d.doer.Do(req)
+}
+
 // New creates a new, unauthenticated web session for the provided SteamID.
 // It initializes the session with a fresh cookie jar and the default set
 // of Steam domains.
-func New(steamID id.ID, logger log.Logger) *WebSession {
+func New(steamID id.ID, logger log.Logger, httpClient rest.HTTPDoer) *WebSession {
 	ws := &WebSession{
 		steamID: steamID,
 		logger:  logger,
 		domains: append([]string{}, defaultDomains...),
 	}
-	ws.httpClient = &http.Client{}
+
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	if hc, ok := httpClient.(*http.Client); ok {
+		ws.httpClient = hc
+	} else {
+		ws.httpClient = &http.Client{
+			Transport: &doerRoundTripper{doer: httpClient},
+			Timeout:   30 * time.Second,
+		}
+	}
+
 	ws.client = rest.NewClient(ws.httpClient)
 
 	ws.Clear()

@@ -40,16 +40,22 @@ type WS struct {
 func NewWS(
 	ctx context.Context,
 	logger log.Logger,
-	endpoint string,
-	dialer *websocket.Dialer,
+	endpoint, proxyURL string,
 ) (*WS, error) {
 	u := url.URL{Scheme: "wss", Host: endpoint, Path: "/cmsocket/"}
 
-	if dialer == nil {
-		dialer = &websocket.Dialer{
-			HandshakeTimeout: 10 * time.Second,
-			Proxy:            http.ProxyFromEnvironment,
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		Proxy:            http.ProxyFromEnvironment,
+	}
+
+	if proxyURL != "" {
+		pu, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("ws: invalid proxy URL: %w", err)
 		}
+
+		dialer.Proxy = http.ProxyURL(pu)
 	}
 
 	conn, resp, err := dialer.DialContext(ctx, u.String(), nil)

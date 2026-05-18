@@ -62,6 +62,7 @@ type Config struct {
 	Dialers         map[string]Dialer
 	ReconnectPolicy ReconnectPolicy
 	ConnectTimeout  time.Duration
+	ProxyURL        string
 }
 
 // DefaultConfig returns a standard configuration for Steam CM connections.
@@ -82,16 +83,16 @@ type CMServer struct {
 }
 
 // Dialer defines a function for establishing various network connections.
-type Dialer func(ctx context.Context, logger log.Logger, endpoint string) (network.Connection, error)
+type Dialer func(ctx context.Context, logger log.Logger, endpoint, proxyURL string) (network.Connection, error)
 
 // DefaultDialers provides implementations for TCP and WebSockets.
 func DefaultDialers() map[string]Dialer {
 	return map[string]Dialer{
-		"tcp": func(ctx context.Context, l log.Logger, s string) (network.Connection, error) {
-			return network.NewTCP(ctx, l, s)
+		"tcp": func(ctx context.Context, l log.Logger, s, p string) (network.Connection, error) {
+			return network.NewTCP(ctx, l, s, p)
 		},
-		"websockets": func(ctx context.Context, l log.Logger, s string) (network.Connection, error) {
-			return network.NewWS(ctx, l, s, nil)
+		"websockets": func(ctx context.Context, l log.Logger, s, p string) (network.Connection, error) {
+			return network.NewWS(ctx, l, s, p)
 		},
 	}
 }
@@ -187,7 +188,7 @@ func (c *Connector) Connect(ctx context.Context, server CMServer) error {
 		return fmt.Errorf("%w: %s", ErrUnsupportedType, server.Type)
 	}
 
-	conn, err := dialer(ctx, c.logger, server.Endpoint)
+	conn, err := dialer(ctx, c.logger, server.Endpoint, c.cfg.ProxyURL)
 	if err != nil {
 		return err
 	}

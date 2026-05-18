@@ -16,6 +16,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth/websession"
@@ -57,6 +58,7 @@ type SessionManager struct {
 	storage   storage.Provider
 	device    *auth.DeviceConfig
 	bus       *bus.Bus
+	http      rest.HTTPDoer // Global HTTP client
 
 	unified   *service.Client // WebAPI (HTTP)
 	socketAPI *service.Client // CM (TCP/WS)
@@ -76,6 +78,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 		device:       cfg.Device,
 		verifyTicker: time.NewTicker(5 * time.Minute),
 		registry:     cfg.Registry,
+		http:         cfg.HTTP,
 	}
 
 	if c.storage == nil {
@@ -121,7 +124,7 @@ func (c *SessionManager) LogOn(
 
 	c.mu.Lock()
 	if c.web == nil {
-		c.web = websession.New(details.SteamID, c.logger)
+		c.web = websession.New(details.SteamID, c.logger, c.http)
 	}
 
 	c.mu.Unlock()

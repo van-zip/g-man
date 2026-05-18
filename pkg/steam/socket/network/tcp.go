@@ -12,9 +12,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/proxy"
 
 	"github.com/lemon4ksan/g-man/pkg/crypto"
 	"github.com/lemon4ksan/g-man/pkg/log"
@@ -52,12 +55,40 @@ type TCP struct {
 }
 
 // NewTCP establishes a TCP connection to the given endpoint and starts its read loop.
-func NewTCP(ctx context.Context, logger log.Logger, endpoint string) (*TCP, error) {
-	dialer := &net.Dialer{}
+func NewTCP(ctx context.Context, logger log.Logger, endpoint, proxyURL string) (*TCP, error) {
+	var conn net.Conn
 
-	conn, err := dialer.DialContext(ctx, "tcp", endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("tcp: dial failed: %w", err)
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("tcp: invalid proxy URL: %w", err)
+		}
+
+		dialer, err := proxy.FromURL(u, proxy.Direct)
+		if err != nil {
+			return nil, fmt.Errorf("tcp: failed to create proxy dialer: %w", err)
+		}
+
+		contextDialer, ok := dialer.(proxy.ContextDialer)
+		if !ok {
+			// Fallback for dialers that don't implement ContextDialer
+			conn, err = dialer.Dial("tcp", endpoint)
+		} else {
+			conn, err = contextDialer.DialContext(ctx, "tcp", endpoint)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("tcp: dial failed: %w", err)
+		}
+	} else {
+		var err error
+
+		dialer := &net.Dialer{}
+
+		conn, err = dialer.DialContext(ctx, "tcp", endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("tcp: dial failed: %w", err)
+		}
 	}
 
 	t := &TCP{

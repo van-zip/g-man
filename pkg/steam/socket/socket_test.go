@@ -61,7 +61,7 @@ func setupMockSocket(t *testing.T) (*Socket, *mockConnection) {
 	mConn := newMockConnection()
 	cfg := DefaultConfig()
 	cfg.Connector.Dialers = map[string]connector.Dialer{
-		"mock": func(ctx context.Context, l log.Logger, ep string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
 			return mConn, nil
 		},
 	}

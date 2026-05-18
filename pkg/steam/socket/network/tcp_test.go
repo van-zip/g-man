@@ -21,7 +21,7 @@ import (
 
 func TestTCP_NewTCP_Fail(t *testing.T) {
 	// Dialing a non-existent endpoint
-	_, err := NewTCP(context.Background(), log.Discard, "127.0.0.1:1")
+	_, err := NewTCP(context.Background(), log.Discard, "127.0.0.1:1", "")
 	assert.Error(t, err)
 }
 

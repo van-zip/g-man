@@ -67,13 +67,13 @@ func newMockedSession(transport *mockTransport) *WebSession {
 
 func newTestSession() *WebSession {
 	steamID := id.ID(76561197960265728)
-	return New(steamID, log.Discard)
+	return New(steamID, log.Discard, nil)
 }
 
 func TestNew(t *testing.T) {
 	steamID := id.ID(76561197960265729)
 
-	ws := New(steamID, log.Discard)
+	ws := New(steamID, log.Discard, nil)
 
 	require.NotNil(t, ws, "New() should not return nil")
 	assert.Equal(t, steamID, ws.steamID, "SteamID must be set correctly")

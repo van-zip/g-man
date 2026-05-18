@@ -25,10 +25,37 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
+	"github.com/lemon4ksan/g-man/pkg/steam/sys/directory"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 	"github.com/lemon4ksan/g-man/pkg/storage/memory"
 )
+
+// NewReadyClient creates a client, configures a default logger (if none provided),
+// connects to the optimal CM server and performs the logon flow in one step.
+func NewReadyClient(ctx context.Context, cfg Config, details *auth.LogOnDetails, opts ...Option) (*Client, error) {
+	logger := log.New(log.DefaultConfig(log.LevelInfo))
+	opts = append([]Option{WithLogger(logger)}, opts...)
+
+	// Create the base client.
+	c, err := NewClient(cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve the best CM server.
+	srv, err := directory.New(c.Service()).GetOptimalCMServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Perform the login sequence.
+	if err = c.ConnectAndLogin(ctx, srv, details); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
 
 // ErrNotRunning is returned when the client is not running.
 var ErrNotRunning = errors.New("client must be running (call Run() first)")
@@ -52,6 +79,7 @@ type Config struct {
 	Device   *auth.DeviceConfig
 	Registry *api.UnmarshalRegistry
 	Bus      *bus.Bus
+	ProxyURL string // Global proxy URL (affects both HTTP and Socket)
 }
 
 // DefaultConfig returns the baseline configuration for core systems.
@@ -164,6 +192,9 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		opt(c)
 	}
 
+	if cfg.Socket.Connector.ProxyURL == "" {
+		cfg.Socket.Connector.ProxyURL = cfg.ProxyURL
+	}
 	c.socket = socket.NewSocket(cfg.Socket, c.logger)
 	c.session = NewSessionManager(cfg, c.bus, c.logger, c.socket)
 	c.router = NewServiceRouter(c.session, c.socket)

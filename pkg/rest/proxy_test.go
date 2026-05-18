@@ -5,6 +5,7 @@
 package rest
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -22,6 +23,10 @@ type mockDoer struct {
 
 func (m *mockDoer) Do(req *http.Request) (*http.Response, error) {
 	m.calls++
+
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
 
 	var err error
 	if m.forceError {
@@ -267,6 +272,25 @@ func TestProxyRotator_BackgroundHealthCheck(t *testing.T) {
 
 	if rotator.clients[0].unhealthy.Load() {
 		t.Error("proxy should be healthy after background check")
+	}
+}
+
+func TestProxyRotator_ContextCancellation(t *testing.T) {
+	m1 := &mockDoer{id: 1}
+	rotator, _ := NewProxyRotator(ProxyRotatorConfig{}, m1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://test", nil)
+	_, err := rotator.Do(req)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+
+	if rotator.clients[0].unhealthy.Load() {
+		t.Error("proxy should NOT be marked unhealthy on cancellation")
 	}
 }
 

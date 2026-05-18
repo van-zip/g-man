@@ -23,6 +23,36 @@ type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// DoerFunc is a function type that implements HTTPDoer.
+type DoerFunc func(req *http.Request) (*http.Response, error)
+
+// Do implements the HTTPDoer interface for DoerFunc.
+func (f DoerFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+// Middleware wraps an HTTPDoer with additional logic.
+type Middleware func(next HTTPDoer) HTTPDoer
+
+// Chain applies a series of middlewares to an HTTPDoer, returning the final HTTPDoer.
+// The first middleware in the list will be the outermost one (called first).
+//
+// Example:
+//
+//	rotator, _ := rest.NewProxyRotator(cfg, proxy1, proxy2)
+//	logMiddleware := rest.LoggingMiddleware(logger)
+//
+//	// Build a chain: Client -> Logging -> Proxy Rotator
+//	httpClient := rest.Chain(rotator, logMiddleware)
+//	client := rest.NewClient(httpClient)
+func Chain(doer HTTPDoer, middlewares ...Middleware) HTTPDoer {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		doer = middlewares[i](doer)
+	}
+
+	return doer
+}
+
 // Requester defines the requirements for performing raw HTTP requests
 // with path joining and query parameter encoding.
 type Requester interface {

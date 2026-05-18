@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -182,13 +183,7 @@ func fillValues(v reflect.Value, values url.Values) error {
 		key := parts[0]
 
 		// Determine if this field should be inlined
-		isInline := false
-		for _, opt := range parts[1:] {
-			if opt == "inline" {
-				isInline = true
-				break
-			}
-		}
+		isInline := slices.Contains(parts[1:], "inline")
 
 		// Handle embedded (anonymous) structs or explicit inline tag
 		if (field.Anonymous || isInline) && fieldValue.Kind() == reflect.Struct {
@@ -210,7 +205,7 @@ func fillValues(v reflect.Value, values url.Values) error {
 
 		// Handle Slices/Arrays
 		if fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Array {
-			for j := 0; j < fieldValue.Len(); j++ {
+			for j := range fieldValue.Len() {
 				strValue, err := toString(fieldValue.Index(j))
 				if err != nil {
 					return fmt.Errorf("field %s[%d]: %w", field.Name, j, err)

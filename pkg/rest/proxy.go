@@ -94,6 +94,7 @@ type trackedClient struct {
 // ProxyRotator allows distributing requests between multiple proxies.
 // Implements the HTTPDoer interface, so it can be passed to [NewClient].
 type ProxyRotator struct {
+	mu      sync.RWMutex // Protects clients slice
 	clients []*trackedClient
 	config  ProxyRotatorConfig
 	current atomic.Uint64
@@ -144,6 +145,31 @@ func NewProxyRotator(config ProxyRotatorConfig, clients ...HTTPDoer) (*ProxyRota
 	return r, nil
 }
 
+// UpdateClients replaces the current set of proxy clients with a new one.
+// This operation is thread-safe and resets existing sticky session mappings
+// to prevent indexing errors.
+func (r *ProxyRotator) UpdateClients(clients ...HTTPDoer) {
+	if len(clients) == 0 {
+		return
+	}
+
+	tracked := make([]*trackedClient, len(clients))
+	for i, c := range clients {
+		tracked[i] = &trackedClient{client: c}
+	}
+
+	r.mu.Lock()
+	r.clients = tracked
+	r.current.Store(0)
+	r.mu.Unlock()
+
+	// Clear sticky sessions as indices have changed
+	r.sessions.Range(func(key, value any) bool {
+		r.sessions.Delete(key)
+		return true
+	})
+}
+
 // Close stops background health checks.
 func (r *ProxyRotator) Close() error {
 	r.cancel()
@@ -161,7 +187,11 @@ func (r *ProxyRotator) healthCheckLoop() {
 		case <-r.ctx.Done():
 			return
 		case <-ticker.C:
-			for _, tc := range r.clients {
+			r.mu.RLock()
+			clients := r.clients
+			r.mu.RUnlock()
+
+			for _, tc := range clients {
 				if tc.unhealthy.Load() {
 					r.checkHealth(tc)
 				}
@@ -205,9 +235,13 @@ func (r *ProxyRotator) WithStickySessions(f StickyKeyFunc) *ProxyRotator {
 // Do performs an HTTP request using the next available client in the rotation (Round-Robin).
 // If sticky sessions are enabled, it attempts to use the same proxy for the same session ID.
 func (r *ProxyRotator) Do(req *http.Request) (*http.Response, error) {
+	r.mu.RLock()
+	clients := r.clients
+	r.mu.RUnlock()
+
 	var (
 		lastErr   error
-		n         = uint64(len(r.clients))
+		n         = uint64(len(clients))
 		sessionID string
 		stickyIdx = -1
 	)
@@ -223,8 +257,8 @@ func (r *ProxyRotator) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	// Try the sticky proxy first if it's available
-	if stickyIdx >= 0 && stickyIdx < len(r.clients) {
-		tc := r.clients[stickyIdx]
+	if stickyIdx >= 0 && stickyIdx < len(clients) {
+		tc := clients[stickyIdx]
 		if r.isAvailable(tc) {
 			resp, err := tc.client.Do(req)
 			if !r.isProxyFault(resp, err) {
@@ -251,7 +285,7 @@ func (r *ProxyRotator) Do(req *http.Request) (*http.Response, error) {
 			continue // Already tried above
 		}
 
-		tc := r.clients[idx]
+		tc := clients[idx]
 		if !r.isAvailable(tc) {
 			continue
 		}
@@ -315,6 +349,10 @@ func (r *ProxyRotator) markSuccess(tc *trackedClient) {
 
 func (r *ProxyRotator) isProxyFault(resp *http.Response, err error) bool {
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return false
+		}
+
 		var netErr net.Error
 		if errors.As(err, &netErr) {
 			return true

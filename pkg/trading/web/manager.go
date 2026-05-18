@@ -422,6 +422,16 @@ func (m *Manager) GetEscrowDuration(ctx context.Context, offerID uint64) (proces
 	}, nil
 }
 
+// CheckEscrow checks if a trade offer has a trade hold.
+// This fulfills the trading.EscrowChecker interface.
+func (m *Manager) CheckEscrow(ctx context.Context, offer *trading.TradeOffer) (bool, error) {
+	details, err := m.GetEscrowDuration(ctx, offer.ID)
+	if err != nil {
+		return false, err
+	}
+	return details.HasHold(), nil
+}
+
 func (m *Manager) pollingLoop(ctx context.Context) {
 	ticker := time.NewTicker(m.config.PollInterval)
 	defer ticker.Stop()

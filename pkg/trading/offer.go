@@ -5,6 +5,7 @@
 package trading
 
 import (
+	"context"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
@@ -64,6 +65,10 @@ const (
 	ActionCounter ActionType = "counter"
 	// ActionSkip tells the processor to skip the offer for now.
 	ActionSkip ActionType = "skip"
+	// ActionReview marks the trade for manual review.
+	ActionReview ActionType = "review"
+	// ActionIgnore means the offer should be ignored.
+	ActionIgnore ActionType = "ignore"
 )
 
 // ActionDecision is returned by your bot's business logic to tell the Processor what to do.
@@ -71,6 +76,16 @@ type ActionDecision struct {
 	Action        ActionType
 	Reason        string
 	CounterParams *CounterParams
+}
+
+// PartnerInventoryProvider is an interface that allows fetching inventory of a trade partner.
+type PartnerInventoryProvider interface {
+	GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*Item, error)
+}
+
+// EscrowChecker is an interface for checking if a trade offer has a trade hold (escrow).
+type EscrowChecker interface {
+	CheckEscrow(ctx context.Context, offer *TradeOffer) (bool, error)
 }
 
 // CounterParams tell the processor how to counter offer.

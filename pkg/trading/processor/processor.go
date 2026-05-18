@@ -104,23 +104,23 @@ func (p *Processor) executeVerdict(
 	duration time.Duration,
 ) {
 	switch v.Action {
-	case engine.ActionAccept:
+	case trading.ActionAccept:
 		if err := p.executor.AcceptOffer(ctx, offer.ID); err == nil {
 			_ = p.notif.SendNotification(ctx, p.makeNotifInfo(offer, notifications.StateAccepted, v))
 		}
 
-	case engine.ActionDecline:
+	case trading.ActionDecline:
 		if err := p.executor.DeclineOffer(ctx, offer.ID); err == nil {
 			_ = p.notif.SendNotification(ctx, p.makeNotifInfo(offer, notifications.StateDeclined, v))
 			_ = p.reviewer.SendDeclinedAlert(ctx, offer.ID, offer.OtherSteamID, p.makeReviewMeta(v, duration), nil)
 		}
 
-	case engine.ActionReview:
+	case trading.ActionReview:
 		p.logger.Info("Offer sent to manual review", log.Uint64("id", offer.ID))
 		_ = p.notif.SendNotification(ctx, p.makeNotifInfo(offer, notifications.StateActive, v))
 		_ = p.reviewer.SendReviewAlert(ctx, offer.ID, offer.OtherSteamID, p.makeReviewMeta(v, duration))
 
-	case engine.ActionIgnore:
+	case trading.ActionIgnore:
 		p.logger.Debug("Offer ignored by engine", log.Uint64("id", offer.ID))
 	}
 }

@@ -48,7 +48,7 @@ func LoggerMiddleware(logger log.Logger) Middleware {
 
 			logger.Info("Trade offer processed",
 				log.Uint64("offer_id", ctx.Offer.ID),
-				log.String("verdict", ctx.Verdict.Action.String()),
+				log.String("verdict", string(ctx.Verdict.Action)),
 				log.String("reason", ctx.Verdict.Reason.String()),
 				log.Duration("duration", duration),
 			)

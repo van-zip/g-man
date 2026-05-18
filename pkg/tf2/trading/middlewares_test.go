@@ -131,7 +131,7 @@ func TestSmartCounterMiddleware_CorrectValue(t *testing.T) {
 
 	err := handler(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, engine.ActionAccept, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionAccept, ctx.Verdict.Action)
 	assert.Equal(t, reason.AcceptCorrectValue, ctx.Verdict.Reason)
 }
 
@@ -200,7 +200,7 @@ func TestSmartCounterMiddleware_Overpaid_ChangeAvailable(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Should counter offer with our change items added
-	assert.Equal(t, engine.ActionCounter, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionCounter, ctx.Verdict.Action)
 	assert.Equal(t, reason.AcceptCorrectValue, ctx.Verdict.Reason)
 
 	counterParams := ctx.Verdict.Data.(*trading.CounterParams)
@@ -285,7 +285,7 @@ func TestSmartCounterMiddleware_Overpaid_NotEnoughChange_SmeltSucceeds(t *testin
 	assert.NoError(t, err)
 
 	// Since smelting succeeded, verdict should remain undecided (waiting for next run / retry)
-	assert.Equal(t, engine.ActionUndecided, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionSkip, ctx.Verdict.Action)
 }
 
 func TestSmartCounterMiddleware_Overpaid_NotEnoughChange_SmeltFails(t *testing.T) {
@@ -339,7 +339,7 @@ func TestSmartCounterMiddleware_Overpaid_NotEnoughChange_SmeltFails(t *testing.T
 	assert.NoError(t, err)
 
 	// Should decline because we have no metal and cannot craft any
-	assert.Equal(t, engine.ActionDecline, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionDecline, ctx.Verdict.Action)
 	assert.Equal(t, tf2reason.DeclineNoChange, ctx.Verdict.Reason)
 }
 
@@ -454,7 +454,7 @@ func TestSmartCounterMiddleware_Underpaid_PartnerHasCurrency(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Should counter offer adding the 2 missing scrap items from their inventory
-	assert.Equal(t, engine.ActionCounter, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionCounter, ctx.Verdict.Action)
 	assert.Equal(t, reason.AcceptCorrectValue, ctx.Verdict.Reason)
 
 	counterParams := ctx.Verdict.Data.(*trading.CounterParams)
@@ -509,7 +509,7 @@ func TestSmartCounterMiddleware_Underpaid_PartnerMissingCurrency(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Should decline because partner does not have the missing change
-	assert.Equal(t, engine.ActionDecline, ctx.Verdict.Action)
+	assert.Equal(t, trading.ActionDecline, ctx.Verdict.Action)
 	assert.Equal(t, tf2reason.DeclineUnderpaid, ctx.Verdict.Reason)
 }
 

@@ -5,13 +5,11 @@
 package trading
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"maps"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/tf2/backpack"
 	"github.com/lemon4ksan/g-man/pkg/tf2/bptf"
 	"github.com/lemon4ksan/g-man/pkg/tf2/crafting"
@@ -24,11 +22,6 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
-
-// PartnerInventoryProvider is an interface that allows fetching inventory of a trade partner.
-type PartnerInventoryProvider interface {
-	GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*trading.Item, error)
-}
 
 // StockConfig defines the limits for the inventory.
 type StockConfig struct {
@@ -148,14 +141,9 @@ func PricerMiddleware(mgr *pricedb.Manager, logger log.Logger) engine.Middleware
 	}
 }
 
-// EscrowChecker is an interface for checking if a trade offer has a trade hold (escrow).
-type EscrowChecker interface {
-	CheckEscrow(ctx context.Context, offer *trading.TradeOffer) (bool, error)
-}
-
 // EscrowMiddleware checks if there is a trade hold (escrow) on the offer.
 // If either party has a trade hold, the offer is declined.
-func EscrowMiddleware(checker EscrowChecker, logger log.Logger) engine.Middleware {
+func EscrowMiddleware(checker trading.EscrowChecker, logger log.Logger) engine.Middleware {
 	return func(next engine.Handler) engine.Handler {
 		return func(ctx *engine.TradeContext) error {
 			hasEscrow, err := checker.CheckEscrow(ctx, ctx.Offer)
@@ -259,7 +247,7 @@ func BanCheckMiddleware(bans *rep.BansManager, logger log.Logger) engine.Middlew
 func SmartCounterMiddleware(
 	metalMgr *crafting.MetalManager,
 	bp *backpack.Backpack,
-	invProvider PartnerInventoryProvider,
+	invProvider trading.PartnerInventoryProvider,
 	logger log.Logger,
 ) engine.Middleware {
 	return func(next engine.Handler) engine.Handler {
@@ -269,7 +257,7 @@ func SmartCounterMiddleware(
 			}
 
 			// If a verdict is already reached, don't intervene
-			if ctx.Verdict.Action != engine.ActionUndecided {
+			if ctx.Verdict.Action != trading.ActionSkip {
 				return nil
 			}
 

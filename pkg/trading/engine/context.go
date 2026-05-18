@@ -12,48 +12,33 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
 
-// Action represents the final decision made by the engine regarding a trade.
-type Action int
-
-const (
-	// ActionUndecided means the chain finished without a definitive conclusion.
-	ActionUndecided Action = iota
-	// ActionAccept instructs the bot to accept the trade.
-	ActionAccept
-	// ActionDecline instructs the bot to decline the trade.
-	ActionDecline
-	// ActionCounter instructs the bot to send a counter-offer.
-	ActionCounter
-	// ActionReview marks the trade for manual review by an administrator.
-	ActionReview
-	// ActionIgnore means the offer should be ignored (e.g., already handled or glitched).
-	ActionIgnore
-)
-
-func (a Action) String() string {
-	switch a {
-	case ActionUndecided:
-		return "UNDECIDED"
-	case ActionAccept:
-		return "ACCEPT"
-	case ActionDecline:
-		return "DECLINE"
-	case ActionCounter:
-		return "COUNTER"
-	case ActionReview:
-		return "REVIEW"
-	case ActionIgnore:
-		return "IGNORE"
-	default:
-		return "UNKNOWN"
-	}
-}
-
 // Verdict contains the final decision and the reasoning behind it.
 type Verdict struct {
-	Action Action
+	Action trading.ActionType
 	Reason reason.TradeReason
 	Data   any // Optional payload (e.g., CounterOffer struct)
+}
+
+// Decision converts the engine verdict into a generic trading ActionDecision
+// that the automated Processor understands.
+func (v Verdict) Decision() trading.ActionDecision {
+	d := trading.ActionDecision{
+		Action: v.Action,
+		Reason: v.Reason.String(),
+	}
+
+	if v.Action == trading.ActionCounter {
+		if params, ok := v.Data.(*trading.CounterParams); ok {
+			d.CounterParams = params
+		}
+	}
+
+	// For the automated processor, Review/Ignore/Undecided are treated as Skip
+	if d.Action == "" || d.Action == trading.ActionReview || d.Action == trading.ActionIgnore {
+		d.Action = trading.ActionSkip
+	}
+
+	return d
 }
 
 // TradeContext flows through the middleware chain.
@@ -74,7 +59,7 @@ func NewTradeContext(ctx context.Context, offer *trading.TradeOffer) *TradeConte
 	return &TradeContext{
 		Context: ctx,
 		Offer:   offer,
-		Verdict: Verdict{Action: ActionUndecided},
+		Verdict: Verdict{Action: trading.ActionSkip}, // Default to skip (undecided)
 		data:    make(map[string]any),
 	}
 }
@@ -99,20 +84,20 @@ func (c *TradeContext) Get(key string) (any, bool) {
 
 // Accept sets the verdict to ACCEPT and stops further reasoning.
 func (c *TradeContext) Accept(reason reason.TradeReason) {
-	c.Verdict = Verdict{Action: ActionAccept, Reason: reason}
+	c.Verdict = Verdict{Action: trading.ActionAccept, Reason: reason}
 }
 
 // Decline sets the verdict to DECLINE and stops further reasoning.
 func (c *TradeContext) Decline(reason reason.TradeReason) {
-	c.Verdict = Verdict{Action: ActionDecline, Reason: reason}
+	c.Verdict = Verdict{Action: trading.ActionDecline, Reason: reason}
 }
 
 // Review marks the offer for manual review.
 func (c *TradeContext) Review(reason reason.TradeReason) {
-	c.Verdict = Verdict{Action: ActionReview, Reason: reason}
+	c.Verdict = Verdict{Action: trading.ActionReview, Reason: reason}
 }
 
 // Counter sets the verdict to COUNTER and provides necessary parameters.
 func (c *TradeContext) Counter(reason reason.TradeReason, params *trading.CounterParams) {
-	c.Verdict = Verdict{Action: ActionCounter, Reason: reason, Data: params}
+	c.Verdict = Verdict{Action: trading.ActionCounter, Reason: reason, Data: params}
 }

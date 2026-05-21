@@ -71,6 +71,10 @@ type BaseResponseProvider interface {
 	BaseResponse() BaseResponse
 }
 
+type (
+	capturerCtxKey struct{}
+)
+
 // RequestModifier is a function that can modify an *http.Request before it is sent.
 // This is used for adding one-off headers, authentication tokens, or logging.
 type RequestModifier func(req *http.Request)
@@ -102,6 +106,16 @@ func WithVars(pairs ...any) RequestModifier {
 			value := fmt.Sprint(pairs[i+1])
 			WithVar(key, value)(req)
 		}
+	}
+}
+
+// CaptureResponse returns a modifier that captures the *http.Response
+// of the request. This is useful for accessing headers or cookies
+// when using high-level functions like GetJSON.
+func CaptureResponse(target **http.Response) RequestModifier {
+	return func(req *http.Request) {
+		ctx := context.WithValue(req.Context(), capturerCtxKey{}, target)
+		*req = *req.WithContext(ctx)
 	}
 }
 
@@ -418,7 +432,11 @@ func DeleteJSON[Req, Resp any](
 
 // handleJSONResponse closes the body and handles status code validation.
 func handleJSONResponse(resp *http.Response, target any, requester Requester) error {
-	defer resp.Body.Close()
+	if targetPtr, ok := resp.Request.Context().Value(capturerCtxKey{}).(**http.Response); ok {
+		*targetPtr = resp
+	} else {
+		defer resp.Body.Close()
+	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		bodyBytes, _ := io.ReadAll(resp.Body)

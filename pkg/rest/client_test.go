@@ -409,6 +409,25 @@ func TestClient_Validation(t *testing.T) {
 	})
 }
 
+func TestClient_CaptureResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Custom-Header", "captured")
+		_, _ = w.Write([]byte(`{"message": "ok"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(nil).WithBaseURL(server.URL)
+
+	var rawResp *http.Response
+
+	result, err := GetJSON[testPayload](context.Background(), client, "/capture", nil, CaptureResponse(&rawResp))
+	require.NoError(t, err)
+	assert.Equal(t, "ok", result.Message)
+	require.NotNil(t, rawResp)
+	assert.Equal(t, "captured", rawResp.Header.Get("X-Custom-Header"))
+	_ = rawResp.Body.Close()
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) &&
 		(s == substr || (len(substr) > 0 && (s[:len(substr)] == substr || contains(s[1:], substr))))

@@ -20,12 +20,14 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket/network"
+	"github.com/lemon4ksan/g-man/pkg/network"
 )
 
 // connectorError implements the api.RetriableError interface for socket network errors.
@@ -63,6 +65,7 @@ type Config struct {
 	ReconnectPolicy ReconnectPolicy
 	ConnectTimeout  time.Duration
 	ProxyURL        string
+	Headers         http.Header
 }
 
 // DefaultConfig returns a standard configuration for Steam CM connections.
@@ -83,16 +86,17 @@ type CMServer struct {
 }
 
 // Dialer defines a function for establishing various network connections.
-type Dialer func(ctx context.Context, logger log.Logger, endpoint, proxyURL string) (network.Connection, error)
+type Dialer func(ctx context.Context, logger log.Logger, endpoint, proxyURL string, headers http.Header) (network.Connection, error)
 
 // DefaultDialers provides implementations for TCP and WebSockets.
 func DefaultDialers() map[string]Dialer {
 	return map[string]Dialer{
-		"tcp": func(ctx context.Context, l log.Logger, s, p string) (network.Connection, error) {
-			return network.NewTCP(ctx, l, s, p)
+		"tcp": func(ctx context.Context, l log.Logger, s, p string, h http.Header) (network.Connection, error) {
+			return network.NewTCP(ctx, l, s, p, h, SteamFramer{})
 		},
-		"websockets": func(ctx context.Context, l log.Logger, s, p string) (network.Connection, error) {
-			return network.NewWS(ctx, l, s, p)
+		"websockets": func(ctx context.Context, l log.Logger, s, p string, h http.Header) (network.Connection, error) {
+			u := url.URL{Scheme: "wss", Host: s, Path: "/cmsocket/"}
+			return network.NewWS(ctx, l, u.String(), p, h)
 		},
 	}
 }
@@ -188,7 +192,7 @@ func (c *Connector) Connect(ctx context.Context, server CMServer) error {
 		return fmt.Errorf("%w: %s", ErrUnsupportedType, server.Type)
 	}
 
-	conn, err := dialer(ctx, c.logger, server.Endpoint, c.cfg.ProxyURL)
+	conn, err := dialer(ctx, c.logger, server.Endpoint, c.cfg.ProxyURL, c.cfg.Headers)
 	if err != nil {
 		return err
 	}
@@ -215,7 +219,7 @@ func (c *Connector) SetEncryptionKey(key []byte) bool {
 	defer c.mu.RUnlock()
 
 	if enc, ok := c.conn.(network.Encryptable); ok {
-		return enc.SetEncryptionKey(key)
+		return enc.SetCipher(NewSteamCipher(key))
 	}
 
 	return false

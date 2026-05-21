@@ -7,6 +7,7 @@ package connector_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,15 +15,15 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/network"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket/network"
 )
 
 type mockConnection struct {
 	network.BaseConnection
-	sendFunc   func(ctx context.Context, data []byte) error
-	closeFunc  func() error
-	setKeyFunc func(key []byte) bool
+	sendFunc      func(ctx context.Context, data []byte) error
+	closeFunc     func() error
+	setCipherFunc func(c network.Cipher) bool
 
 	msgChan    chan network.NetMessage
 	errChan    chan error
@@ -40,7 +41,7 @@ func newMockConnection() *mockConnection {
 func (m *mockConnection) Send(ctx context.Context, data []byte) error { return m.sendFunc(ctx, data) }
 func (m *mockConnection) Close() error                                { return m.closeFunc() }
 func (m *mockConnection) Name() string                                { return "mock" }
-func (m *mockConnection) SetEncryptionKey(key []byte) bool            { return m.setKeyFunc(key) }
+func (m *mockConnection) SetCipher(c network.Cipher) bool             { return m.setCipherFunc(c) }
 func (m *mockConnection) Messages() <-chan network.NetMessage         { return m.msgChan }
 func (m *mockConnection) Errors() <-chan error                        { return m.errChan }
 func (m *mockConnection) Closed() <-chan struct{}                     { return m.closedChan }
@@ -57,7 +58,7 @@ func TestConnector_Connect(t *testing.T) {
 		var conn *mockConnection
 
 		dialers := map[string]connector.Dialer{
-			"mock": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+			"mock": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 				if conn == nil {
 					conn = newMockConnection()
 					conn.closeFunc = func() error { return nil }
@@ -92,7 +93,7 @@ func TestConnector_Connect(t *testing.T) {
 
 	t.Run("Dialer Error", func(t *testing.T) {
 		dialers := map[string]connector.Dialer{
-			"fail": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+			"fail": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 				return nil, errors.New("dial failed")
 			},
 		}
@@ -107,7 +108,7 @@ func TestConnector_Connect(t *testing.T) {
 	t.Run("Concurrent Connection Attempt", func(t *testing.T) {
 		start := make(chan struct{})
 		dialers := map[string]connector.Dialer{
-			"slow": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+			"slow": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 				<-start
 				return newMockConnection(), nil
 			},
@@ -140,7 +141,7 @@ func TestConnector_Send(t *testing.T) {
 	var conn *mockConnection
 
 	dialers := map[string]connector.Dialer{
-		"mock": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 			if conn == nil {
 				conn = newMockConnection()
 				conn.sendFunc = func(ctx context.Context, data []byte) error {
@@ -163,16 +164,16 @@ func TestConnector_Send(t *testing.T) {
 }
 
 func TestConnector_Encryption(t *testing.T) {
-	keyReceived := atomic.Pointer[[]byte]{}
+	cipherReceived := atomic.Pointer[network.Cipher]{}
 
 	var conn *mockConnection
 
 	dialers := map[string]connector.Dialer{
-		"mock": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 			if conn == nil {
 				conn = newMockConnection()
-				conn.setKeyFunc = func(key []byte) bool {
-					keyReceived.Store(&key)
+				conn.setCipherFunc = func(c network.Cipher) bool {
+					cipherReceived.Store(&c)
 					return true
 				}
 			}
@@ -187,7 +188,7 @@ func TestConnector_Encryption(t *testing.T) {
 
 	ok := c.SetEncryptionKey([]byte("secret"))
 	assert.True(t, ok)
-	assert.Equal(t, []byte("secret"), *keyReceived.Load())
+	assert.NotNil(t, cipherReceived.Load())
 }
 
 func TestConnector_ReconnectLoop(t *testing.T) {
@@ -195,7 +196,7 @@ func TestConnector_ReconnectLoop(t *testing.T) {
 		dialCount := atomic.Int32{}
 
 		dialers := map[string]connector.Dialer{
-			"fail": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+			"fail": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 				dialCount.Add(1)
 				return nil, errors.New("perma-fail")
 			},

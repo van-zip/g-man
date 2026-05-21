@@ -7,11 +7,11 @@ package network
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -19,13 +19,10 @@ import (
 
 	"golang.org/x/net/proxy"
 
-	"github.com/lemon4ksan/g-man/pkg/crypto"
 	"github.com/lemon4ksan/g-man/pkg/log"
 )
 
 const (
-	// Magic are the 4 bytes that prefix every Steam TCP packet header.
-	Magic = "VT01"
 	// ReadTimeout is the maximum duration to wait for data before closing the connection.
 	ReadTimeout = 60 * time.Second
 	// WriteTimeout is the default duration to wait for a write to complete.
@@ -38,24 +35,36 @@ var (
 	_ Encryptable = (*TCP)(nil)
 )
 
-// TCP implements the Connection interface for Steam's custom TCP protocol.
-// It handles length-prefixed message framing and optional symmetric encryption.
+// TCP implements the Connection interface for stream-oriented protocols.
+// It relies on a Framer to extract discrete messages from the byte stream,
+// and optionally uses a Cipher for encryption.
 type TCP struct {
 	BaseConnection
 	conn   net.Conn
 	logger log.Logger
+	framer Framer
 
 	msgChan    chan NetMessage
 	errChan    chan error
 	closedChan chan struct{}
 
-	writeMu    sync.Mutex   // Ensures atomic writes of header + payload.
-	keyMu      sync.RWMutex // Protects sessionKey for concurrent reads/writes.
-	sessionKey []byte
+	writeMu sync.Mutex   // Ensures atomic writes.
+	keyMu   sync.RWMutex // Protects cipher for concurrent reads/writes.
+	cipher  Cipher
 }
 
 // NewTCP establishes a TCP connection to the given endpoint and starts its read loop.
-func NewTCP(ctx context.Context, logger log.Logger, endpoint, proxyURL string) (*TCP, error) {
+func NewTCP(
+	ctx context.Context,
+	logger log.Logger,
+	endpoint, proxyURL string,
+	_ http.Header,
+	framer Framer,
+) (*TCP, error) {
+	if framer == nil {
+		return nil, errors.New("tcp: framer cannot be nil")
+	}
+
 	var conn net.Conn
 
 	if proxyURL != "" {
@@ -95,6 +104,7 @@ func NewTCP(ctx context.Context, logger log.Logger, endpoint, proxyURL string) (
 		BaseConnection: NewBaseConnection("TCP"),
 		conn:           conn,
 		logger:         logger.With(log.String("transport", "TCP"), log.String("endpoint", endpoint)),
+		framer:         framer,
 		msgChan:        make(chan NetMessage, 100),
 		errChan:        make(chan error, 10),
 		closedChan:     make(chan struct{}),
@@ -117,42 +127,33 @@ func (t *TCP) Errors() <-chan error { return t.errChan }
 // Closed returns the connection closure channel.
 func (t *TCP) Closed() <-chan struct{} { return t.closedChan }
 
-// SetEncryptionKey enables symmetric encryption for all subsequent messages.
-func (t *TCP) SetEncryptionKey(key []byte) bool {
+// SetCipher enables symmetric encryption for all subsequent messages.
+func (t *TCP) SetCipher(c Cipher) bool {
 	t.keyMu.Lock()
-	t.sessionKey = key
+	t.cipher = c
 	t.keyMu.Unlock()
 	t.logger.Debug("Encryption enabled")
 
 	return true
 }
 
-// Send encrypts (if a key is set) and frames the data before sending it over the TCP socket.
-// The frame format is: [4-byte length][4-byte magic][payload].
+// Send encrypts (if a cipher is set) and frames the data before sending it over the TCP socket.
 func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	t.keyMu.RLock()
-	key := t.sessionKey
+	cipher := t.cipher
 	t.keyMu.RUnlock()
 
 	var err error
-	if key != nil {
-		data, err = crypto.SymmetricEncryptWithHmacIv(data, key)
+	if cipher != nil {
+		data, err = cipher.Encrypt(data)
 		if err != nil {
 			return fmt.Errorf("tcp: encrypt failed: %w", err)
 		}
 	}
-
-	if len(data) > 10*1024*1024 {
-		return errors.New("tcp: data exceeds maximum packet size")
-	}
-
-	var header [8]byte
-	binary.LittleEndian.PutUint32(header[0:4], uint32(len(data)))
-	copy(header[4:8], Magic)
 
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
@@ -167,10 +168,8 @@ func (t *TCP) Send(ctx context.Context, data []byte) error {
 		}
 	}
 
-	// Use net.Buffers for a "gather write", which is more efficient than two separate writes.
-	buffers := net.Buffers{header[:], data}
-	if _, err := buffers.WriteTo(t.conn); err != nil {
-		return err
+	if err := t.framer.WriteFrame(t.conn, data); err != nil {
+		return fmt.Errorf("tcp: write frame failed: %w", err)
 	}
 
 	return nil
@@ -196,8 +195,6 @@ func (t *TCP) readLoop() {
 
 	reader := bufio.NewReaderSize(t.conn, 64*1024)
 
-	var header [8]byte
-
 	for {
 		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
 			if !isIgnorableError(err) {
@@ -210,8 +207,8 @@ func (t *TCP) readLoop() {
 			return
 		}
 
-		// Read the fixed-size header first.
-		if _, err := io.ReadFull(reader, header[:]); err != nil {
+		payload, err := t.framer.ReadFrame(reader)
+		if err != nil {
 			if !isIgnorableError(err) {
 				select {
 				case t.errChan <- err:
@@ -222,44 +219,12 @@ func (t *TCP) readLoop() {
 			return
 		}
 
-		if string(header[4:8]) != Magic {
-			select {
-			case t.errChan <- errors.New("tcp: invalid magic bytes"):
-			default:
-			}
-
-			return
-		}
-
-		length := binary.LittleEndian.Uint32(header[0:4])
-		if length > 10*1024*1024 { // 10MB sanity limit
-			select {
-			case t.errChan <- fmt.Errorf("tcp: packet too large (%d bytes)", length):
-			default:
-			}
-
-			return
-		}
-
-		// Read the variable-length payload.
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			select {
-			case t.errChan <- err:
-			default:
-			}
-
-			return
-		}
-
 		t.keyMu.RLock()
-		key := t.sessionKey
+		cipher := t.cipher
 		t.keyMu.RUnlock()
 
-		if key != nil {
-			var err error
-
-			payload, err = crypto.SymmetricDecrypt(payload, key, true)
+		if cipher != nil {
+			payload, err = cipher.Decrypt(payload)
 			if err != nil {
 				select {
 				case t.errChan <- fmt.Errorf("tcp: decrypt failed: %w", err):

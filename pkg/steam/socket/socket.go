@@ -214,6 +214,10 @@ func (s *Socket) SendSync(ctx context.Context, build PayloadBuilder, opts ...Sen
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case res := <-resCh:
+		if errors.Is(res.err, jobs.ErrJobCancelled) {
+			return nil, ctx.Err()
+		}
+
 		return res.pkt, res.err
 	}
 }

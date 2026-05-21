@@ -18,8 +18,8 @@ import (
 	"sync"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/network"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket/network"
 )
 
 // Dispatcher defines the interface for routing parsed packets.

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,10 +18,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/network"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket/network"
 )
 
 type mockConnection struct {
@@ -61,7 +62,7 @@ func setupMockSocket(t *testing.T) (*Socket, *mockConnection) {
 	mConn := newMockConnection()
 	cfg := DefaultConfig()
 	cfg.Connector.Dialers = map[string]connector.Dialer{
-		"mock": func(ctx context.Context, l log.Logger, ep, _ string) (network.Connection, error) {
+		"mock": func(ctx context.Context, l log.Logger, ep, _ string, _ http.Header) (network.Connection, error) {
 			return mConn, nil
 		},
 	}

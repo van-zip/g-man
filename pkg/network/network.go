@@ -6,6 +6,7 @@ package network
 
 import (
 	"context"
+	"io"
 	"sync/atomic"
 )
 
@@ -15,6 +16,20 @@ var globalConnectionID atomic.Int64
 // NetMessage represents a complete, raw binary message received from the network.
 // It is a slice of bytes that a Handler can process.
 type NetMessage []byte
+
+// Cipher defines an interface for symmetric encryption and decryption.
+// It abstracts the cryptographic implementation from the transport layer.
+type Cipher interface {
+	Encrypt(data []byte) ([]byte, error)
+	Decrypt(data []byte) ([]byte, error)
+}
+
+// Framer defines an interface for reading and writing discrete frames
+// over a stream-oriented connection like TCP.
+type Framer interface {
+	ReadFrame(r io.Reader) ([]byte, error)
+	WriteFrame(w io.Writer, data []byte) error
+}
 
 // Connection defines the standard interface that all network connection types must implement.
 // It provides methods for sending data, closing the connection, and event notification via channels.
@@ -54,9 +69,9 @@ type Connection interface {
 // Encryptable is an optional interface that connections can implement to support
 // session-based symmetric encryption.
 type Encryptable interface {
-	// SetEncryptionKey provides the connection with the secret key used to
-	// encrypt outgoing messages and decrypt incoming ones.
-	SetEncryptionKey(key []byte) bool
+	// SetCipher provides the connection with a Cipher implementation
+	// used to encrypt outgoing messages and decrypt incoming ones.
+	SetCipher(cipher Cipher) bool
 }
 
 // BaseConnection provides common functionality and state shared by all connection implementations.

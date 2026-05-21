@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,12 +38,28 @@ type WS struct {
 }
 
 // NewWS establishes a WebSocket connection using the provided context.
+// If endpoint does not contain a scheme, it defaults to wss://.
 func NewWS(
 	ctx context.Context,
 	logger log.Logger,
 	endpoint, proxyURL string,
+	headers http.Header,
 ) (*WS, error) {
-	u := url.URL{Scheme: "wss", Host: endpoint, Path: "/cmsocket/"}
+	if !strings.Contains(endpoint, "://") {
+		endpoint = "wss://" + endpoint
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("ws: invalid endpoint URL: %w", err)
+	}
+
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
 
 	dialer := &websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
@@ -58,7 +75,7 @@ func NewWS(
 		dialer.Proxy = http.ProxyURL(pu)
 	}
 
-	conn, resp, err := dialer.DialContext(ctx, u.String(), nil)
+	conn, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if resp != nil {
 		_ = resp.Body.Close()
 	}

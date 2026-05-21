@@ -22,7 +22,7 @@ import (
 
 func TestWS_NewWS(t *testing.T) {
 	// Attempt to dial a bad endpoint
-	_, err := NewWS(context.Background(), log.Discard, "invalid:80", "")
+	_, err := NewWS(context.Background(), log.Discard, "invalid:80", "", nil)
 	assert.Error(t, err)
 }
 
@@ -89,8 +89,34 @@ func TestWS_ReadLoop(t *testing.T) {
 
 	t.Run("NewWS Handshake Failure", func(t *testing.T) {
 		// This hits the error branch in NewWS
-		_, err := NewWS(context.Background(), log.Discard, "localhost:1", "")
+		_, err := NewWS(context.Background(), log.Discard, "localhost:1", "", nil)
 		assert.Error(t, err)
+	})
+
+	t.Run("Headers are sent", func(t *testing.T) {
+		headerKey := "X-Test-Header"
+		headerVal := "G-MAN-TEST"
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, headerVal, r.Header.Get(headerKey))
+
+			upgrader := websocket.Upgrader{}
+
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err == nil {
+				_ = conn.Close()
+			}
+		}))
+		defer server.Close()
+
+		headers := make(http.Header)
+		headers.Set(headerKey, headerVal)
+
+		// Use the flexible NewWS that now supports ws:// via prefix
+		ws, err := NewWS(context.Background(), log.Discard, server.URL, "", headers)
+		require.NoError(t, err)
+
+		_ = ws.Close()
 	})
 }
 

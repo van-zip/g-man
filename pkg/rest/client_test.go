@@ -14,6 +14,9 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testPayload struct {
@@ -266,6 +269,48 @@ func TestClient_DeleteJSON_NilPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteJSON failed: %v", err)
 	}
+}
+
+// Improved generic response for testing
+type apiResponse struct {
+	Status   string `json:"status"`
+	Data     any    `json:"data"`
+	ErrorMsg string `json:"error,omitempty"`
+}
+
+func (a *apiResponse) IsSuccess() bool  { return a.Status == "success" }
+func (a *apiResponse) Error() error     { return errors.New(a.ErrorMsg) }
+func (a *apiResponse) SetData(data any) { a.Data = data }
+
+func TestClient_BaseResponse(t *testing.T) {
+	t.Run("Success response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"status": "success", "data": {"message": "unwrapped"}}`))
+		}))
+		defer server.Close()
+
+		client := NewClient(nil).
+			WithBaseURL(server.URL).
+			WithBaseResponse(func() BaseResponse { return &apiResponse{} })
+
+		result, err := GetJSON[testPayload](context.Background(), client, "/wrapped", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "unwrapped", result.Message)
+	})
+
+	t.Run("Error response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"status": "fail", "error": "something went wrong"}`))
+		}))
+		defer server.Close()
+
+		client := NewClient(nil).
+			WithBaseURL(server.URL).
+			WithBaseResponse(func() BaseResponse { return &apiResponse{} })
+
+		_, err := GetJSON[testPayload](context.Background(), client, "/error", nil)
+		assert.ErrorContains(t, err, "something went wrong")
+	})
 }
 
 func contains(s, substr string) bool {

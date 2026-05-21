@@ -65,16 +65,41 @@ type Requester interface {
 	) (*http.Response, error)
 }
 
+// BaseResponseProvider is an optional interface that a Requester can implement
+// to provide a BaseResponse wrapper for JSON requests.
+type BaseResponseProvider interface {
+	BaseResponse() BaseResponse
+}
+
 // RequestModifier is a function that can modify an *http.Request before it is sent.
 // This is used for adding one-off headers, authentication tokens, or logging.
 type RequestModifier func(req *http.Request)
 
+// BaseResponse is an interface for response wrappers that include
+// status information and a data payload.
+//
+// If a Client is configured with a BaseResponse provider, it will
+// automatically unwrap the response and check for success.
+type BaseResponse interface {
+	// IsSuccess returns true if the response indicates a successful operation,
+	// even if the HTTP status code is 200.
+	IsSuccess() bool
+
+	// Error returns an error if IsSuccess is false.
+	Error() error
+
+	// SetData provides a pointer where the data payload should be decoded.
+	// This is called by the client before unmarshaling the JSON body.
+	SetData(data any)
+}
+
 // Client is a concrete implementation of the Requester interface.
 // It maintains a base URL and a set of default headers applied to every request.
 type Client struct {
-	http    HTTPDoer
-	baseURL *url.URL
-	headers http.Header
+	http         HTTPDoer
+	baseURL      *url.URL
+	headers      http.Header
+	baseResponse func() BaseResponse
 }
 
 // NewClient initializes a REST client.
@@ -91,15 +116,29 @@ func NewClient(httpClient HTTPDoer) *Client {
 	}
 }
 
+// WithBaseResponse returns a new Client instance that uses the provided
+// function to create a BaseResponse wrapper for every JSON request.
+func (c *Client) WithBaseResponse(provider func() BaseResponse) *Client {
+	newClient := &Client{
+		http:         c.http,
+		baseURL:      c.baseURL,
+		headers:      c.headers.Clone(),
+		baseResponse: provider,
+	}
+
+	return newClient
+}
+
 // WithBaseURL returns a new Client instance with the specified base URL.
 // It ensures the base URL has exactly one trailing slash to make
 // url.ResolveReference work correctly with relative paths.
 func (c *Client) WithBaseURL(raw string) *Client {
 	if raw == "" {
 		return &Client{
-			http:    c.http,
-			baseURL: &url.URL{},
-			headers: c.headers.Clone(),
+			http:         c.http,
+			baseURL:      &url.URL{},
+			headers:      c.headers.Clone(),
+			baseResponse: c.baseResponse,
 		}
 	}
 
@@ -110,9 +149,10 @@ func (c *Client) WithBaseURL(raw string) *Client {
 	baseURL, _ := url.Parse(raw)
 
 	return &Client{
-		http:    c.http,
-		baseURL: baseURL,
-		headers: c.headers.Clone(),
+		http:         c.http,
+		baseURL:      baseURL,
+		headers:      c.headers.Clone(),
+		baseResponse: c.baseResponse,
 	}
 }
 
@@ -120,13 +160,23 @@ func (c *Client) WithBaseURL(raw string) *Client {
 // This follows the immutable/chaining pattern.
 func (c *Client) WithHeader(key, value string) *Client {
 	newClient := &Client{
-		http:    c.http,
-		baseURL: c.baseURL,
-		headers: c.headers.Clone(),
+		http:         c.http,
+		baseURL:      c.baseURL,
+		headers:      c.headers.Clone(),
+		baseResponse: c.baseResponse,
 	}
 	newClient.headers.Set(key, value)
 
 	return newClient
+}
+
+// BaseResponse returns a new BaseResponse wrapper if a provider is configured.
+func (c *Client) BaseResponse() BaseResponse {
+	if c.baseResponse == nil {
+		return nil
+	}
+
+	return c.baseResponse()
 }
 
 // HTTP returns the underlying [HTTPDoer].
@@ -198,7 +248,7 @@ func GetJSON[Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result); err != nil {
+	if err := handleJSONResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -234,7 +284,7 @@ func PostJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result); err != nil {
+	if err := handleJSONResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -270,7 +320,7 @@ func PatchJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result); err != nil {
+	if err := handleJSONResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -313,7 +363,7 @@ func DeleteJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result); err != nil {
+	if err := handleJSONResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -321,7 +371,7 @@ func DeleteJSON[Req, Resp any](
 }
 
 // handleJSONResponse closes the body and handles status code validation.
-func handleJSONResponse(resp *http.Response, target any) error {
+func handleJSONResponse(resp *http.Response, target any, requester Requester) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -333,6 +383,22 @@ func handleJSONResponse(resp *http.Response, target any) error {
 	if target == nil || resp.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
+	}
+
+	if provider, ok := requester.(BaseResponseProvider); ok {
+		if br := provider.BaseResponse(); br != nil {
+			br.SetData(target)
+
+			if err := json.NewDecoder(resp.Body).Decode(br); err != nil {
+				return err
+			}
+
+			if !br.IsSuccess() {
+				return br.Error()
+			}
+
+			return nil
+		}
 	}
 
 	err := json.NewDecoder(resp.Body).Decode(target)

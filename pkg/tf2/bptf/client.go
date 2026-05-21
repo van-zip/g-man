@@ -21,7 +21,7 @@ type Client struct {
 func New(httpClient rest.HTTPDoer, apiKey, userToken string) *Client {
 	c := rest.NewClient(httpClient).
 		WithBaseURL("https://backpack.tf/api").
-		WithHeader("User-Agent", "G-man SDK/1.0")
+		WithUserAgent("G-man SDK/1.0")
 
 	if apiKey != "" {
 		c = c.WithHeader("X-Api-Key", apiKey)

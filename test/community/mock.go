@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package community provides a mock implementation of the community interface.
 package community
 
 import (
@@ -47,12 +48,22 @@ func (m *Mock) SessionID(baseURL string) string {
 func (m *Mock) Request(
 	ctx context.Context,
 	method, path string,
-	body []byte,
+	body any,
 	query any,
 	mods ...rest.RequestModifier,
 ) (*http.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	var bodyBytes []byte
+	switch b := body.(type) {
+	case io.Reader:
+		bodyBytes, _ = io.ReadAll(b)
+	case []byte:
+		bodyBytes = b
+	case string:
+		bodyBytes = []byte(b)
+	}
 
 	u, _ := url.Parse(community.BaseURL + path)
 
@@ -67,7 +78,7 @@ func (m *Mock) Request(
 
 	urlStr := u.String()
 
-	req, _ := http.NewRequestWithContext(ctx, method, urlStr, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, method, urlStr, bytes.NewReader(bodyBytes))
 	for _, mod := range mods {
 		mod(req)
 	}

@@ -163,7 +163,7 @@ type mockCommunity struct{ mock.Mock }
 func (m *mockCommunity) Request(
 	ctx context.Context,
 	method, path string,
-	body []byte,
+	body any,
 	query any,
 	mods ...rest.RequestModifier,
 ) (*http.Response, error) {

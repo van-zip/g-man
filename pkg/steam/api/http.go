@@ -89,31 +89,31 @@ func WithCustomRegistry(r *UnmarshalRegistry) CallOption {
 	}
 }
 
-// HttpTarget implements the transport.Target interface for basic HTTP calls.
-type HttpTarget struct {
-	HttpMethod string
-	URL        string
+// HTTPTarget implements the transport.Target interface for basic HTTP calls.
+type HTTPTarget struct {
+	Method string
+	URL    string
 }
 
 // String returns the underlying url.
-func (c HttpTarget) String() string { return c.URL }
+func (c HTTPTarget) String() string { return c.URL }
 
 // HTTPMethod returns the configured method or "GET" as a default.
-func (c HttpTarget) HTTPMethod() string {
-	if c.HttpMethod != "" {
-		return c.HttpMethod
+func (c HTTPTarget) HTTPMethod() string {
+	if c.Method != "" {
+		return c.Method
 	}
 
 	return "GET"
 }
 
 // HTTPPath extracts the path component from the URL.
-func (c HttpTarget) HTTPPath() string {
+func (c HTTPTarget) HTTPPath() string {
 	u, _ := url.Parse(c.URL)
 	return strings.TrimPrefix(u.Path, "/")
 }
 
-// NewHttpRequest creates a new transport request for a generic HTTP endpoint.
-func NewHttpRequest(httpMethod, url string, body []byte) *tr.Request {
-	return tr.NewRequest(HttpTarget{HttpMethod: httpMethod, URL: url}, body)
+// NewHTTPRequest creates a new transport request for a generic HTTP endpoint.
+func NewHTTPRequest(httpMethod, url string, body []byte) *tr.Request {
+	return tr.NewRequest(HTTPTarget{Method: httpMethod, URL: url}, body)
 }

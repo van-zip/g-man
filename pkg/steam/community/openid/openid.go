@@ -35,8 +35,6 @@ var (
 	ErrWrongHost = errors.New("openid: was not redirected to steamcommunity.com")
 )
 
-const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
 // Login performs an automated OpenID authorization flow on a third-party website
 // using active Steam session cookies.
 //
@@ -71,7 +69,7 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 		},
 	}
 
-	client := rest.NewClient(httpClient).WithHeader("User-Agent", defaultUserAgent)
+	client := rest.NewClient(httpClient)
 
 	// Hit the target site's login URL. This should redirect us to Steam's OpenID page.
 	resp, err := client.Request(ctx, http.MethodGet, targetURL, nil, nil)

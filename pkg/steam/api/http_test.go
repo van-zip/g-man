@@ -44,9 +44,9 @@ func TestCallOptions_Detailed(t *testing.T) {
 }
 
 func TestHttpTarget(t *testing.T) {
-	target := HttpTarget{
-		HttpMethod: "POST",
-		URL:        "https://steamcommunity.com/tradeoffer/new/",
+	target := HTTPTarget{
+		Method: "POST",
+		URL:    "https://steamcommunity.com/tradeoffer/new/",
 	}
 
 	if target.HTTPMethod() != "POST" {
@@ -59,7 +59,7 @@ func TestHttpTarget(t *testing.T) {
 	}
 
 	// Test default method
-	targetDefault := HttpTarget{URL: "http://test.com/path"}
+	targetDefault := HTTPTarget{URL: "http://test.com/path"}
 	if targetDefault.HTTPMethod() != "GET" {
 		t.Error("expected default method GET")
 	}
@@ -67,14 +67,14 @@ func TestHttpTarget(t *testing.T) {
 
 func TestHttpTarget_Methods(t *testing.T) {
 	t.Run("Default Method", func(t *testing.T) {
-		target := HttpTarget{URL: "http://test.com"}
+		target := HTTPTarget{URL: "http://test.com"}
 		if target.HTTPMethod() != "GET" {
 			t.Errorf("expected default GET, got %s", target.HTTPMethod())
 		}
 	})
 
 	t.Run("Custom Method", func(t *testing.T) {
-		target := HttpTarget{URL: "http://test.com", HttpMethod: "PATCH"}
+		target := HTTPTarget{URL: "http://test.com", Method: "PATCH"}
 		if target.HTTPMethod() != "PATCH" {
 			t.Errorf("expected PATCH, got %s", target.HTTPMethod())
 		}
@@ -83,7 +83,7 @@ func TestHttpTarget_Methods(t *testing.T) {
 	t.Run("String representation", func(t *testing.T) {
 		u := "http://example.com/api"
 
-		target := HttpTarget{URL: u}
+		target := HTTPTarget{URL: u}
 		if target.String() != u {
 			t.Errorf("expected %s, got %s", u, target.String())
 		}
@@ -101,7 +101,7 @@ func TestHttpTarget_Methods(t *testing.T) {
 		}
 
 		for _, tc := range tests {
-			target := HttpTarget{URL: tc.url}
+			target := HTTPTarget{URL: tc.url}
 			if target.HTTPPath() != tc.expected {
 				t.Errorf("url: %s, expected path: %s, got: %s", tc.url, tc.expected, target.HTTPPath())
 			}
@@ -114,19 +114,19 @@ func TestNewHttpRequest_Creation(t *testing.T) {
 	url := "http://steam.com/delete"
 	body := []byte("payload")
 
-	req := NewHttpRequest(method, url, body)
+	req := NewHTTPRequest(method, url, body)
 
 	if req == nil {
 		t.Fatal("request is nil")
 	}
 
-	target, ok := req.Target().(HttpTarget)
+	target, ok := req.Target().(HTTPTarget)
 	if !ok {
 		t.Fatal("target should be HttpTarget")
 	}
 
-	if target.HttpMethod != method {
-		t.Errorf("expected %s, got %s", method, target.HttpMethod)
+	if target.Method != method {
+		t.Errorf("expected %s, got %s", method, target.Method)
 	}
 
 	if string(req.Body()) != "payload" {

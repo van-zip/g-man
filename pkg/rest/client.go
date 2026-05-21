@@ -8,14 +8,40 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
+
+// UserAgent is a default User-Agent string used for HTTP requests.
+const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// DefaultClient is the shared client instance used by global helper functions.
+var DefaultClient = NewClient(nil)
+
+// Get performs a global GET request and decodes the JSON response body.
+func Get[Resp any](ctx context.Context, path string, query any, mods ...RequestModifier) (*Resp, error) {
+	return GetJSON[Resp](ctx, DefaultClient, path, query, mods...)
+}
+
+// Post performs a global POST request and decodes the JSON response body.
+func Post[Req, Resp any](
+	ctx context.Context,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	return PostJSON[Req, Resp](ctx, DefaultClient, path, payload, query, mods...)
+}
 
 // HTTPDoer is an interface for objects that can execute an [http.Request].
 // It is satisfied by [http.Client].
@@ -59,7 +85,7 @@ type Requester interface {
 	Request(
 		ctx context.Context,
 		method, path string,
-		body []byte,
+		body any,
 		query any,
 		mods ...RequestModifier,
 	) (*http.Response, error)
@@ -73,7 +99,26 @@ type BaseResponseProvider interface {
 
 type (
 	capturerCtxKey struct{}
+	decoderCtxKey  struct{}
 )
+
+// Decoder defines an interface for decoding response bodies.
+type Decoder interface {
+	Decode(r io.Reader, target any) error
+}
+
+// DecoderFunc is a function type that implements Decoder.
+type DecoderFunc func(r io.Reader, target any) error
+
+// Decode implements the Decoder interface for DecoderFunc.
+func (f DecoderFunc) Decode(r io.Reader, target any) error {
+	return f(r, target)
+}
+
+// JSONDecoder is the default decoder that uses encoding/json.
+var JSONDecoder Decoder = DecoderFunc(func(r io.Reader, target any) error {
+	return json.NewDecoder(r).Decode(target)
+})
 
 // RequestModifier is a function that can modify an *http.Request before it is sent.
 // This is used for adding one-off headers, authentication tokens, or logging.
@@ -106,6 +151,97 @@ func WithVars(pairs ...any) RequestModifier {
 			value := fmt.Sprint(pairs[i+1])
 			WithVar(key, value)(req)
 		}
+	}
+}
+
+// WithBearer adds a "Authorization: Bearer <token>" header.
+func WithBearer(token string) RequestModifier {
+	return func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
+// WithBasicAuth adds a "Authorization: Basic <base64>" header.
+func WithBasicAuth(username, password string) RequestModifier {
+	return func(req *http.Request) {
+		req.SetBasicAuth(username, password)
+	}
+}
+
+// WithUserAgent sets the "User-Agent" header.
+func WithUserAgent(ua string) RequestModifier {
+	return func(req *http.Request) {
+		req.Header.Set("User-Agent", ua)
+	}
+}
+
+// WithContentType sets the "Content-Type" header.
+func WithContentType(ct string) RequestModifier {
+	return func(req *http.Request) {
+		req.Header.Set("Content-Type", ct)
+	}
+}
+
+// WithCookie adds a cookie to the request.
+func WithCookie(c *http.Cookie) RequestModifier {
+	return func(req *http.Request) {
+		req.AddCookie(c)
+	}
+}
+
+// WithCookies adds multiple cookies to the request from a map.
+func WithCookies(kv map[string]string) RequestModifier {
+	return func(req *http.Request) {
+		for k, v := range kv {
+			req.AddCookie(&http.Cookie{Name: k, Value: v})
+		}
+	}
+}
+
+// WithBody overrides the request body with the provided io.Reader.
+func WithBody(r io.Reader) RequestModifier {
+	return func(req *http.Request) {
+		rc, ok := r.(io.ReadCloser)
+		if !ok && r != nil {
+			rc = io.NopCloser(r)
+		}
+
+		req.Body = rc
+
+		// Attempt to set Content-Length if it's a known size type
+		if r != nil {
+			if b, ok := r.(interface{ Len() int }); ok {
+				req.ContentLength = int64(b.Len())
+			} else if s, ok := r.(interface{ Len() int64 }); ok {
+				req.ContentLength = s.Len()
+			}
+		}
+	}
+}
+
+// WithOrigin sets the "Origin" header.
+func WithOrigin(origin string) RequestModifier {
+	return func(req *http.Request) {
+		req.Header.Set("Origin", origin)
+	}
+}
+
+type debugCtxKey struct{}
+
+// Debug returns a modifier that enables verbose logging for the request.
+// It prints the request and response (including headers and body) to stderr.
+func Debug() RequestModifier {
+	return func(req *http.Request) {
+		ctx := context.WithValue(req.Context(), debugCtxKey{}, true)
+		*req = *req.WithContext(ctx)
+	}
+}
+
+// WithDecoder sets the decoder to use for the response body.
+func WithDecoder(d Decoder) RequestModifier {
+	return func(req *http.Request) {
+		ctx := context.WithValue(req.Context(), decoderCtxKey{}, d)
+		*req = *req.WithContext(ctx)
 	}
 }
 
@@ -153,11 +289,11 @@ func NewClient(httpClient HTTPDoer) *Client {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
 
-	return &Client{
+	return (&Client{
 		http:    httpClient,
 		baseURL: &url.URL{},
 		headers: make(http.Header),
-	}
+	}).WithUserAgent(UserAgent)
 }
 
 // WithBaseResponse returns a new Client instance that uses the provided
@@ -214,6 +350,107 @@ func (c *Client) WithHeader(key, value string) *Client {
 	return newClient
 }
 
+// WithTimeout returns a new Client instance with the specified timeout.
+// This only works if the underlying HTTPDoer is an *http.Client.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	newClient := c.clone()
+	if httpClient, ok := newClient.http.(*http.Client); ok {
+		cloned := *httpClient
+		cloned.Timeout = d
+		newClient.http = &cloned
+	}
+
+	return newClient
+}
+
+// WithRedirectLimit returns a new Client instance with a custom redirect policy.
+// If max is 0, redirects are disabled. If max < 0, default Go behavior is used.
+func (c *Client) WithRedirectLimit(max int) *Client {
+	newClient := c.clone()
+	if httpClient, ok := newClient.http.(*http.Client); ok {
+		cloned := *httpClient
+		switch {
+		case max == 0:
+			cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+		case max > 0:
+			cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				if len(via) >= max {
+					return fmt.Errorf("stopped after %d redirects", max)
+				}
+
+				return nil
+			}
+
+		default:
+			cloned.CheckRedirect = nil
+		}
+
+		newClient.http = &cloned
+	}
+
+	return newClient
+}
+
+// WithLocalAddr returns a new Client instance bound to a specific local IP address.
+// This only works if the underlying HTTPDoer is an *http.Client with an *http.Transport.
+func (c *Client) WithLocalAddr(addr string) *Client {
+	newClient := c.clone()
+	if httpClient, ok := newClient.http.(*http.Client); ok {
+		if transport, ok := httpClient.Transport.(*http.Transport); ok {
+			clonedTransport := transport.Clone()
+
+			localAddr, err := net.ResolveIPAddr("ip", addr)
+			if err == nil {
+				clonedTransport.DialContext = (&net.Dialer{
+					LocalAddr: &net.TCPAddr{IP: localAddr.IP},
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext
+			}
+
+			clonedClient := *httpClient
+			clonedClient.Transport = clonedTransport
+			newClient.http = &clonedClient
+		}
+	}
+
+	return newClient
+}
+
+func (c *Client) clone() *Client {
+	return &Client{
+		http:         c.http,
+		baseURL:      c.baseURL,
+		headers:      c.headers.Clone(),
+		baseResponse: c.baseResponse,
+	}
+}
+
+// WithUserAgent returns a new Client instance with a custom User-Agent header.
+func (c *Client) WithUserAgent(ua string) *Client {
+	return c.WithHeader("User-Agent", ua)
+}
+
+// WithOrigin returns a new Client instance with a custom Origin header.
+func (c *Client) WithOrigin(origin string) *Client {
+	return c.WithHeader("Origin", origin)
+}
+
+// WithCookieJar returns a new Client instance with the specified cookie jar.
+// This only works if the underlying HTTPDoer is an *http.Client.
+func (c *Client) WithCookieJar(jar http.CookieJar) *Client {
+	newClient := c.clone()
+	if httpClient, ok := newClient.http.(*http.Client); ok {
+		cloned := *httpClient
+		cloned.Jar = jar
+		newClient.http = &cloned
+	}
+
+	return newClient
+}
+
 // BaseResponse returns a new BaseResponse wrapper if a provider is configured.
 func (c *Client) BaseResponse() BaseResponse {
 	if c.baseResponse == nil {
@@ -233,7 +470,7 @@ func (c *Client) HTTP() HTTPDoer {
 func (c *Client) Request(
 	ctx context.Context,
 	method, path string,
-	body []byte,
+	body any,
 	query any,
 	mods ...RequestModifier,
 ) (*http.Response, error) {
@@ -258,8 +495,17 @@ func (c *Client) Request(
 	}
 
 	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
+	switch b := body.(type) {
+	case io.Reader:
+		bodyReader = b
+	case []byte:
+		if len(b) > 0 {
+			bodyReader = bytes.NewReader(b)
+		}
+	case string:
+		if len(b) > 0 {
+			bodyReader = strings.NewReader(b)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bodyReader)
@@ -296,7 +542,44 @@ func GetJSON[Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result, c); err != nil {
+	if err := handleResponse(resp, result, c); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// PostForm marshals the payload to URL values, performs a POST request with
+// application/x-www-form-urlencoded content type, and decodes the response body into Resp.
+func PostForm[Req, Resp any](
+	ctx context.Context,
+	c Requester,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	if err := Validate(payload); err != nil {
+		return nil, err
+	}
+
+	formValues, err := StructToValues(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	formMod := func(req *http.Request) {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	mods = append([]RequestModifier{formMod}, mods...)
+
+	resp, err := c.Request(ctx, http.MethodPost, path, []byte(formValues.Encode()), query, mods...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := new(Resp)
+	if err := handleResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -336,7 +619,7 @@ func PostJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result, c); err != nil {
+	if err := handleResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -376,7 +659,7 @@ func PatchJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result, c); err != nil {
+	if err := handleResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
@@ -423,17 +706,32 @@ func DeleteJSON[Req, Resp any](
 	}
 
 	result := new(Resp)
-	if err := handleJSONResponse(resp, result, c); err != nil {
+	if err := handleResponse(resp, result, c); err != nil {
 		return nil, err
 	}
 
 	return result, nil
 }
 
-// handleJSONResponse closes the body and handles status code validation.
-func handleJSONResponse(resp *http.Response, target any, requester Requester) error {
-	if targetPtr, ok := resp.Request.Context().Value(capturerCtxKey{}).(**http.Response); ok {
-		*targetPtr = resp
+// handleResponse closes the body and handles status code validation.
+func handleResponse(resp *http.Response, target any, requester Requester) error {
+	if resp == nil {
+		return errors.New("rest: response is nil")
+	}
+
+	if resp.Request != nil && resp.Request.Context().Value(debugCtxKey{}) != nil {
+		reqDump, _ := httputil.DumpRequestOut(resp.Request, true)
+		respDump, _ := httputil.DumpResponse(resp, true)
+
+		fmt.Fprintf(os.Stderr, "\n--- HTTP DEBUG ---\n%s\n%s\n------------------\n", string(reqDump), string(respDump))
+	}
+
+	if resp.Request != nil {
+		if targetPtr, ok := resp.Request.Context().Value(capturerCtxKey{}).(**http.Response); ok {
+			*targetPtr = resp
+		} else {
+			defer resp.Body.Close()
+		}
 	} else {
 		defer resp.Body.Close()
 	}
@@ -449,11 +747,19 @@ func handleJSONResponse(resp *http.Response, target any, requester Requester) er
 		return nil
 	}
 
+	// Determine which decoder to use
+	decoder := JSONDecoder
+	if resp.Request != nil {
+		if d, ok := resp.Request.Context().Value(decoderCtxKey{}).(Decoder); ok {
+			decoder = d
+		}
+	}
+
 	if provider, ok := requester.(BaseResponseProvider); ok {
 		if br := provider.BaseResponse(); br != nil {
 			br.SetData(target)
 
-			if err := json.NewDecoder(resp.Body).Decode(br); err != nil {
+			if err := decoder.Decode(resp.Body, br); err != nil {
 				return err
 			}
 
@@ -465,8 +771,8 @@ func handleJSONResponse(resp *http.Response, target any, requester Requester) er
 		}
 	}
 
-	err := json.NewDecoder(resp.Body).Decode(target)
-	if err == io.EOF {
+	err := decoder.Decode(resp.Body, target)
+	if errors.Is(err, io.EOF) {
 		return nil // Success with empty body
 	}
 

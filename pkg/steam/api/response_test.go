@@ -9,24 +9,26 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
 type mockTarget struct {
 	URL        string
-	HttpMethod string
+	HTTPMethod string
 	Version    int
 }
 
 func (m *mockTarget) String() string         { return m.URL }
-func (m *mockTarget) SetHTTPMethod(s string) { m.HttpMethod = s }
+func (m *mockTarget) SetHTTPMethod(s string) { m.HTTPMethod = s }
 func (m *mockTarget) SetVersion(v int)       { m.Version = v }
 
 func UnmarshalResponse(data []byte, target any, format ResponseFormat) error {
@@ -200,7 +202,7 @@ func TestCallOptions(t *testing.T) {
 	t.Run("WithHTTPMethod", func(t *testing.T) {
 		WithHTTPMethod("PUT")(req, cfg)
 
-		if target.HttpMethod != "PUT" {
+		if target.HTTPMethod != "PUT" {
 			t.Error("WithHTTPMethod failed")
 		}
 	})
@@ -281,9 +283,9 @@ func TestErrorStructures(t *testing.T) {
 }
 
 func TestNewHttpRequest(t *testing.T) {
-	req := NewHttpRequest("POST", "http://example.com/api", []byte("body"))
+	req := NewHTTPRequest("POST", "http://example.com/api", []byte("body"))
 
-	target, ok := req.Target().(HttpTarget)
+	target, ok := req.Target().(HTTPTarget)
 	if !ok {
 		t.Fatal("target is not HttpTarget")
 	}
@@ -313,7 +315,7 @@ func TestUnmarshalVDFText_Invalid(t *testing.T) {
 }
 
 func TestOptions_NonCompatibleTarget(t *testing.T) {
-	req := NewHttpRequest("GET", "http://a.b", nil)
+	req := NewHTTPRequest("GET", "http://a.b", nil)
 
 	WithVersion(2)(req, &CallConfig{})
 	WithHTTPMethod("POST")(req, &CallConfig{})
@@ -404,11 +406,13 @@ func TestUnmarshalRegistry(t *testing.T) {
 
 	t.Run("Custom Registration", func(t *testing.T) {
 		customFormat := ResponseFormat(100)
-		r.Register(customFormat, func(data []byte, target any) error {
+		r.Register(customFormat, rest.DecoderFunc(func(r io.Reader, target any) error {
+			data, _ := io.ReadAll(r)
 			ptr := target.(*string)
 			*ptr = "custom_" + string(data)
+
 			return nil
-		})
+		}))
 
 		var res string
 

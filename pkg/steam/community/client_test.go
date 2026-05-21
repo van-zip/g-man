@@ -110,7 +110,7 @@ func TestClient_Request(t *testing.T) {
 
 	t.Run("Success", func(t *testing.T) {
 		mock := requester.New()
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
@@ -131,7 +131,7 @@ func TestClient_Request(t *testing.T) {
 	t.Run("Underlying Client Error", func(t *testing.T) {
 		mock := requester.New()
 		expectedErr := errors.New("network failure")
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, expectedErr
 		}
 		client := community.NewClient(nil, nil, community.WithREST(mock))
@@ -143,7 +143,7 @@ func TestClient_Request(t *testing.T) {
 
 	t.Run("Response Body Read Error", func(t *testing.T) {
 		mock := requester.New()
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(faultyReader{}),
@@ -265,7 +265,7 @@ func TestClient_Request(t *testing.T) {
 			mock := requester.New()
 			// The SUT reads and closes the body, so we need to ensure the mock can provide it again if needed.
 			bodyBytes, _ := io.ReadAll(tt.response.Body)
-			mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+			mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 				tt.response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 				return tt.response, nil
 			}
@@ -291,7 +291,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 		htmlWithKey := `<div><p>Key: 1234567890ABCDEF1234567890ABCDEF</p></div>`
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			require.Equal(t, http.MethodGet, method)
 			require.Equal(t, "dev/apikey", path)
 
@@ -314,7 +314,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		htmlWithKey := `<div>Key: FEDCBA0987654321FEDCBA0987654321</div>`
 		callCount := 0
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			callCount++
 			switch callCount {
 			case 1: // First GET to fetch the form
@@ -330,7 +330,14 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 				assert.Equal(t, http.MethodPost, method)
 				assert.Equal(t, "dev/registerkey", path)
 
-				vals, _ := url.ParseQuery(string(body))
+				var bodyStr string
+				if b, ok := body.([]byte); ok {
+					bodyStr = string(b)
+				} else {
+					bodyStr = body.(string)
+				}
+
+				vals, _ := url.ParseQuery(bodyStr)
 				assert.Equal(t, "custom.com", vals.Get("domain"))
 				assert.Equal(t, "agreed", vals.Get("agreeToTerms"))
 				assert.Equal(t, "mock_session_id", vals.Get("sessionid"))
@@ -361,7 +368,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		client := community.NewClient(nil, mock.SessionID, community.WithREST(mock), community.WithLogger(log.Discard))
 
 		callCount := 0
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			callCount++
 
 			// 1. First GET: Return form to trigger registration
@@ -374,8 +381,16 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 
 			// 2. The POST: Validate domain and return success
 			if method == http.MethodPost {
-				vals, _ := url.ParseQuery(string(body))
+				var bodyStr string
+				if b, ok := body.([]byte); ok {
+					bodyStr = string(b)
+				} else {
+					bodyStr = body.(string)
+				}
+
+				vals, _ := url.ParseQuery(bodyStr)
 				assert.Equal(t, "localhost", vals.Get("domain"))
+
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
 			}
 
@@ -395,7 +410,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		mock := requester.New()
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 		expectedErr := errors.New("network error")
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, expectedErr
 		}
 
@@ -409,7 +424,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		client := community.NewClient(nil, nil, community.WithREST(mock), community.WithLogger(log.Discard))
 		expectedErr := errors.New("post failed")
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			if method == http.MethodGet {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -430,7 +445,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 		htmlWithoutKeyOrForm := `<html><body><p>Your account is limited.</p></body></html>`
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(htmlWithoutKeyOrForm)),
@@ -450,7 +465,7 @@ func TestGet(t *testing.T) {
 	respBody, _ := json.Marshal(genericResponse{Success: true, Message: "OK"})
 
 	t.Run("Success", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
 		resp, err := community.Get[genericResponse](ctx, client, "/test/get", genericRequest{Param1: "hi", Param2: 1})
@@ -465,7 +480,7 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("Unmarshal Error", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(`{"success": "not-a-bool"}`)),
@@ -484,7 +499,7 @@ func TestGetHTML(t *testing.T) {
 
 	t.Run("Success", func(t *testing.T) {
 		html := "<html><body>Test</body></html>"
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(html))}, nil
 		}
 		resp, err := community.GetHTML(ctx, client, "/test/html")
@@ -494,7 +509,7 @@ func TestGetHTML(t *testing.T) {
 
 	t.Run("Request Fails", func(t *testing.T) {
 		expectedErr := errors.New("network error")
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, expectedErr
 		}
 		_, err := community.GetHTML(ctx, client, "/test/html")
@@ -503,7 +518,7 @@ func TestGetHTML(t *testing.T) {
 	})
 
 	t.Run("Body Read Fails", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(faultyReader{})}, nil
 		}
 		_, err := community.GetHTML(ctx, client, "/test/html")
@@ -519,8 +534,15 @@ func TestPostForm(t *testing.T) {
 	respBody, _ := json.Marshal(genericResponse{Success: true})
 
 	t.Run("Success with Request Struct", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
-			vals, err := url.ParseQuery(string(body))
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
+			var bodyStr string
+			if b, ok := body.([]byte); ok {
+				bodyStr = string(b)
+			} else {
+				bodyStr = body.(string)
+			}
+
+			vals, err := url.ParseQuery(bodyStr)
 			require.NoError(t, err)
 			assert.Equal(t, "data", vals.Get("param1"))
 			assert.Equal(t, "42", vals.Get("param2"))
@@ -534,8 +556,15 @@ func TestPostForm(t *testing.T) {
 	})
 
 	t.Run("Success without Request Struct", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
-			vals, err := url.ParseQuery(string(body))
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
+			var bodyStr string
+			if b, ok := body.([]byte); ok {
+				bodyStr = string(b)
+			} else {
+				bodyStr = body.(string)
+			}
+
+			vals, err := url.ParseQuery(bodyStr)
 			require.NoError(t, err)
 			assert.Equal(t, "mock_session_id", vals.Get("sessionid"))
 
@@ -558,10 +587,10 @@ func TestPostJSON(t *testing.T) {
 	respBody, _ := json.Marshal(genericResponse{Success: true})
 
 	t.Run("Success", func(t *testing.T) {
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			var reqData genericRequest
 
-			err := json.Unmarshal(body, &reqData)
+			err := json.Unmarshal(body.([]byte), &reqData)
 			require.NoError(t, err)
 			assert.Equal(t, "data", reqData.Param1)
 			assert.Equal(t, 42, reqData.Param2)
@@ -603,7 +632,7 @@ func TestPerformRequest(t *testing.T) {
 	t.Run("Registry Fallback", func(t *testing.T) {
 		// Define a requester that doesn't implement the registryProvider interface
 		mock := requester.New()
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success": true}`))}, nil
 		}
 		req := customRequester{Requester: mock}

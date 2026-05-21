@@ -28,8 +28,8 @@ type Client struct {
 // If httpClient is nil, a default robust client is created.
 func NewClient(httpClient rest.HTTPDoer) *Client {
 	return &Client{
-		restClient: rest.NewClient(httpClient).WithBaseURL(BaseURL).WithHeader("User-Agent", "G-man Bot/1.0"),
-		skuClient:  rest.NewClient(httpClient).WithBaseURL(SKUURL).WithHeader("User-Agent", "G-man Bot/1.0"),
+		restClient: rest.NewClient(httpClient).WithBaseURL(BaseURL).WithUserAgent("G-man Bot/1.0"),
+		skuClient:  rest.NewClient(httpClient).WithBaseURL(SKUURL).WithUserAgent("G-man Bot/1.0"),
 	}
 }
 

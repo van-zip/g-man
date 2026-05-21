@@ -11,7 +11,8 @@
 //
 // # Core Features
 //
-//   - Generics: Automatic JSON/VDF decoding directly into structs using GetJSON[T](...).
+//   - Generics: Automatic JSON decoding directly into structs using GetJSON[T](...).
+//   - PostForm: Support for application/x-www-form-urlencoded requests using structs.
 //   - BaseResponse: Automated validation and unwrapping of standard API response wrappers.
 //   - Path Templates: Dynamic path variables using WithVar("id", 123) modifiers.
 //   - CaptureResponse: Modifier to access headers and cookies from high-level generic calls.
@@ -37,11 +38,13 @@
 // Instead of manual string manipulation for query parameters, you can use structs:
 //
 //	type SearchParams struct {
-//	    Query string `url:"q"`
+//	    Query string `url:"q" validate:required`
 //	    Page  int    `url:"p,omitempty"`
 //	}
 //	v, _ := rest.StructToValues(SearchParams{Query: "g-man"})
 //	// Result: q=g-man
+//	err := rest.Validate(SearchParams{})
+//	// Result: validation error: Query is required
 //
 // # Error Handling
 //

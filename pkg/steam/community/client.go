@@ -103,8 +103,7 @@ type Client struct {
 func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
 	rc := rest.NewClient(httpClient).
 		WithBaseURL(BaseURL).
-		WithHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").
-		WithHeader("Origin", BaseURL)
+		WithOrigin(BaseURL)
 
 	c := &Client{
 		restClient:  rc,
@@ -140,7 +139,7 @@ func (c *Client) SessionID(targetURI string) string {
 func (c *Client) Request(
 	ctx context.Context,
 	method, path string,
-	body []byte,
+	body any,
 	query any,
 	mods ...rest.RequestModifier,
 ) (*http.Response, error) {
@@ -341,7 +340,7 @@ func performRequest(
 	query url.Values,
 	opts ...api.CallOption,
 ) (*http.Response, *api.CallConfig, error) {
-	req := api.NewHttpRequest(method, BaseURL+path, body).WithParams(query)
+	req := api.NewHTTPRequest(method, BaseURL+path, body).WithParams(query)
 
 	cfg := &api.CallConfig{
 		Format:   api.FormatJSON,

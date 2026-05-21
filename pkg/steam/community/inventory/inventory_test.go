@@ -48,7 +48,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 			MoreItems: false,
 		}
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			expectedPath := fmt.Sprintf("inventory/%d/%d/%d", userID, appID, contextID)
 			assert.Contains(t, path, expectedPath)
 
@@ -74,7 +74,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 		mock := requester.New()
 		callCount := 0
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			callCount++
 
 			var resp inventoryResponseMock
@@ -115,7 +115,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 		mock := requester.New()
 		resp := inventoryResponseMock{Success: true, TotalCount: 0, Assets: nil}
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       requester.NewBuffer(jsonResponse(resp)),
@@ -145,7 +145,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 			},
 		}
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       requester.NewBuffer(jsonResponse(resp)),
@@ -165,7 +165,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 			Error:   "Rate limit exceeded",
 		}
 
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       requester.NewBuffer(jsonResponse(resp)),
@@ -179,7 +179,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 
 	t.Run("Requester Error", func(t *testing.T) {
 		mock := requester.New()
-		mock.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, errors.New("network fail")
 		}
 

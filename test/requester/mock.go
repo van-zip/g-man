@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package requester provides a mock implementation of the requester interface.
 package requester
 
 import (
@@ -46,7 +47,7 @@ type Mock struct {
 	restResponses map[string]restResponse
 
 	OnDo        func(req *tr.Request) (*tr.Response, error)
-	OnRest      func(method, path string, body []byte) (*http.Response, error)
+	OnRest      func(method, path string, body any) (*http.Response, error)
 	OnSessionID func(string) string
 
 	ResponseErr  error
@@ -55,6 +56,8 @@ type Mock struct {
 	protoResponses map[string]proto.Message
 	jsonResponses  map[string]any
 	rawResponses   map[string][]byte
+
+	BaseResponseFunc func() rest.BaseResponse
 }
 
 func New() *Mock {
@@ -64,6 +67,13 @@ func New() *Mock {
 		jsonResponses:  make(map[string]any),
 		rawResponses:   make(map[string][]byte),
 	}
+}
+
+func (m *Mock) BaseResponse() rest.BaseResponse {
+	if m.BaseResponseFunc != nil {
+		return m.BaseResponseFunc()
+	}
+	return nil
 }
 
 func (m *Mock) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
@@ -109,14 +119,24 @@ func (m *Mock) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 func (m *Mock) Request(
 	ctx context.Context,
 	method, path string,
-	body []byte,
+	body any,
 	query any,
 	mods ...rest.RequestModifier,
 ) (*http.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.restCalls = append(m.restCalls, restCall{method, path, body, query})
+	var bodyBytes []byte
+	switch b := body.(type) {
+	case io.Reader:
+		bodyBytes, _ = io.ReadAll(b)
+	case []byte:
+		bodyBytes = b
+	case string:
+		bodyBytes = []byte(b)
+	}
+
+	m.restCalls = append(m.restCalls, restCall{method, path, bodyBytes, query})
 
 	if m.OnRest != nil {
 		return m.OnRest(method, path, body)
@@ -132,7 +152,7 @@ func (m *Mock) Request(
 		respData = restResponse{Status: http.StatusOK, Body: []byte("{}")}
 	}
 
-	dummyReq, _ := http.NewRequest(method, path, bytes.NewReader(body))
+	dummyReq, _ := http.NewRequest(method, path, bytes.NewReader(bodyBytes))
 	for _, mod := range mods {
 		mod(dummyReq)
 	}
@@ -254,4 +274,3 @@ func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 func (m *Mock) HTTP() rest.HTTPDoer {
 	return &mockHTTPDoer{mock: m}
 }
-

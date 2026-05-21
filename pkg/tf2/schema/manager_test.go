@@ -106,7 +106,7 @@ func TestSchemaManager_Refresh_Success(t *testing.T) {
 		},
 	})
 
-	mockAPI.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+	mockAPI.OnRest = func(method, path string, body any) (*http.Response, error) {
 		if strings.Contains(path, "proto_obj_defs") {
 			vdf := "\"lang\"\n{\n\t\"Tokens\"\n\t{\n\t\t\"9_12_weapon 12\" \"Nutcracker\"\n\t}\n}\n"
 
@@ -179,7 +179,7 @@ func TestSchemaManager_Refresh_PriceDB_Success(t *testing.T) {
 		},
 	}
 
-	mockAPI.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+	mockAPI.OnRest = func(method, path string, body any) (*http.Response, error) {
 		if strings.Contains(path, "pricedb.io/api/schema") {
 			respBody, _ := json.Marshal(priceDBResp)
 
@@ -290,7 +290,7 @@ func TestSchemaManager_HandleUpdateRequested(t *testing.T) {
 	mockAPI.SetJSONResponse("IEconItems_440", "GetSchemaItems", map[string]any{
 		"result": map[string]any{"items": []any{}, "next": 0},
 	})
-	mockAPI.OnRest = func(method, path string, body []byte) (*http.Response, error) {
+	mockAPI.OnRest = func(method, path string, body any) (*http.Response, error) {
 		var content string
 		if strings.Contains(path, "proto_obj_defs") {
 			content = "\"lang\"\n{\n\t\"Tokens\"\n\t{\n\t}\n}\n"

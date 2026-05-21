@@ -46,7 +46,7 @@ func NewHTTPTransport(doer rest.HTTPDoer, baseURL string) *HTTPTransport {
 	return &HTTPTransport{
 		client: rest.NewClient(doer).
 			WithBaseURL(baseURL).
-			WithHeader("User-Agent", HTTPUserAgent),
+			WithUserAgent(HTTPUserAgent),
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -409,6 +410,27 @@ func TestClient_Validation(t *testing.T) {
 	})
 }
 
+func TestClient_PostForm(t *testing.T) {
+	type Params struct {
+		ID   int    `url:"id"`
+		Name string `url:"name"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
+		_ = r.ParseForm()
+		assert.Equal(t, "123", r.Form.Get("id"))
+		assert.Equal(t, "bob", r.Form.Get("name"))
+
+		_, _ = w.Write([]byte(`{"status": 200}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(nil).WithBaseURL(server.URL)
+	_, err := PostForm[Params, any](context.Background(), client, "/form", Params{ID: 123, Name: "bob"}, nil)
+	assert.NoError(t, err)
+}
+
 func TestClient_CaptureResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Custom-Header", "captured")
@@ -426,6 +448,155 @@ func TestClient_CaptureResponse(t *testing.T) {
 	require.NotNil(t, rawResp)
 	assert.Equal(t, "captured", rawResp.Header.Get("X-Custom-Header"))
 	_ = rawResp.Body.Close()
+}
+
+func TestClient_DX_Helpers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check Auth
+		if r.Header.Get("Authorization") == "Bearer my-token" {
+			w.Header().Set("X-Auth", "bearer")
+		} else if u, p, ok := r.BasicAuth(); ok && u == "user" && p == "pass" {
+			w.Header().Set("X-Auth", "basic")
+		}
+
+		// Check UA
+		if r.Header.Get("User-Agent") == "G-MAN-BOT" {
+			w.Header().Set("X-UA", "ok")
+		}
+
+		_, _ = w.Write([]byte(`{"message": "ok"}`))
+	}))
+	defer server.Close()
+
+	// Update DefaultClient for global helpers test
+	DefaultClient = DefaultClient.WithBaseURL(server.URL)
+
+	t.Run("Global Get with Bearer", func(t *testing.T) {
+		var raw *http.Response
+
+		res, err := Get[testPayload](context.Background(), "/get", nil, WithBearer("my-token"), CaptureResponse(&raw))
+		require.NoError(t, err)
+		assert.Equal(t, "ok", res.Message)
+		assert.Equal(t, "bearer", raw.Header.Get("X-Auth"))
+	})
+
+	t.Run("Basic Auth and User Agent", func(t *testing.T) {
+		var raw *http.Response
+
+		_, err := Get[testPayload](
+			context.Background(),
+			"/auth",
+			nil,
+			WithBasicAuth("user", "pass"),
+			WithUserAgent("G-MAN-BOT"),
+			CaptureResponse(&raw),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "basic", raw.Header.Get("X-Auth"))
+		assert.Equal(t, "ok", raw.Header.Get("X-UA"))
+	})
+
+	t.Run("Debug Mode (manual verification)", func(t *testing.T) {
+		// Just ensure it doesn't panic
+		_, err := Get[testPayload](context.Background(), "/debug", nil, Debug())
+		require.NoError(t, err)
+	})
+}
+
+func TestClient_AdvancedFeatures(t *testing.T) {
+	t.Run("Streaming body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			assert.Equal(t, "streamed data", string(body))
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(nil).WithBaseURL(server.URL)
+		reader := strings.NewReader("streamed data")
+
+		_, err := client.Request(context.Background(), http.MethodPost, "/", reader, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("Cookies", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, err := r.Cookie("test-cookie")
+			if err == nil {
+				w.Header().Set("X-Cookie", c.Value)
+			}
+
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(nil).WithBaseURL(server.URL)
+
+		t.Run("WithCookie modifier", func(t *testing.T) {
+			resp, err := client.Request(
+				context.Background(),
+				http.MethodGet,
+				"/",
+				nil,
+				nil,
+				WithCookie(&http.Cookie{Name: "test-cookie", Value: "yum"}),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, "yum", resp.Header.Get("X-Cookie"))
+		})
+
+		t.Run("WithCookies map modifier", func(t *testing.T) {
+			resp, err := client.Request(
+				context.Background(),
+				http.MethodGet,
+				"/",
+				nil,
+				nil,
+				WithCookies(map[string]string{"test-cookie": "yum-yum"}),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, "yum-yum", resp.Header.Get("X-Cookie"))
+		})
+	})
+
+	t.Run("Redirect policy", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/start" {
+				http.Redirect(w, r, "/end", http.StatusFound)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		}))
+		defer server.Close()
+
+		t.Run("Disable redirects", func(t *testing.T) {
+			client := NewClient(nil).WithBaseURL(server.URL).WithRedirectLimit(0)
+			resp, err := client.Request(context.Background(), http.MethodGet, "/start", nil, nil)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusFound, resp.StatusCode) // Should not follow
+		})
+
+		t.Run("Limit redirects", func(t *testing.T) {
+			// With max 2, it should allow one jump (start -> end)
+			client := NewClient(nil).WithBaseURL(server.URL).WithRedirectLimit(2)
+			resp, err := client.Request(context.Background(), http.MethodGet, "/start", nil, nil)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	})
+
+	t.Run("Timeout", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(100 * time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(nil).WithBaseURL(server.URL).WithTimeout(10 * time.Millisecond)
+		_, err := client.Request(context.Background(), http.MethodGet, "/", nil, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Client.Timeout exceeded")
+	})
 }
 
 func contains(s, substr string) bool {

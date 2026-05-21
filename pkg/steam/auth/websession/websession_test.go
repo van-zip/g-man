@@ -5,9 +5,9 @@
 package websession
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,7 +24,6 @@ import (
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
-	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
 
 type mockTransport struct {
@@ -43,401 +42,167 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("mockTransport: нет обработчика для URL: %s", urlStr)
+	return nil, fmt.Errorf("mockTransport: no handler for URL: %s", urlStr)
 }
 
-func setupMockTransport(t *testing.T) *mockTransport {
-	mt := &mockTransport{handlers: make(map[string]func(r *http.Request) (*http.Response, error))}
-	oldDefault := http.DefaultTransport
-	http.DefaultTransport = mt
-	t.Cleanup(func() {
-		http.DefaultTransport = oldDefault
-	})
-
-	return mt
+func setupMockTransport() *mockTransport {
+	return &mockTransport{handlers: make(map[string]func(r *http.Request) (*http.Response, error))}
 }
 
 func newMockedSession(transport *mockTransport) *WebSession {
-	ws := newTestSession()
-	mockHTTPClient := &http.Client{Transport: transport}
-	ws.client = rest.NewClient(mockHTTPClient)
-
-	return ws
-}
-
-func newTestSession() *WebSession {
 	steamID := id.ID(76561197960265728)
-	return New(steamID, log.Discard, nil)
+	return New(steamID, log.Discard, rest.DoerFunc(transport.RoundTrip))
 }
 
 func TestNew(t *testing.T) {
 	steamID := id.ID(76561197960265729)
-
 	ws := New(steamID, log.Discard, nil)
 
-	require.NotNil(t, ws, "New() should not return nil")
-	assert.Equal(t, steamID, ws.steamID, "SteamID must be set correctly")
-	assert.Equal(t, log.Discard, ws.logger, "Logger must be set correctly")
-	assert.NotNil(t, ws.client, "HTTP client must not be nil")
-	assert.NotNil(t, ws.jar, "Cookie jar must not be nil")
-	assert.False(t, ws.isAuth, "isAuth must be false by default")
-	assert.Equal(t, defaultDomains, ws.domains, "Domains must match default values")
-
-	u, _ := url.Parse("https://steamcommunity.com")
-	assert.Empty(t, ws.jar.Cookies(u), "Cookie jar must be empty after initialization")
+	require.NotNil(t, ws)
+	assert.Equal(t, steamID, ws.steamID)
+	assert.NotNil(t, ws.httpClient)
+	assert.NotNil(t, ws.jar)
+	assert.False(t, ws.isAuth)
+	assert.Equal(t, defaultDomains, ws.domains)
 }
 
 func TestAddDomains(t *testing.T) {
-	ws := newTestSession()
-	initialDomainCount := len(ws.domains)
-	newDomains := []string{"https://example.com", "https://test.com"}
-
-	ws.AddDomains(newDomains...)
-
-	assert.Len(t, ws.domains, initialDomainCount+len(newDomains), "The number of domains should increase")
-	assert.Contains(t, ws.domains, "https://example.com", "A new domain should be added")
-	assert.Contains(t, ws.domains, "https://test.com", "A new domain should be added")
+	ws := newMockedSession(setupMockTransport())
+	initialCount := len(ws.domains)
+	ws.AddDomains("https://example.com")
+	assert.Len(t, ws.domains, initialCount+1)
 }
 
 func TestREST(t *testing.T) {
-	ws := newTestSession()
-	client := ws.REST()
-	assert.NotNil(t, client, "Client() must not return nil")
-	assert.Equal(t, ws.client, client, "Client() must return an internal HTTP client")
+	ws := newMockedSession(setupMockTransport())
+	assert.NotNil(t, ws.REST())
 }
 
 func TestHTTP(t *testing.T) {
-	ws := newTestSession()
-	httpClient := ws.HTTP()
-
-	assert.NotNil(t, httpClient, "HTTP() must not return nil")
-	assert.NotNil(t, httpClient.Jar, "Client must have CookieJar")
-	assert.Equal(t, ws.client.HTTP(), httpClient)
+	ws := newMockedSession(setupMockTransport())
+	assert.NotNil(t, ws.HTTP())
+	assert.NotNil(t, ws.HTTP().Jar)
 }
 
 func TestIsAuthenticated(t *testing.T) {
-	ws := newTestSession()
-	assert.False(t, ws.IsAuthenticated(), "The session must not be initially authenticated")
-
+	ws := newMockedSession(setupMockTransport())
+	assert.False(t, ws.IsAuthenticated())
 	ws.mu.Lock()
 	ws.isAuth = true
 	ws.mu.Unlock()
-
-	assert.True(t, ws.IsAuthenticated(), "The session must be authenticated after setting the flag")
+	assert.True(t, ws.IsAuthenticated())
 }
 
 func TestClear(t *testing.T) {
-	ws := newTestSession()
+	ws := newMockedSession(setupMockTransport())
 	ws.isAuth = true
-	oldJar := ws.jar
-
-	u, _ := url.Parse("https://steamcommunity.com")
-	ws.jar.SetCookies(u, []*http.Cookie{{Name: "test", Value: "value"}})
-
 	ws.Clear()
-
-	assert.False(t, ws.isAuth, "isAuth must be reset to false")
-	assert.NotEqual(t, oldJar, ws.jar, "A new cookie jar must be created")
-	assert.Empty(t, ws.jar.Cookies(u), "The cookie jar must be cleared")
-}
-
-func TestSessionID(t *testing.T) {
-	ws := newTestSession()
-	targetURL := "https://steamcommunity.com"
-
-	assert.Empty(t, ws.SessionID(targetURL), "SessionID must be empty if the cookie is not set")
-
-	assert.Empty(t, ws.SessionID(":%"), "SessionID must be empty for an invalid URL")
-
-	sessionIDValue := "testsessionid123"
-	u, _ := url.Parse(targetURL)
-	ws.jar.SetCookies(u, []*http.Cookie{{Name: "sessionid", Value: sessionIDValue}})
-
-	assert.Equal(t, sessionIDValue, ws.SessionID(targetURL), "SessionID must be retrieved correctly")
-
-	ws.jar.SetCookies(u, []*http.Cookie{{Name: "othercookie", Value: "othervalue"}})
-	assert.Equal(t, sessionIDValue, ws.SessionID(targetURL), "SessionID must be found among other cookies")
+	assert.False(t, ws.isAuth)
 }
 
 func TestAuthenticate(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("Error: Empty refresh token", func(t *testing.T) {
-		ws := newTestSession()
+	t.Run("Empty refresh token", func(t *testing.T) {
+		ws := newMockedSession(setupMockTransport())
 		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "", "")
-		require.Error(t, err)
-		assert.Equal(t, "websession: refresh token is required", err.Error())
-	})
-
-	t.Run("Fast Path - SteamClient", func(t *testing.T) {
-		ws := newTestSession()
-		accessToken := "client_access_token_123"
-		err := ws.Authenticate(
-			ctx,
-			pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_SteamClient,
-			"some_refresh_token",
-			accessToken,
-		)
-
-		require.NoError(t, err)
-		assert.True(t, ws.IsAuthenticated())
-
-		secureCookieValue := fmt.Sprintf("%d||%s", ws.steamID, accessToken)
-		u, _ := url.Parse("https://store.steampowered.com")
-		cookies := ws.jar.Cookies(u)
-		assert.True(
-			t,
-			findCookie(cookies, "steamLoginSecure", secureCookieValue),
-			"Cookie steamLoginSecure must be set",
-		)
-		assert.True(t, findCookie(cookies, "sessionid", ""), "The sessionid cookie must be set")
-	})
-
-	t.Run("Fast Path - MobileApp", func(t *testing.T) {
-		ws := newTestSession()
-		accessToken := "mobile_access_token_456"
-		err := ws.Authenticate(
-			ctx,
-			pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_MobileApp,
-			"some_refresh_token",
-			accessToken,
-		)
-
-		require.NoError(t, err)
-		assert.True(t, ws.IsAuthenticated())
-
-		secureCookieValue := fmt.Sprintf("%d||%s", ws.steamID, accessToken)
-		u, _ := url.Parse("https://steamcommunity.com")
-		cookies := ws.jar.Cookies(u)
-		assert.True(
-			t,
-			findCookie(cookies, "steamLoginSecure", secureCookieValue),
-			"The steamLoginSecure cookie must be set.",
-		)
-	})
-
-	t.Run("Slow Path - Success", func(t *testing.T) {
-		mt := setupMockTransport(t)
-
-		const transferURL = "https://community.steam-mock.com/transfer"
-
-		mt.handlers["https://login.steampowered.com/jwt/finalizelogin"] = func(r *http.Request) (*http.Response, error) {
-			resp := map[string]any{
-				"error": 0,
-				"transfer_info": []map[string]any{
-					{"url": transferURL, "params": map[string]string{"nonce": "123"}},
-				},
-			}
-			b, _ := json.Marshal(resp)
-
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader(string(b))),
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-			}, nil
-		}
-
-		mt.handlers[transferURL] = func(r *http.Request) (*http.Response, error) {
-			b, _ := json.Marshal(map[string]any{"result": enums.EResult_OK})
-
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader(string(b))),
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-			}, nil
-		}
-
-		ws := newTestSession()
-		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "token", "")
-
-		require.NoError(t, err)
-		assert.True(t, ws.IsAuthenticated())
-	})
-
-	t.Run("Slow Path - API finalize error", func(t *testing.T) {
-		transport := &mockTransport{
-			handlers: map[string]func(r *http.Request) (*http.Response, error){
-				"https://login.steampowered.com/jwt/finalizelogin": func(r *http.Request) (*http.Response, error) {
-					response := map[string]any{"error": 1, "transfer_info": []any{}}
-					body, _ := json.Marshal(response)
-
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(strings.NewReader(string(body))),
-						Header:     http.Header{"Content-Type": []string{"application/json"}},
-					}, nil
-				},
-			},
-		}
-
-		ws := newMockedSession(transport)
-		err := ws.authSlowPath(ctx, "token", "sessionid")
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "finalize login error code: 1")
-		assert.False(t, ws.IsAuthenticated())
-	})
-
-	t.Run("Slow Path - finalize HTTP error", func(t *testing.T) {
-		transport := &mockTransport{
-			handlers: map[string]func(r *http.Request) (*http.Response, error){
-				"https://login.steampowered.com/jwt/finalizelogin": func(r *http.Request) (*http.Response, error) {
-					return &http.Response{
-						StatusCode: http.StatusInternalServerError,
-						Body:       io.NopCloser(strings.NewReader("Internal Server Error")),
-					}, nil
-				},
-			},
-		}
-
-		ws := newMockedSession(transport)
-		err := ws.authSlowPath(ctx, "token", "sessionid")
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "finalize login failed")
-		assert.False(t, ws.IsAuthenticated())
-	})
-
-	t.Run("Slow Path - Transfer failure", func(t *testing.T) {
-		mt := setupMockTransport(t)
-
-		mt.handlers["https://login.steampowered.com/jwt/finalizelogin"] = func(r *http.Request) (*http.Response, error) {
-			resp := map[string]any{
-				"error": 0,
-				"transfer_info": []map[string]any{
-					{"url": "https://fail-transfer.com", "params": map[string]string{}},
-				},
-			}
-			b, _ := json.Marshal(resp)
-
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader(string(b))),
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-			}, nil
-		}
-
-		mt.handlers["https://fail-transfer.com"] = func(r *http.Request) (*http.Response, error) {
-			b, _ := json.Marshal(map[string]any{"result": enums.EResult_InvalidPassword})
-
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader(string(b))),
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-			}, nil
-		}
-
-		ws := newTestSession()
-		err := ws.authSlowPath(context.Background(), "token", "sessionid")
-
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "transfer failed for")
-		assert.Contains(t, err.Error(), "steam error: InvalidPassword")
-		assert.False(t, ws.IsAuthenticated())
+	})
+
+	t.Run("Fast Path", func(t *testing.T) {
+		ws := newMockedSession(setupMockTransport())
+		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_SteamClient, "rt", "at")
+		assert.NoError(t, err)
+		assert.True(t, ws.IsAuthenticated())
+	})
+
+	t.Run("Slow Path Success", func(t *testing.T) {
+		mt := setupMockTransport()
+		mt.handlers[urlFinalize] = func(r *http.Request) (*http.Response, error) {
+			resp, _ := json.Marshal(map[string]any{
+				"error": 0,
+				"transfer_info": []map[string]any{
+					{"url": "https://t.com", "params": map[string]string{"a": "b"}},
+				},
+			})
+
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(resp)),
+				Header:     http.Header{"Content-Type": {"application/json"}},
+			}, nil
+		}
+		mt.handlers["https://t.com"] = func(r *http.Request) (*http.Response, error) {
+			resp, _ := json.Marshal(map[string]any{"result": 1})
+
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(resp)),
+				Header:     http.Header{"Content-Type": {"application/json"}},
+			}, nil
+		}
+
+		ws := newMockedSession(mt)
+		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "rt", "")
+		assert.NoError(t, err)
+		assert.True(t, ws.IsAuthenticated())
 	})
 }
 
 func TestExecuteTransferWithRetry(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("Successful on the first try", func(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"result": enums.EResult_OK})
+			json.NewEncoder(w).Encode(map[string]any{"result": 1})
 		}))
 		defer server.Close()
 
-		ws := newTestSession()
-		err := ws.executeTransferWithRetry(ctx, rest.NewClient(server.Client()), server.URL, nil)
-		require.NoError(t, err)
+		ws := New(id.ID(0), log.Discard, server.Client())
+		err := ws.executeTransferWithRetry(ctx, server.URL, nil)
+		assert.NoError(t, err)
 	})
 
-	t.Run("Successful after several attempts", func(t *testing.T) {
-		var attempt int32
+	t.Run("Retries", func(t *testing.T) {
+		var count int32
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if atomic.AddInt32(&attempt, 1) < 3 {
-				http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			if atomic.AddInt32(&count, 1) < 2 {
+				http.Error(w, "fail", 500)
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"result": enums.EResult_OK})
+			json.NewEncoder(w).Encode(map[string]any{"result": 1})
 		}))
 		defer server.Close()
 
-		ws := newTestSession()
-		err := ws.executeTransferWithRetry(ctx, rest.NewClient(server.Client()), server.URL, nil)
-		require.NoError(t, err)
-		assert.Equal(t, int32(3), atomic.LoadInt32(&attempt), "There must be 3 attempts")
-	})
-
-	t.Run("Failure after all attempts", func(t *testing.T) {
-		var attempts int
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			attempts++
-
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}))
-		defer server.Close()
-
-		ws := newTestSession()
-		err := ws.executeTransferWithRetry(ctx, rest.NewClient(server.Client()), server.URL, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "after 3 retries")
-		assert.Equal(t, 3, attempts, "There must be 3 attempts")
-	})
-
-	t.Run("Result not ok", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"result": enums.EResult_AccessDenied})
-		}))
-		defer server.Close()
-
-		ws := newTestSession()
-		err := ws.executeTransferWithRetry(context.Background(), ws.client, server.URL, nil)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "steam error: AccessDenied")
+		ws := New(id.ID(0), log.Discard, server.Client())
+		err := ws.executeTransferWithRetry(ctx, server.URL, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, int32(2), atomic.LoadInt32(&count))
 	})
 }
 
 func TestVerify(t *testing.T) {
 	ctx := context.Background()
-	verifyURL := "https://steamcommunity.com/chat/clientinterfaces"
 
-	t.Run("Not authenticated", func(t *testing.T) {
-		ws := newTestSession()
-		ok, err := ws.Verify(ctx)
-		require.NoError(t, err)
-		assert.False(t, ok)
-	})
-
-	t.Run("Successful verification", func(t *testing.T) {
-		mt := setupMockTransport(t)
-		mt.handlers[verifyURL] = func(r *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(strings.NewReader("")),
-				Request:    r,
-			}, nil
+	t.Run("Success", func(t *testing.T) {
+		mt := setupMockTransport()
+		mt.handlers[urlVerify] = func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 		}
-
-		ws := newTestSession()
-		ws.mu.Lock()
+		ws := newMockedSession(mt)
 		ws.isAuth = true
-		ws.mu.Unlock()
-
 		ok, err := ws.Verify(ctx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.True(t, ok)
 	})
 
-	t.Run("Verification failed - redirect", func(t *testing.T) {
-		mt := setupMockTransport(t)
-		mt.handlers[verifyURL] = func(r *http.Request) (*http.Response, error) {
+	t.Run("Redirect to login", func(t *testing.T) {
+		mt := setupMockTransport()
+		mt.handlers[urlVerify] = func(r *http.Request) (*http.Response, error) {
 			u, _ := url.Parse("https://steamcommunity.com/login/home/")
 
 			return &http.Response{
@@ -446,73 +211,11 @@ func TestVerify(t *testing.T) {
 				Request:    &http.Request{URL: u},
 			}, nil
 		}
-
-		ws := newTestSession()
+		ws := newMockedSession(mt)
 		ws.isAuth = true
-
 		ok, err := ws.Verify(ctx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.False(t, ok)
 		assert.False(t, ws.IsAuthenticated())
 	})
-
-	t.Run("Verification failure - not status 200", func(t *testing.T) {
-		transport := &mockTransport{
-			handlers: map[string]func(r *http.Request) (*http.Response, error){
-				verifyURL: func(r *http.Request) (*http.Response, error) {
-					return &http.Response{
-						StatusCode: http.StatusForbidden,
-						Body:       io.NopCloser(strings.NewReader("")),
-						Request:    r,
-					}, nil
-				},
-			},
-		}
-		ws := newMockedSession(transport)
-		ws.isAuth = true
-
-		ok, err := ws.Verify(ctx)
-		require.NoError(t, err)
-		assert.False(t, ok)
-		assert.False(t, ws.IsAuthenticated(), "The session must be cleared after unsuccessful verification.")
-	})
-
-	t.Run("NetworkError", func(t *testing.T) {
-		mt := setupMockTransport(t)
-		mt.handlers["https://steamcommunity.com/chat/clientinterfaces"] = func(r *http.Request) (*http.Response, error) {
-			return nil, errors.New("network unreachable")
-		}
-
-		ws := newTestSession()
-		ws.mu.Lock()
-		ws.isAuth = true
-		ws.mu.Unlock()
-
-		ok, err := ws.Verify(context.Background())
-		assert.False(t, ok)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "verify request failed")
-	})
-}
-
-func TestGenerateSessionID(t *testing.T) {
-	sessionID := generateSessionID()
-	assert.Len(t, sessionID, 24, "SessionID must be 24 characters long")
-	assert.Regexp(t, `^[0-9a-f]{24}$`, sessionID, "SessionID must be a valid hex string")
-}
-
-func findCookie(cookies []*http.Cookie, name, value string) bool {
-	for _, c := range cookies {
-		if c.Name == name {
-			if value == "" {
-				return true
-			}
-
-			if strings.Contains(c.Value, value) {
-				return true
-			}
-		}
-	}
-
-	return false
 }

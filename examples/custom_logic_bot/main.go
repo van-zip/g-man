@@ -136,6 +136,10 @@ func main() {
 		}
 	}()
 
+	if err := client.Run(); err != nil {
+		panic(err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 

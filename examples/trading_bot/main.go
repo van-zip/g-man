@@ -118,7 +118,12 @@ func main() {
 		}
 	}()
 
-	// 7. Connect and Login
+	// 7. Run the client
+	if err := client.Run(); err != nil {
+		panic(err)
+	}
+
+	// 8. Connect and Login
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
@@ -147,7 +152,7 @@ func main() {
 		return
 	}
 
-	// 8. Wait for exit signal
+	// 9. Wait for exit signal
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 

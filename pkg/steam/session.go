@@ -21,6 +21,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth/websession"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
@@ -46,6 +47,12 @@ type communityClient interface {
 	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
 }
 
+// WebSessionFactory constructs a webSession instance.
+type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession
+
+// CommunityClientFactory constructs a communityClient instance.
+type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient
+
 // SessionManager manages the session state of the client.
 type SessionManager struct {
 	mu sync.RWMutex
@@ -59,6 +66,9 @@ type SessionManager struct {
 	device    *auth.DeviceConfig
 	bus       *bus.Bus
 	http      rest.HTTPDoer // Global HTTP client
+
+	webFactory       WebSessionFactory
+	communityFactory CommunityClientFactory
 
 	unified   *service.Client // WebAPI (HTTP)
 	socketAPI *service.Client // CM (TCP/WS)
@@ -83,6 +93,25 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 
 	if c.storage == nil {
 		c.storage = memory.New()
+	}
+
+	c.webFactory = cfg.WebFactory
+	if c.webFactory == nil {
+		c.webFactory = func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession {
+			return websession.New(steamID, logger, baseDoer)
+		}
+	}
+
+	c.communityFactory = cfg.CommunityFactory
+	if c.communityFactory == nil {
+		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient {
+			return community.NewClient(
+				httpClient,
+				sessionID,
+				community.WithLogger(logger),
+				community.WithRegistry(registry),
+			)
+		}
 	}
 
 	webTransport := tr.NewHTTPTransport(cfg.HTTP, service.WebAPIBase)
@@ -124,7 +153,7 @@ func (c *SessionManager) LogOn(
 
 	c.mu.Lock()
 	if c.web == nil {
-		c.web = websession.New(details.SteamID, c.logger, c.http)
+		c.web = c.webFactory(details.SteamID, c.logger, c.http)
 	}
 
 	c.mu.Unlock()
@@ -135,11 +164,11 @@ func (c *SessionManager) LogOn(
 
 	c.mu.Lock()
 	if c.community == nil {
-		c.community = community.NewClient(
+		c.community = c.communityFactory(
 			c.web.HTTP(),
 			c.web.SessionID,
-			community.WithLogger(c.logger),
-			community.WithRegistry(c.registry),
+			c.logger,
+			c.registry,
 		)
 	}
 

@@ -111,3 +111,37 @@ func TestServiceRouter_Do_Errors(t *testing.T) {
 		assert.ErrorContains(t, err, "auto-refresh failed: refresh failed")
 	})
 }
+
+func TestServiceRouter_CustomRouteMatcher(t *testing.T) {
+	ctx := context.Background()
+	sock := new(mockSocket)
+	httpDoer := new(mockHTTPDoer)
+
+	unified := service.New(tr.NewHTTPTransport(httpDoer, service.WebAPIBase))
+	socketAPI := service.New(tr.NewSocketTransport(sock))
+
+	refresher := new(mockSessionRefresher)
+	refresher.On("Clients").Return(unified, socketAPI)
+
+	router := NewServiceRouter(refresher, sock)
+
+	// Set nil matcher resets to default
+	router.SetRouteMatcher(nil)
+
+	// Set custom matcher that always forces WebAPI routing
+	router.SetRouteMatcher(func(req *tr.Request, socketConnected bool) TransportType {
+		return TransportWebAPI
+	})
+
+	sock.On("IsConnected").Return(true).Maybe()
+	httpDoer.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(bytes.NewBufferString(`{}`)),
+	}, nil).Once()
+
+	// Even if socket target and connected, should route over HTTP
+	req := tr.NewRequest(&mockSocketTarget{path: "p"}, nil)
+	_, err := router.Do(ctx, req)
+	assert.NoError(t, err)
+	httpDoer.AssertExpectations(t)
+}

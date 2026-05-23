@@ -180,6 +180,10 @@ func main() {
 	server, _ := dir.GetOptimalCMServer(context.Background())
 	login := auth.NewLogOnDetails(os.Getenv("STEAM_USER"), os.Getenv("STEAM_PASS"))
 
+	if err := client.Run(); err != nil {
+		panic(err)
+	}
+
 	if err := client.ConnectAndLogin(context.Background(), server, login); err != nil {
 		panic(err)
 	}

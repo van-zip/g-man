@@ -17,8 +17,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
+	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 )
@@ -188,3 +192,45 @@ func TestSessionManager_LoopAndClose(t *testing.T) {
 	err = c.session.StartRefreshLoop(ctx)
 	assert.NoError(t, err) // Gracefully shuts down, calls Disconnect which returns nil
 }
+
+func TestSessionManager_CustomFactories(t *testing.T) {
+	webCalled := false
+	commCalled := false
+
+	mw := new(mockWebSession)
+	mw.On("Verify", mock.Anything).Return(true, nil).Maybe()
+
+	mc := new(mockCommunity)
+	mc.On("GetOrRegisterAPIKey", mock.Anything, mock.Anything).Return("key_12345", nil).Maybe()
+
+	cfg := Config{
+		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession {
+			webCalled = true
+			return mw
+		},
+		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient {
+			commCalled = true
+			return mc
+		},
+	}
+
+	msock := new(mockSocket)
+	msock.On("RegisterMsgHandler", mock.Anything, mock.Anything).Return().Maybe()
+
+	sm := NewSessionManager(cfg, nil, log.New(log.DefaultConfig(log.LevelInfo)), msock)
+
+	// Setup mock authenticator to return success in LogOn
+	server := socket.CMServer{Endpoint: "cm1.steam.com", Type: "tcp"}
+	details := &auth.LogOnDetails{SteamID: 12345}
+
+	ma := new(mockAuthenticator)
+	ma.On("LogOn", mock.Anything, details, server).Return(nil).Once()
+	sm.auth = ma
+
+	ctx := context.Background()
+	_ = sm.LogOn(ctx, server, details)
+
+	assert.True(t, webCalled, "custom WebFactory should be invoked")
+	assert.True(t, commCalled, "custom CommunityFactory should be invoked")
+}
+

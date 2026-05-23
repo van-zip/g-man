@@ -77,6 +77,10 @@ func main() {
 		client.Wait()
 	}()
 
+	if err := client.Run(); err != nil {
+		panic(err)
+	}
+
 	// 3. Prepare Login Details
 	details := &auth.LogOnDetails{
 		AccountName: "your_username",

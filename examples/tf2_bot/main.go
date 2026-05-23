@@ -159,7 +159,12 @@ func main() {
 	sub := client.Bus().Subscribe(&auth.LoggedOnEvent{}, &auth.LoggedOffEvent{})
 	go handleEvents(sub, logger)
 
-	// 8. Connect and Login
+	// 8. Run the client
+	if err := client.Run(); err != nil {
+		panic(err)
+	}
+
+	// 9. Connect and Login
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 

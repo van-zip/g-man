@@ -19,10 +19,24 @@ type sessionRefresher interface {
 	Clients() (unified, socketAPI *service.Client)
 }
 
+// TransportType represents the selected transport channel.
+type TransportType int
+
+const (
+	// TransportWebAPI routes the request over HTTPS WebAPI.
+	TransportWebAPI TransportType = iota
+	// TransportSocket routes the request over the active socket connection.
+	TransportSocket
+)
+
+// RouteMatcher determines the target transport for a request.
+type RouteMatcher func(req *tr.Request, socketConnected bool) TransportType
+
 // ServiceRouter encapsulates transport selection and automatic retries logic.
 type ServiceRouter struct {
 	session sessionRefresher
 	socket  SocketProvider
+	matcher RouteMatcher
 }
 
 // NewServiceRouter creates a new service router.
@@ -30,7 +44,27 @@ func NewServiceRouter(sess sessionRefresher, sock SocketProvider) *ServiceRouter
 	return &ServiceRouter{
 		session: sess,
 		socket:  sock,
+		matcher: DefaultRouteMatcher,
 	}
+}
+
+// SetRouteMatcher overrides the default transport selection logic.
+func (r *ServiceRouter) SetRouteMatcher(matcher RouteMatcher) {
+	if matcher == nil {
+		r.matcher = DefaultRouteMatcher
+	} else {
+		r.matcher = matcher
+	}
+}
+
+// DefaultRouteMatcher implements the standard transport selection logic.
+func DefaultRouteMatcher(req *tr.Request, socketConnected bool) TransportType {
+	_, isSocketCompatible := req.Target().(tr.SocketTarget)
+	if socketConnected && isSocketCompatible {
+		return TransportSocket
+	}
+
+	return TransportWebAPI
 }
 
 // Do performs the request, automatically choosing between SocketProvider and HTTP,
@@ -52,14 +86,11 @@ func (r *ServiceRouter) Do(ctx context.Context, req *tr.Request) (*tr.Response, 
 func (r *ServiceRouter) perform(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	uClient, sClient := r.session.Clients()
 
-	isConnected := r.socket.IsConnected()
-	_, isSocketCompatible := req.Target().(tr.SocketTarget)
-
 	var selected service.Doer
-
-	if isConnected && isSocketCompatible {
+	switch r.matcher(req, r.socket.IsConnected()) {
+	case TransportSocket:
 		selected = sClient
-	} else {
+	case TransportWebAPI:
 		selected = uClient
 	}
 

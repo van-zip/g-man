@@ -47,6 +47,11 @@ and incoming Steam packets, allowing decoupled components to react to global eve
 	cfg := steam.DefaultConfig()
 	client := steam.NewClient(cfg)
 
+	// Run the module system and cm refresh
+	if err := client.Run(); err != nil {
+		log.Fatal(err)
+	}
+
 	// Perform a full login (cmSocket + Web)
 	details := &auth.LogOnDetails{
 		Username: "steam_user",

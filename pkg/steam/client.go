@@ -37,19 +37,20 @@ func NewReadyClient(ctx context.Context, cfg Config, details *auth.LogOnDetails,
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 	opts = append([]Option{WithLogger(logger)}, opts...)
 
-	// Create the base client.
 	c, err := NewClient(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve the best CM server.
 	srv, err := directory.New(c.Service()).GetOptimalCMServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Perform the login sequence.
+	if err := c.Run(); err != nil {
+		return nil, err
+	}
+
 	if err = c.ConnectAndLogin(ctx, srv, details); err != nil {
 		return nil, err
 	}
@@ -86,14 +87,16 @@ type SocketProvider interface {
 
 // Config aggregates configurations for all core subsystems and standard modules.
 type Config struct {
-	Socket   socket.Config
-	Storage  storage.Provider
-	HTTP     rest.HTTPDoer // Optional custom HTTP client
-	REST     *rest.Client  // Optional custom REST client (overrides HTTP if provided)
-	Device   *auth.DeviceConfig
-	Registry *api.UnmarshalRegistry
-	Bus      *bus.Bus
-	ProxyURL string // Global proxy URL (affects both HTTP and Socket)
+	Socket           socket.Config
+	Storage          storage.Provider
+	HTTP             rest.HTTPDoer // Optional custom HTTP client
+	REST             *rest.Client  // Optional custom REST client (overrides HTTP if provided)
+	Device           *auth.DeviceConfig
+	Registry         *api.UnmarshalRegistry
+	Bus              *bus.Bus
+	ProxyURL         string // Global proxy URL (affects both HTTP and Socket)
+	WebFactory       WebSessionFactory
+	CommunityFactory CommunityClientFactory
 }
 
 // DefaultConfig returns the baseline configuration for core systems.
@@ -220,11 +223,28 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		c.rest = rest.NewClient(cfg.HTTP)
 	}
 
-	if err := c.run(); err != nil {
-		return nil, err
+	return c, nil
+}
+
+// Run initializes and starts all modules, and runs the CM session refresh loop.
+func (c *Client) Run() (err error) {
+	if err := c.modules.InitAll(c); err != nil {
+		err = fmt.Errorf("init modules: %w", err)
+		return err
 	}
 
-	return c, nil
+	if err := c.modules.StartAll(c.ctx); err != nil {
+		err = fmt.Errorf("start modules: %w", err)
+		return err
+	}
+
+	c.wg.Go(func() {
+		_ = c.session.StartRefreshLoop(c.ctx)
+	})
+
+	c.state.Store(int32(StateRunning))
+
+	return err
 }
 
 // State returns the current client lifecycle state.
@@ -350,24 +370,4 @@ func (c *Client) Close() error {
 // Wait blocks until the client is fully stopped.
 func (c *Client) Wait() {
 	<-c.closed
-}
-
-func (c *Client) run() (err error) {
-	if err := c.modules.InitAll(c); err != nil {
-		err = fmt.Errorf("init modules: %w", err)
-		return err
-	}
-
-	if err := c.modules.StartAll(c.ctx); err != nil {
-		err = fmt.Errorf("start modules: %w", err)
-		return err
-	}
-
-	c.wg.Go(func() {
-		_ = c.session.StartRefreshLoop(c.ctx)
-	})
-
-	c.state.Store(int32(StateRunning))
-
-	return err
 }

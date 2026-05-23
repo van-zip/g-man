@@ -24,7 +24,7 @@ import (
 func TestClient_LifecycleState(t *testing.T) {
 	client, _ := NewClient(Config{})
 
-	_ = client.run()
+	_ = client.Run()
 
 	assert.Equal(t, StateRunning, client.State())
 	assert.Equal(t, "running", client.State().String())
@@ -67,8 +67,11 @@ func TestClient_RunFailures(t *testing.T) {
 		mod.On("Init", mock.Anything).Return(errors.New("init fail")).Once()
 
 		client, err := NewClient(Config{}, WithModule(mod))
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+
+		err = client.Run()
 		assert.ErrorContains(t, err, "init fail")
-		assert.Nil(t, client)
 	})
 
 	t.Run("Start Fails", func(t *testing.T) {
@@ -78,8 +81,11 @@ func TestClient_RunFailures(t *testing.T) {
 		mod.On("Start", mock.Anything).Return(errors.New("start fail")).Once()
 
 		client, err := NewClient(Config{}, WithModule(mod))
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+
+		err = client.Run()
 		assert.ErrorContains(t, err, "start fail")
-		assert.Nil(t, client)
 	})
 }
 

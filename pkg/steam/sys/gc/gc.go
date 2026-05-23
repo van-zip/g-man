@@ -23,6 +23,13 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
+var gcBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 1024)
+		return &b
+	},
+}
+
 // ModuleName is the name of the module.
 const ModuleName string = "gc"
 
@@ -142,11 +149,22 @@ func (c *Coordinator) send(
 ) error {
 	var err error
 
+	var bufPtr *[]byte
 	if msg != nil {
-		payload, err = proto.Marshal(msg)
+		bufPtr = gcBufferPool.Get().(*[]byte)
+		buf := (*bufPtr)[:0]
+
+		payload, err = proto.MarshalOptions{}.MarshalAppend(buf, msg)
 		if err != nil {
 			return fmt.Errorf("gc marshal: %w", err)
 		}
+
+		defer func() {
+			if cap(payload) <= 65536 {
+				*bufPtr = payload
+				gcBufferPool.Put(bufPtr)
+			}
+		}()
 	}
 
 	sourceJobID := protocol.NoJob

@@ -1,7 +1,8 @@
 # Project variables
 BINARY_NAME=g-man-bot
-GEN_BINARY=cmd/generator/webapi
 PKG=$(shell go list ./... | grep -v /vendor/)
+COVER_OUT?=coverage.out
+COVER_PKG?=$(PKG)
 
 # Path to the Steam API JSON schema (download it manually via ISteamWebAPIUtil/GetSupportedAPIList)
 API_JSON=api.steampowered.com.json
@@ -11,7 +12,7 @@ GEN_OUT=pkg/steam/webapi/generated.go
 CYAN  := \033[0;36m
 RESET := \033[0m
 
-.PHONY: all build test race cover lint generate clean help
+.PHONY: all build test race cover cover-clean lint generate clean help
 
 all: generate race build ## Run the full cycle: generation, tests and assembly
 
@@ -25,8 +26,13 @@ race: ## Run tests with race detector
 
 cover: ## Run tests and open the coverage report in a browser
 	@printf "$(CYAN)Generating coverage report...$(RESET)\n"
-	go test -coverprofile=coverage.out $(PKG)
-	go tool cover -html=coverage.out
+	go test -coverprofile=$(COVER_OUT) $(COVER_PKG)
+	go tool cover -html=$(COVER_OUT)
+
+cover-clean: ## Display the clean coverage report in the terminal
+	@printf "$(CYAN)Generating clean coverage report...$(RESET)\n"
+	go test -coverprofile=$(COVER_OUT) $(COVER_PKG)
+	go run cmd/coverage/main.go --file=$(COVER_OUT)
 
 generate: ## Update all generated files (manual review required)
 	cd cmd/generator && go run main.go webapi proto steamlang format

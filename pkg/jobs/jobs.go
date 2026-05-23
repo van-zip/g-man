@@ -88,16 +88,23 @@ type Manager[T any] struct {
 	// capacity limits the number of concurrent jobs to prevent memory exhaustion.
 	// 0 means unlimited.
 	capacity int
+
+	entryPool sync.Pool
 }
 
 // NewManager creates a new job manager instance.
 // The capacity parameter limits the maximum number of concurrent jobs.
 // Set capacity to 0 for unlimited jobs.
 func NewManager[T any](capacity int) *Manager[T] {
-	return &Manager[T]{
+	m := &Manager[T]{
 		jobs:     make(map[uint64]*entry[T]),
 		capacity: capacity,
 	}
+	m.entryPool.New = func() any {
+		return new(entry[T])
+	}
+
+	return m
 }
 
 // WithTimeout sets a maximum duration the job is allowed to remain pending.
@@ -160,10 +167,12 @@ func (m *Manager[T]) Add(id uint64, cb Callback[T], opts ...Option[T]) error {
 		return ErrJobDuplicate
 	}
 
-	e := &entry[T]{
-		callback:  cb,
-		keepAlive: cfg.keepAlive,
-	}
+	e := m.entryPool.Get().(*entry[T])
+	e.callback = cb
+	e.keepAlive = cfg.keepAlive
+	e.waitCh = nil
+	e.timerStop = nil
+	e.ctxStop = nil
 
 	if cfg.wait {
 		e.waitCh = make(chan result[T], 1)
@@ -214,6 +223,8 @@ func (m *Manager[T]) Resolve(id uint64, response T, err error) bool {
 	wCh := e.waitCh
 	e.waitCh = nil
 
+	cb := e.callback
+
 	m.mu.Unlock()
 
 	// Clean up resources (timers and context watchers)
@@ -233,12 +244,19 @@ func (m *Manager[T]) Resolve(id uint64, response T, err error) bool {
 	}
 
 	// Trigger callback asynchronously
-	if e.callback != nil {
+	if cb != nil {
 		go func() {
 			defer func() { _ = recover() }()
 
-			e.callback(response, err)
+			cb(response, err)
 		}()
+	}
+
+	if !e.keepAlive {
+		e.callback = nil
+		e.timerStop = nil
+		e.ctxStop = nil
+		m.entryPool.Put(e)
 	}
 
 	return true
@@ -248,18 +266,37 @@ func (m *Manager[T]) Resolve(id uint64, response T, err error) bool {
 // Can be used to clear jobs with keepAlive = true.
 func (m *Manager[T]) Remove(id uint64) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.closed {
+		m.mu.Unlock()
 		return false
 	}
 
-	_, ok := m.jobs[id]
+	e, ok := m.jobs[id]
 	if !ok {
+		m.mu.Unlock()
 		return false
 	}
 
 	delete(m.jobs, id)
+	m.mu.Unlock()
+
+	if e.timerStop != nil {
+		e.timerStop()
+	}
+
+	if e.ctxStop != nil {
+		e.ctxStop()
+	}
+
+	if e.waitCh != nil {
+		close(e.waitCh)
+	}
+
+	e.callback = nil
+	e.waitCh = nil
+	e.timerStop = nil
+	e.ctxStop = nil
+	m.entryPool.Put(e)
 
 	return true
 }
@@ -313,23 +350,7 @@ func (m *Manager[T]) CancelAll(err error) {
 	m.jobs = make(map[uint64]*entry[T])
 	m.mu.Unlock()
 
-	for _, e := range pending {
-		if e.timerStop != nil {
-			e.timerStop()
-		}
-
-		if e.ctxStop != nil {
-			e.ctxStop()
-		}
-
-		if e.waitCh != nil {
-			close(e.waitCh)
-		}
-
-		if e.callback != nil {
-			go e.callback(*new(T), err)
-		}
-	}
+	m.closePending(pending, err)
 }
 
 // Close shuts down the manager and cancels all currently pending jobs
@@ -344,8 +365,11 @@ func (m *Manager[T]) Close() error {
 	}
 
 	m.closed = true
+	pending := m.jobs
 	m.jobs = nil
 	m.mu.Unlock()
+
+	m.closePending(pending, ErrJobClosed)
 
 	return nil
 }
@@ -356,4 +380,32 @@ func (m *Manager[T]) Count() int {
 	defer m.mu.RUnlock()
 
 	return len(m.jobs)
+}
+
+// closePending closes all pending jobs with the given error.
+func (m *Manager[T]) closePending(pending map[uint64]*entry[T], err error) {
+	for _, e := range pending {
+		if e.timerStop != nil {
+			e.timerStop()
+		}
+
+		if e.ctxStop != nil {
+			e.ctxStop()
+		}
+
+		if e.waitCh != nil {
+			close(e.waitCh)
+		}
+
+		cb := e.callback
+		if cb != nil {
+			go cb(*new(T), err)
+		}
+
+		e.callback = nil
+		e.waitCh = nil
+		e.timerStop = nil
+		e.ctxStop = nil
+		m.entryPool.Put(e)
+	}
 }

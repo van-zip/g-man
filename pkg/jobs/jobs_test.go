@@ -211,16 +211,33 @@ func TestTimeoutsAndContexts(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	m := NewManager[string](0)
-	id := m.NextID()
-	m.Add(id, nil)
+	t.Run("Basic Remove", func(t *testing.T) {
+		m := NewManager[string](0)
+		id := m.NextID()
+		m.Add(id, nil)
 
-	assert.True(t, m.Remove(id))
-	assert.False(t, m.Remove(id)) // Already gone
-	assert.Equal(t, 0, m.Count())
+		assert.True(t, m.Remove(id))
+		assert.False(t, m.Remove(id)) // Already gone
+		assert.Equal(t, 0, m.Count())
 
-	require.NoError(t, m.Close())
-	assert.False(t, m.Remove(id), "Cannot remove after close")
+		require.NoError(t, m.Close())
+		assert.False(t, m.Remove(id), "Cannot remove after close")
+	})
+
+	t.Run("Remove with resources", func(t *testing.T) {
+		m := NewManager[string](0)
+		defer m.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		id := m.NextID()
+		err := m.Add(id, nil, WithTimeout[string](time.Hour), WithContext[string](ctx), WithWait[string]())
+		require.NoError(t, err)
+
+		assert.True(t, m.Remove(id))
+		assert.Equal(t, 0, m.Count())
+	})
 }
 
 func TestClose(t *testing.T) {

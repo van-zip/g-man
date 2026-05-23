@@ -8,10 +8,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -23,9 +21,12 @@ import (
 )
 
 const (
-	// ReadTimeout is the maximum duration to wait for data before closing the connection.
+	// ReadTimeout is the maximum duration to wait for incoming data
+	// before the connection is timed out and closed.
 	ReadTimeout = 60 * time.Second
-	// WriteTimeout is the default duration to wait for a write to complete.
+
+	// WriteTimeout is the default duration to wait for a write operation
+	// to complete before timing out.
 	WriteTimeout = 5 * time.Second
 )
 
@@ -35,9 +36,11 @@ var (
 	_ Encryptable = (*TCP)(nil)
 )
 
-// TCP implements the Connection interface for stream-oriented protocols.
-// It relies on a Framer to extract discrete messages from the byte stream,
-// and optionally uses a Cipher for encryption.
+// TCP implements the Connection interface using stream-oriented TCP sockets.
+//
+// It handles raw framing over TCP by utilizing a Framer implementation, and
+// supports message-level encryption and decryption if configured with a Cipher.
+// All TCP operations are thread-safe and respect contexts and timeouts.
 type TCP struct {
 	BaseConnection
 	conn   net.Conn
@@ -53,51 +56,40 @@ type TCP struct {
 	cipher  Cipher
 }
 
-// NewTCP establishes a TCP connection to the given endpoint and starts its read loop.
+// NewTCP establishes a TCP connection to the given endpoint and starts a
+// background read loop to receive messages.
+//
+// The endpoint should be a host address or host:port combination. If proxyURL
+// is not empty, the connection is routed through the specified SOCKS5 or HTTP
+// proxy using the net/proxy package.
+//
+// The framer cannot be nil and is used to frame outgoing messages and unframe
+// incoming stream packets.
+//
+// If the connection establishment fails, it returns an *Error with OpDial.
 func NewTCP(
 	ctx context.Context,
 	logger log.Logger,
 	endpoint, proxyURL string,
-	_ http.Header,
 	framer Framer,
 ) (*TCP, error) {
 	if framer == nil {
-		return nil, errors.New("tcp: framer cannot be nil")
+		return nil, NewError(OpFramer, "TCP", errors.New("framer cannot be nil"))
 	}
 
-	var conn net.Conn
+	var (
+		conn net.Conn
+		err  error
+	)
 
 	if proxyURL != "" {
-		u, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("tcp: invalid proxy URL: %w", err)
-		}
-
-		dialer, err := proxy.FromURL(u, proxy.Direct)
-		if err != nil {
-			return nil, fmt.Errorf("tcp: failed to create proxy dialer: %w", err)
-		}
-
-		contextDialer, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			// Fallback for dialers that don't implement ContextDialer
-			conn, err = dialer.Dial("tcp", endpoint)
-		} else {
-			conn, err = contextDialer.DialContext(ctx, "tcp", endpoint)
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("tcp: dial failed: %w", err)
-		}
+		conn, err = newProxyConn(ctx, proxyURL, endpoint)
 	} else {
-		var err error
+		conn, err = new(net.Dialer).DialContext(ctx, "tcp", endpoint)
+	}
 
-		dialer := &net.Dialer{}
-
-		conn, err = dialer.DialContext(ctx, "tcp", endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("tcp: dial failed: %w", err)
-		}
+	if err != nil {
+		return nil, NewError(OpDial, "TCP", err)
 	}
 
 	t := &TCP{
@@ -115,19 +107,25 @@ func NewTCP(
 	return t, nil
 }
 
-// Name returns the "TCP" string.
+// Name returns the protocol name "TCP".
 func (t *TCP) Name() string { return "TCP" }
 
-// Messages returns the incoming message channel.
+// Messages returns a channel that receives framed messages from the TCP connection.
+// The channel is closed when the connection is terminated.
 func (t *TCP) Messages() <-chan NetMessage { return t.msgChan }
 
-// Errors returns the transport error channel.
+// Errors returns a channel that receives non-fatal errors from the TCP read/write loop.
+// The channel is closed when the connection is terminated.
 func (t *TCP) Errors() <-chan error { return t.errChan }
 
-// Closed returns the connection closure channel.
+// Closed returns a channel that is closed once the TCP connection has terminated
+// and all cleanup is complete.
 func (t *TCP) Closed() <-chan struct{} { return t.closedChan }
 
-// SetCipher enables symmetric encryption for all subsequent messages.
+// SetCipher configures the TCP connection to use the provided Cipher for encrypting
+// all future outgoing messages and decrypting incoming ones.
+//
+// It returns true once the cipher is applied. This method is safe for concurrent use.
 func (t *TCP) SetCipher(c Cipher) bool {
 	t.keyMu.Lock()
 	t.cipher = c
@@ -137,10 +135,15 @@ func (t *TCP) SetCipher(c Cipher) bool {
 	return true
 }
 
-// Send encrypts (if a cipher is set) and frames the data before sending it over the TCP socket.
+// Send encrypts (if a cipher is configured), frames, and writes the message payload
+// to the underlying TCP socket.
+//
+// Send blocks until the write completes, the context is canceled, or the write deadline
+// is reached. It returns an *Error if encryption, deadline setting, framing, or
+// writing fails. This method is safe for concurrent use.
 func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return NewError(OpSend, "TCP", err)
 	}
 
 	t.keyMu.RLock()
@@ -151,31 +154,33 @@ func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if cipher != nil {
 		data, err = cipher.Encrypt(data)
 		if err != nil {
-			return fmt.Errorf("tcp: encrypt failed: %w", err)
+			return NewError(OpEncrypt, "TCP", err)
 		}
 	}
 
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := t.conn.SetWriteDeadline(deadline); err != nil {
-			return err
-		}
-	} else {
-		if err := t.conn.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
-			return err
-		}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(WriteTimeout)
+	}
+
+	if err := t.conn.SetWriteDeadline(deadline); err != nil {
+		return NewError(OpDeadline, "TCP", err)
 	}
 
 	if err := t.framer.WriteFrame(t.conn, data); err != nil {
-		return fmt.Errorf("tcp: write frame failed: %w", err)
+		return NewError(OpFramer, "TCP", err)
 	}
 
 	return nil
 }
 
-// Close terminates the underlying TCP connection.
+// Close gracefully closes the connection, terminating the underlying TCP socket.
+//
+// It is idempotent and safe to call concurrently. Closing the connection triggers
+// cleanup of all channels and background goroutines.
 func (t *TCP) Close() error {
 	if t.conn == nil {
 		return nil
@@ -193,15 +198,19 @@ func (t *TCP) readLoop() {
 		close(t.errChan)
 	}()
 
+	sendErr := func(err error) {
+		select {
+		case t.errChan <- err:
+		default:
+		}
+	}
+
 	reader := bufio.NewReaderSize(t.conn, 64*1024)
 
 	for {
 		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
 			if !isIgnorableError(err) {
-				select {
-				case t.errChan <- err:
-				default:
-				}
+				sendErr(NewError(OpDeadline, "TCP", err))
 			}
 
 			return
@@ -210,10 +219,7 @@ func (t *TCP) readLoop() {
 		payload, err := t.framer.ReadFrame(reader)
 		if err != nil {
 			if !isIgnorableError(err) {
-				select {
-				case t.errChan <- err:
-				default:
-				}
+				sendErr(NewError(OpFramer, "TCP", err))
 			}
 
 			return
@@ -226,10 +232,7 @@ func (t *TCP) readLoop() {
 		if cipher != nil {
 			payload, err = cipher.Decrypt(payload)
 			if err != nil {
-				select {
-				case t.errChan <- fmt.Errorf("tcp: decrypt failed: %w", err):
-				default:
-				}
+				sendErr(NewError(OpDecrypt, "TCP", err))
 
 				// Don't return, as this might be a single corrupt packet.
 				// Depending on the protocol, you might want to continue or disconnect.
@@ -245,7 +248,35 @@ func (t *TCP) readLoop() {
 	}
 }
 
-// isIgnorableError checks for errors that are expected during a normal connection closure.
+// newProxyConn dials the given endpoint through the specified proxy URL.
+func newProxyConn(ctx context.Context, proxyURL, endpoint string) (conn net.Conn, err error) {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, NewError(OpProxy, "TCP", err)
+	}
+
+	dialer, err := proxy.FromURL(u, proxy.Direct)
+	if err != nil {
+		return nil, NewError(OpProxy, "TCP", err)
+	}
+
+	if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+		conn, err = contextDialer.DialContext(ctx, "tcp", endpoint)
+	} else {
+		// Fallback for dialers that don't implement ContextDialer
+		conn, err = dialer.Dial("tcp", endpoint)
+	}
+
+	if err != nil {
+		return nil, NewError(OpDial, "TCP", err)
+	}
+
+	return conn, err
+}
+
+// isIgnorableError returns true if the error indicates a standard, expected
+// connection termination (such as EOF or a closed connection) which should not
+// be reported as a failure to the user.
 func isIgnorableError(err error) bool {
 	if err == nil {
 		return true

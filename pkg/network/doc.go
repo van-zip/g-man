@@ -32,5 +32,32 @@ Steam messages without needing to know if they are traveling over TCP or WebSock
 
 This asynchronous model (via Go channels) allows for a clean
 separation of network I/O from the business logic of processing messages.
+
+# Error Handling
+
+All functions and methods in the package return structured, custom errors of type `*Error`.
+This allows callers to easily programmatically inspect the failed operation, transport type,
+and underlying causes:
+
+  - `Op`: Represents the specific operation that failed (e.g. `OpDial`, `OpSend`, `OpRead`, etc.).
+  - `Net`: Indicates the transport protocol name (`"TCP"` or `"WS"`).
+  - `Err`: The wrapped underlying error (e.g., a standard `net.OpError` or custom protocol failure).
+
+To inspect the error programmatically:
+
+	if err != nil {
+		var netErr *network.Error
+		if errors.As(err, &netErr) {
+			switch netErr.Op {
+			case network.OpDial:
+				// handle connection failures
+			case network.OpSend:
+				// handle write failures
+			}
+		}
+	}
+
+Additionally, `network.Error` supports standard Go wrapping. Calling `errors.Is(err, context.Canceled)` or
+`errors.Is(err, io.EOF)` on a returned `network.Error` will transparently verify the underlying error.
 */
 package network

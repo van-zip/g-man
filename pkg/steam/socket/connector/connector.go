@@ -30,6 +30,10 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/network"
 )
 
+type reconnectKeyType struct{}
+
+var reconnectKey = reconnectKeyType{}
+
 // connectorError implements the api.RetriableError interface for socket network errors.
 type connectorError struct {
 	msg       string
@@ -91,8 +95,8 @@ type Dialer func(ctx context.Context, logger log.Logger, endpoint, proxyURL stri
 // DefaultDialers provides implementations for TCP and WebSockets.
 func DefaultDialers() map[string]Dialer {
 	return map[string]Dialer{
-		"tcp": func(ctx context.Context, l log.Logger, s, p string, h http.Header) (network.Connection, error) {
-			return network.NewTCP(ctx, l, s, p, h, SteamFramer{})
+		"tcp": func(ctx context.Context, l log.Logger, s, p string, _ http.Header) (network.Connection, error) {
+			return network.NewTCP(ctx, l, s, p, SteamFramer{})
 		},
 		"websockets": func(ctx context.Context, l log.Logger, s, p string, h http.Header) (network.Connection, error) {
 			u := url.URL{Scheme: "wss", Host: s, Path: "/cmsocket/"}
@@ -139,10 +143,11 @@ type Connector struct {
 	logger   log.Logger
 	incoming chan []byte
 
-	conn         network.Connection
-	isConnecting atomic.Bool
-	lastServer   CMServer
-	servers      []CMServer
+	conn            network.Connection
+	isConnecting    atomic.Bool
+	reconnectCancel context.CancelFunc
+	lastServer      CMServer
+	servers         []CMServer
 }
 
 // New initializes a new Connector with a lifecycle tied to the provided context.
@@ -178,9 +183,23 @@ func (c *Connector) IsConnected() bool {
 	return c.conn != nil
 }
 
+func (c *Connector) cancelReconnect() {
+	c.mu.Lock()
+	if c.reconnectCancel != nil {
+		c.reconnectCancel()
+		c.reconnectCancel = nil
+	}
+
+	c.mu.Unlock()
+}
+
 // Connect establishes a connection to a specific CM server.
 // If an active connection exists, it is closed before the new one is opened.
 func (c *Connector) Connect(ctx context.Context, server CMServer) error {
+	if ctx.Value(reconnectKey) == nil {
+		c.cancelReconnect()
+	}
+
 	if !c.isConnecting.CompareAndSwap(false, true) {
 		return ErrAlreadyConnecting
 	}
@@ -309,15 +328,26 @@ func (c *Connector) handleDisconnect() {
 	c.mu.Lock()
 	c.conn = nil
 	policy := c.cfg.ReconnectPolicy
+
+	if c.ctx.Err() != nil || policy.MaxAttempts <= 0 {
+		c.mu.Unlock()
+		return
+	}
+
+	// Cancel any active reconnect loop first to avoid concurrency
+	if c.reconnectCancel != nil {
+		c.reconnectCancel()
+	}
+
+	reconCtx, cancel := context.WithCancel(c.ctx)
+	c.reconnectCancel = cancel
 	c.mu.Unlock()
 
-	if c.ctx.Err() == nil && policy.MaxAttempts > 0 {
-		go c.reconnectLoop()
-	}
+	go c.reconnectLoop(reconCtx)
 }
 
 // reconnectLoop manages exponential backoff and server selection during outages.
-func (c *Connector) reconnectLoop() {
+func (c *Connector) reconnectLoop(ctx context.Context) {
 	c.mu.RLock()
 	policy := c.cfg.ReconnectPolicy
 	backoff := policy.InitialBackoff
@@ -328,7 +358,7 @@ func (c *Connector) reconnectLoop() {
 
 	for att := 1; att <= policy.MaxAttempts; att++ {
 		select {
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -341,7 +371,8 @@ func (c *Connector) reconnectLoop() {
 			target = last
 		}
 
-		dialCtx, dialCancel := context.WithTimeout(c.ctx, c.cfg.ConnectTimeout)
+		dialCtx, dialCancel := context.WithTimeout(ctx, c.cfg.ConnectTimeout)
+		dialCtx = context.WithValue(dialCtx, reconnectKey, true)
 		err := c.Connect(dialCtx, target)
 
 		dialCancel()
@@ -357,7 +388,7 @@ func (c *Connector) reconnectLoop() {
 		select {
 		case <-timer.C:
 			backoff = min(time.Duration(float64(backoff)*policy.BackoffFactor), policy.MaxBackoff)
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			timer.Stop()
 			return
 		}

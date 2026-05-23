@@ -14,74 +14,92 @@ import (
 var globalConnectionID atomic.Int64
 
 // NetMessage represents a complete, raw binary message received from the network.
-// It is a slice of bytes that a Handler can process.
+// It is a slice of bytes that represents a framed or protocol-specific network packet.
 type NetMessage []byte
 
 // Cipher defines an interface for symmetric encryption and decryption.
 // It abstracts the cryptographic implementation from the transport layer.
 type Cipher interface {
+	// Encrypt encrypts the given plaintext data and returns the ciphertext.
 	Encrypt(data []byte) ([]byte, error)
+
+	// Decrypt decrypts the given ciphertext data and returns the plaintext.
 	Decrypt(data []byte) ([]byte, error)
 }
 
 // Framer defines an interface for reading and writing discrete frames
 // over a stream-oriented connection like TCP.
 type Framer interface {
+	// ReadFrame reads a single framed message from the reader and returns its payload.
+	// It returns an error if reading fails or if the frame is invalid.
 	ReadFrame(r io.Reader) ([]byte, error)
+
+	// WriteFrame frames and writes the payload to the writer.
+	// It returns an error if writing fails.
 	WriteFrame(w io.Writer, data []byte) error
 }
 
-// Connection defines the standard interface that all network connection types must implement.
-// It provides methods for sending data, closing the connection, and event notification via channels.
+// Connection represents a bi-directional network connection that can send
+// and receive discrete messages.
+//
+// Implementations of Connection are expected to handle transport-specific details,
+// such as read/write deadlines, encryption, and framing, in a concurrent-safe manner.
 type Connection interface {
-	// Send transmits the provided data over the connection. It is
-	// the responsibility of the implementation to handle message
-	// framing and encryption. This method must be safe for concurrent use.
+	// Send transmits the provided message over the connection.
 	//
-	// Implementation must respect the context; if the context is canceled before
-	// the write is complete, the operation must return ctx.Err().
+	// Send must be safe for concurrent use. If the context is canceled or
+	// its deadline is reached before the send completes, Send must return
+	// the context error.
 	Send(ctx context.Context, data []byte) error
 
-	// Close gracefully terminates the connection and releases any associated resources.
-	// This method should be idempotent (safe to call multiple times).
+	// Close gracefully terminates the connection, closes all channels, and releases
+	// all associated resources.
+	//
+	// Close must be safe for concurrent use and idempotent. After Close is called,
+	// subsequent calls should return nil or the original close error.
 	Close() error
 
 	// ID returns a unique identifier for this connection instance.
-	// IDs are guaranteed to be unique across all connections created
-	// during the program's lifetime.
+	// IDs are guaranteed to be unique within a single execution of the program.
 	ID() int64
 
-	// Name returns the protocol name (e.g., "TCP", "WS") for this connection.
+	// Name returns the name of the transport protocol (e.g., "TCP" or "WS").
 	Name() string
 
-	// Messages returns a channel that receives incoming raw network messages.
+	// Messages returns a channel that receives incoming messages from the network.
 	// The channel is closed when the connection is terminated.
 	Messages() <-chan NetMessage
 
-	// Errors returns a channel that receives non-fatal transport errors.
-	// The channel is closed when the connection is terminated.
+	// Errors returns a channel that receives non-fatal errors encountered during
+	// connection read or write operations. The channel is closed when the
+	// connection is terminated.
 	Errors() <-chan error
 
-	// Closed returns a channel that is closed when the connection is terminated.
+	// Closed returns a channel that is closed when the connection is terminated
+	// and all cleanup operations have completed.
 	Closed() <-chan struct{}
 }
 
-// Encryptable is an optional interface that connections can implement to support
-// session-based symmetric encryption.
+// Encryptable is an optional interface that can be implemented by a Connection
+// to support post-handshake, session-based symmetric encryption.
 type Encryptable interface {
-	// SetCipher provides the connection with a Cipher implementation
-	// used to encrypt outgoing messages and decrypt incoming ones.
+	// SetCipher configures the Connection to use the specified Cipher for
+	// encrypting all subsequent outgoing messages and decrypting incoming ones.
+	// It returns true if the cipher was successfully applied.
 	SetCipher(cipher Cipher) bool
 }
 
-// BaseConnection provides common functionality and state shared by all connection implementations.
-// It should be embedded in concrete connection types (e.g., TCPConnection).
+// BaseConnection provides common fields and methods shared by all connection
+// implementations, such as connection tracking and identity.
+//
+// It is intended to be embedded in concrete Connection implementations.
 type BaseConnection struct {
 	id   int64
 	name string
 }
 
-// NewBaseConnection creates a new BaseConnection with a unique ID and the provided name.
+// NewBaseConnection returns a new BaseConnection initialized with a unique identifier
+// and the specified protocol name.
 func NewBaseConnection(name string) BaseConnection {
 	return BaseConnection{
 		id:   globalConnectionID.Add(1),
@@ -89,7 +107,7 @@ func NewBaseConnection(name string) BaseConnection {
 	}
 }
 
-// ID returns the unique identifier for this connection.
+// ID returns the unique identifier for the connection.
 func (b *BaseConnection) ID() int64 {
 	return b.id
 }

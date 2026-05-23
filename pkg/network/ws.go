@@ -7,7 +7,6 @@ package network
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,8 +20,11 @@ import (
 
 var _ Connection = (*WS)(nil)
 
-// WS implements a WebSocket-based connection.
-// It leverages the gorilla/websocket library for handling the WebSocket protocol details.
+// WS implements the Connection interface using the WebSocket protocol.
+//
+// It wraps gorilla/websocket to handle connection establishment, message framing,
+// and WebSocket close handshake rules. All WebSocket operations are thread-safe and
+// respect contexts and write deadlines.
 type WS struct {
 	BaseConnection
 
@@ -37,8 +39,16 @@ type WS struct {
 	closeOnce sync.Once  // Ensures Close actions are performed only once.
 }
 
-// NewWS establishes a WebSocket connection using the provided context.
-// If endpoint does not contain a scheme, it defaults to wss://.
+// NewWS establishes a WebSocket connection to the specified endpoint.
+//
+// The endpoint should be a valid URL. If the endpoint does not specify a scheme,
+// it defaults to "wss://". Scheme "http" is normalized to "ws" and "https" to "wss".
+//
+// If proxyURL is not empty, the WebSocket dialer will route the handshake request
+// through the specified HTTP proxy. Handshake headers can be optionally provided
+// via the headers argument.
+//
+// If connection or handshake fails, it returns an *Error with OpDial.
 func NewWS(
 	ctx context.Context,
 	logger log.Logger,
@@ -51,7 +61,7 @@ func NewWS(
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("ws: invalid endpoint URL: %w", err)
+		return nil, NewError(OpDial, "WS", err)
 	}
 
 	switch u.Scheme {
@@ -69,7 +79,7 @@ func NewWS(
 	if proxyURL != "" {
 		pu, err := url.Parse(proxyURL)
 		if err != nil {
-			return nil, fmt.Errorf("ws: invalid proxy URL: %w", err)
+			return nil, NewError(OpProxy, "WS", err)
 		}
 
 		dialer.Proxy = http.ProxyURL(pu)
@@ -81,7 +91,7 @@ func NewWS(
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("ws: dial failed: %w", err)
+		return nil, NewError(OpDial, "WS", err)
 	}
 
 	w := &WS{
@@ -98,25 +108,32 @@ func NewWS(
 	return w, nil
 }
 
-// Name returns the transport identifier.
+// Name returns the protocol name "WS".
 func (w *WS) Name() string { return "WS" }
 
-// Messages returns the incoming message channel.
+// Messages returns a channel that receives incoming binary messages from the WebSocket.
+// The channel is closed when the connection is terminated.
 func (w *WS) Messages() <-chan NetMessage { return w.msgChan }
 
-// Errors returns the transport error channel.
+// Errors returns a channel that receives non-fatal errors from the WebSocket read loop.
+// The channel is closed when the connection is terminated.
 func (w *WS) Errors() <-chan error { return w.errChan }
 
-// Closed returns the connection closure channel.
+// Closed returns a channel that is closed once the WebSocket connection has terminated
+// and all cleanup is complete.
 func (w *WS) Closed() <-chan struct{} { return w.closedChan }
 
-// Send transmits data as a binary message over the WebSocket connection.
+// Send transmits the message payload as a binary frame over the WebSocket.
+//
+// Send blocks until the write completes, the context is canceled, or the write deadline
+// is reached. It returns an *Error if write deadline configuration or write operation fails.
+// This method is safe for concurrent use.
 func (w *WS) Send(ctx context.Context, data []byte) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 
 	if w.conn == nil {
-		return errors.New("ws: connection closed")
+		return NewError(OpSend, "WS", errors.New("connection closed"))
 	}
 
 	var err error
@@ -127,14 +144,20 @@ func (w *WS) Send(ctx context.Context, data []byte) error {
 	}
 
 	if err != nil {
-		return err
+		return NewError(OpDeadline, "WS", err)
 	}
 
-	return w.conn.WriteMessage(websocket.BinaryMessage, data)
+	if err := w.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+		return NewError(OpSend, "WS", err)
+	}
+
+	return nil
 }
 
-// Close sends a standard WebSocket close frame and terminates the connection.
-// It is safe to call multiple times.
+// Close gracefully closes the WebSocket connection by sending a CloseNormalClosure frame.
+//
+// Close is idempotent and thread-safe. Subsequent calls return nil or the original close error.
+// Closing the connection triggers cleanup of all channels and background goroutines.
 func (w *WS) Close() error {
 	var err error
 
@@ -150,7 +173,11 @@ func (w *WS) Close() error {
 		}
 	})
 
-	return err
+	if err != nil {
+		return NewError(OpClose, "WS", err)
+	}
+
+	return nil
 }
 
 // readLoop runs in a dedicated goroutine, reading messages from the WebSocket.
@@ -168,7 +195,7 @@ func (w *WS) readLoop() {
 			// Filter out expected close errors to avoid noisy logs.
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				select {
-				case w.errChan <- err:
+				case w.errChan <- NewError(OpRead, "WS", err):
 				default:
 				}
 			}

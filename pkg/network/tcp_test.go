@@ -61,10 +61,10 @@ func (m mockCipher) Decrypt(data []byte) ([]byte, error) {
 }
 
 func TestTCP_NewTCP_Fail(t *testing.T) {
-	_, err := NewTCP(context.Background(), log.Discard, "127.0.0.1:1", "", nil, mockFramer{})
+	_, err := NewTCP(context.Background(), log.Discard, "127.0.0.1:1", "", mockFramer{})
 	assert.Error(t, err)
 
-	_, err = NewTCP(context.Background(), log.Discard, "127.0.0.1:1", "", nil, nil)
+	_, err = NewTCP(context.Background(), log.Discard, "127.0.0.1:1", "", nil)
 	assert.ErrorContains(t, err, "framer cannot be nil")
 }
 

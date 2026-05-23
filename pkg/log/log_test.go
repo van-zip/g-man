@@ -6,6 +6,7 @@ package log
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -342,15 +343,19 @@ func TestDiscardLogger(t *testing.T) {
 	assert.Equal(t, d, d.With(String("k", "v")))
 
 	// Coverage for non-interface specific methods on the struct
-	impl := d.(*discard)
-	assert.Equal(t, d, impl.WithModule("m"))
-	assert.False(t, impl.IsDebugEnabled())
+	_ = d.(*discard)
 
 	// No-op calls
 	d.Debug("test")
 	d.Info("test")
 	d.Warn("test")
 	d.Error("test")
+
+	ctx := context.Background()
+	d.DebugContext(ctx, "test")
+	d.InfoContext(ctx, "test")
+	d.WarnContext(ctx, "test")
+	d.ErrorContext(ctx, "test")
 }
 
 func TestEmptyKeyField(t *testing.T) {
@@ -386,11 +391,21 @@ func TestSlogAdapter(t *testing.T) {
 		l.Warn("warn msg")
 		l.Error("error msg")
 
+		ctx := context.Background()
+		l.DebugContext(ctx, "debug msg ctx")
+		l.InfoContext(ctx, "info msg ctx")
+		l.WarnContext(ctx, "warn msg ctx")
+		l.ErrorContext(ctx, "error msg ctx")
+
 		output := buf.String()
 		assert.Contains(t, output, `"level":"DEBUG","msg":"debug msg"`)
 		assert.Contains(t, output, `"level":"INFO","msg":"info msg"`)
 		assert.Contains(t, output, `"level":"WARN","msg":"warn msg"`)
 		assert.Contains(t, output, `"level":"ERROR","msg":"error msg"`)
+		assert.Contains(t, output, `"level":"DEBUG","msg":"debug msg ctx"`)
+		assert.Contains(t, output, `"level":"INFO","msg":"info msg ctx"`)
+		assert.Contains(t, output, `"level":"WARN","msg":"warn msg ctx"`)
+		assert.Contains(t, output, `"level":"ERROR","msg":"error msg ctx"`)
 	})
 
 	t.Run("Fields mapping", func(t *testing.T) {
@@ -448,4 +463,183 @@ func TestSlogAdapter(t *testing.T) {
 	t.Run("Lifecycle methods", func(t *testing.T) {
 		assert.NoError(t, l.Close())
 	})
+}
+
+func TestLogger_JSONFormat(t *testing.T) {
+	var buf bytes.Buffer
+
+	cfg := DefaultConfig(LevelDebug)
+	cfg.Output = &buf
+	cfg.JSON = true
+	cfg.Colors = false
+
+	l := New(cfg)
+	l = l.With(Module("Core"), Component("Database"), String("ctx_field", "ctx_val"))
+
+	now := time.Now()
+	ip := net.ParseIP("192.168.1.1")
+	errTest := errors.New("database connection reset")
+
+	l.Info("user logged in",
+		String("username", "alice"),
+		Int("age", 30),
+		Int64("count", 9999999999),
+		Bool("active", true),
+		Err(errTest),
+		Bytes("raw_data", []byte("hello world")),
+		Time("login_time", now),
+		IP("client_ip", ip),
+		Any("fallback", struct{ X int }{X: 10}),
+	)
+
+	err := l.Close()
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 1)
+
+	var entry map[string]any
+
+	err = json.Unmarshal([]byte(lines[0]), &entry)
+	require.NoError(t, err)
+
+	assert.Equal(t, "INFO", entry["level"])
+	assert.Equal(t, "user logged in", entry["message"])
+	assert.NotEmpty(t, entry["time"])
+
+	// Verify modules array
+	mods, ok := entry["module"].([]any)
+	require.True(t, ok)
+	require.Len(t, mods, 2)
+	assert.Equal(t, "Core", mods[0])
+	assert.Equal(t, "Database", mods[1])
+
+	// Verify fields
+	assert.Equal(t, "ctx_val", entry["ctx_field"])
+	assert.Equal(t, "alice", entry["username"])
+	assert.Equal(t, float64(30), entry["age"])
+	assert.Equal(t, float64(9999999999), entry["count"])
+	assert.Equal(t, true, entry["active"])
+	assert.Equal(t, "database connection reset", entry["error"])
+	assert.Equal(t, "68656c6c6f20776f726c64", entry["raw_data"])
+	assert.Equal(t, "192.168.1.1", entry["client_ip"])
+	assert.Contains(t, entry["fallback"], "{X:10}")
+}
+
+func TestLogger_ContextAware(t *testing.T) {
+	var buf bytes.Buffer
+
+	cfg := DefaultConfig(LevelDebug)
+	cfg.Output = &buf
+	cfg.Colors = false
+
+	l := New(cfg)
+
+	type ctxKey string
+
+	ctx := context.WithValue(context.Background(), ctxKey("trace_id"), "12345")
+
+	l.DebugContext(ctx, "debug log in ctx", String("k", "v"))
+	l.InfoContext(ctx, "info log in ctx")
+	l.WarnContext(ctx, "warn log in ctx")
+	l.ErrorContext(ctx, "error log in ctx")
+
+	err := l.Close()
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "[D] debug log in ctx")
+	assert.Contains(t, output, "k=v")
+	assert.Contains(t, output, "[I] info log in ctx")
+	assert.Contains(t, output, "[W] warn log in ctx")
+	assert.Contains(t, output, "[E] error log in ctx")
+}
+
+func TestLogger_JSONFormat_ExtraTypes(t *testing.T) {
+	var buf bytes.Buffer
+
+	cfg := DefaultConfig(LevelDebug)
+	cfg.Output = &buf
+	cfg.JSON = true
+	cfg.Colors = false
+
+	l := New(cfg)
+
+	// Log with different levels to cover level formatting branch in formatJSON
+	l.Debug("debug msg")
+	l.Warn("warn msg")
+	l.Error("error msg")
+	l.(*AsyncLogger).log(Level(100), "unknown level msg", nil)
+
+	// Log all coverage-specific types
+	l.Info("extra types log",
+		Field{Key: "i8", Value: int8(-8)},
+		Field{Key: "i16", Value: int16(-16)},
+		Field{Key: "i32", Value: int32(-32)},
+		Field{Key: "u", Value: uint(10)},
+		Field{Key: "u8", Value: uint8(8)},
+		Field{Key: "u16", Value: uint16(16)},
+		Field{Key: "u32", Value: uint32(32)},
+		Field{Key: "u64", Value: uint64(64)},
+		Field{Key: "f32", Value: float32(1.23)},
+		Field{Key: "f64", Value: float64(4.56)},
+		Field{Key: "bool_false", Value: false},
+		Field{Key: "dur", Value: 5 * time.Second},
+		Field{Key: "ip_raw", Value: net.ParseIP("10.0.0.1")},
+		Field{Key: "", Value: "ignore_json"},
+	)
+
+	err := l.Close()
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 5)
+
+	// Check Debug line
+	var entryDebug map[string]any
+
+	err = json.Unmarshal([]byte(lines[0]), &entryDebug)
+	require.NoError(t, err)
+	assert.Equal(t, "DEBUG", entryDebug["level"])
+
+	// Check Warn line
+	var entryWarn map[string]any
+
+	err = json.Unmarshal([]byte(lines[1]), &entryWarn)
+	require.NoError(t, err)
+	assert.Equal(t, "WARN", entryWarn["level"])
+
+	// Check Error line
+	var entryError map[string]any
+
+	err = json.Unmarshal([]byte(lines[2]), &entryError)
+	require.NoError(t, err)
+	assert.Equal(t, "ERROR", entryError["level"])
+
+	// Check Unknown Level line
+	var entryUnknown map[string]any
+
+	err = json.Unmarshal([]byte(lines[3]), &entryUnknown)
+	require.NoError(t, err)
+	assert.Equal(t, "UNKNOWN", entryUnknown["level"])
+
+	// Check extra types fields line
+	var entry map[string]any
+
+	err = json.Unmarshal([]byte(lines[4]), &entry)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(-8), entry["i8"])
+	assert.Equal(t, float64(-16), entry["i16"])
+	assert.Equal(t, float64(-32), entry["i32"])
+	assert.Equal(t, float64(10), entry["u"])
+	assert.Equal(t, float64(8), entry["u8"])
+	assert.Equal(t, float64(16), entry["u16"])
+	assert.Equal(t, float64(32), entry["u32"])
+	assert.Equal(t, float64(64), entry["u64"])
+	assert.InDelta(t, 1.23, entry["f32"], 0.0001)
+	assert.InDelta(t, 4.56, entry["f64"], 0.0001)
+	assert.Equal(t, false, entry["bool_false"])
+	assert.Equal(t, "5s", entry["dur"])
+	assert.Equal(t, "10.0.0.1", entry["ip_raw"])
 }

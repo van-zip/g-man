@@ -23,11 +23,12 @@ import (
 )
 
 // Level represents the severity of a log message.
+//
 // The logger will ignore messages with a level lower than the configured threshold.
 type Level int8
 
 const (
-	// LevelDebug is typically used in development to trace logic.
+	// LevelDebug is typically used in development to trace detailed application logic.
 	LevelDebug Level = iota - 1
 	// LevelInfo is the default logging level for general operational events.
 	LevelInfo
@@ -37,7 +38,7 @@ const (
 	LevelError
 )
 
-// Short returns a single-character representation of the log level.
+// Short returns a single-character string representation of the log level.
 func (l Level) Short() string {
 	switch l {
 	case LevelDebug:
@@ -54,34 +55,49 @@ func (l Level) Short() string {
 }
 
 // Field represents a single key-value pair used in structured logging.
+//
 // It is recommended to use the provided helper functions (e.g., log.String(), log.Int())
 // to create Fields rather than constructing this struct manually.
 type Field struct {
-	Key   string
+	// Key is the unique identifier for the logging attribute.
+	Key string
+	// Value is the raw value of the logging attribute.
 	Value any
 }
 
 // Logger defines the primary interface for logging operations.
 //
-// All logging methods (Debug, Info, Warn, Error) are safe for concurrent use.
+// All logging methods are safe for concurrent use. The context-aware methods
+// allow downstream propagation of trace and correlation identifiers.
 type Logger interface {
 	// Debug logs a message at the Debug level.
 	Debug(msg string, fields ...Field)
+
+	// DebugContext logs a message at the Debug level with the provided context.
+	DebugContext(ctx context.Context, msg string, fields ...Field)
+
 	// Info logs a message at the Info level.
 	Info(msg string, fields ...Field)
+
+	// InfoContext logs a message at the Info level with the provided context.
+	InfoContext(ctx context.Context, msg string, fields ...Field)
+
 	// Warn logs a message at the Warn level.
 	Warn(msg string, fields ...Field)
+
+	// WarnContext logs a message at the Warn level with the provided context.
+	WarnContext(ctx context.Context, msg string, fields ...Field)
+
 	// Error logs a message at the Error level.
 	Error(msg string, fields ...Field)
+
+	// ErrorContext logs a message at the Error level with the provided context.
+	ErrorContext(ctx context.Context, msg string, fields ...Field)
 
 	// With returns a new Logger instance carrying the provided fields as context.
 	//
 	// If a field key is "module" or "component", it updates the module path
 	// instead of adding a standard field.
-	//
-	// Example:
-	//   requestLogger := logger.With(log.String("request_id", "abc-123"))
-	//   requestLogger.Info("Processing") // Includes request_id automatically
 	With(fields ...Field) Logger
 
 	// Close flushes the asynchronous queue and stops the writer loop.
@@ -89,29 +105,39 @@ type Logger interface {
 	Close() error
 }
 
-// Config controls the behavior and visual style of the logger.
+// Config controls the behavior, destination, and visual style of the logger.
 type Config struct {
 	// Level is the minimum severity to log.
 	Level Level
+
 	// Output is the destination for logs (e.g., os.Stdout or a file).
 	Output io.Writer
+
 	// TimeFormat defines the timestamp layout using Go standard time formatting.
 	TimeFormat string
+
 	// AsyncSize is the capacity of the non-blocking log queue.
 	// If the queue fills up, new messages are discarded to prevent blocking the caller.
 	AsyncSize int
-	// Colors enables ANSI terminal color codes in the output.
+
+	// Colors enables ANSI terminal color codes in the output (ignored if JSON is true).
 	Colors bool
+
 	// FullPath, if true, prints "Mod › Sub › Service" instead of a tree structure.
 	FullPath bool
+
 	// PathSep is the separator used when FullPath is true. Defaults to " › ".
 	PathSep string
+
 	// AlignWidth is the horizontal offset where fields start, ensuring messages are aligned.
 	AlignWidth int
+
+	// JSON, if true, outputs logs as structured JSON lines instead of human-readable text.
+	JSON bool
 }
 
 // DefaultConfig returns a configuration balanced for local development.
-// It enables colors, tree-style modules, and a buffer size of 2048.
+// It enables colors, tree-style modules, a buffer size of 2048, and standard text output.
 func DefaultConfig(level Level) Config {
 	return Config{
 		Level:      level,
@@ -122,6 +148,7 @@ func DefaultConfig(level Level) Config {
 		FullPath:   false,
 		PathSep:    " › ",
 		AlignWidth: 75,
+		JSON:       false,
 	}
 }
 
@@ -144,6 +171,7 @@ type AsyncLogger struct {
 }
 
 // New creates and starts a background goroutine to process logs based on the provided Config.
+//
 // The user is responsible for calling Close() on the returned Logger to ensure all
 // logs are flushed to the output destination.
 func New(cfg Config) Logger {
@@ -152,17 +180,16 @@ func New(cfg Config) Logger {
 		queue: make(chan *bytes.Buffer, cfg.AsyncSize),
 		wg:    &sync.WaitGroup{},
 	}
-	l.wg.Add(1)
-
-	go l.writerLoop()
+	l.wg.Go(l.writerLoop)
 
 	return l
 }
 
-// Close gracefully shuts down the logger. It stops accepting new logs,
-// closes the internal queue, and waits for pending logs to be written.
+// Close gracefully shuts down the logger.
+//
+// It stops accepting new logs, closes the internal queue, and waits for pending logs
+// to be written. It returns nil and is safe for multiple calls.
 func (l *AsyncLogger) Close() error {
-	// Prevent multiple closures
 	if l.closed.Swap(true) {
 		return nil
 	}
@@ -176,8 +203,10 @@ func (l *AsyncLogger) Close() error {
 	return nil
 }
 
-// With appends fields to the current logger context. If a field key is "module"
-// or "component", it updates the module path instead.
+// With appends fields to the current logger context.
+//
+// If a field key is "module" or "component", it updates the module path instead.
+// It returns a new Logger instance carrying the updated context.
 func (l *AsyncLogger) With(fields ...Field) Logger {
 	child := &AsyncLogger{
 		cfg:     l.cfg,
@@ -213,17 +242,36 @@ func (l *AsyncLogger) With(fields ...Field) Logger {
 // Debug logs a message at the Debug level.
 func (l *AsyncLogger) Debug(msg string, f ...Field) { l.log(LevelDebug, msg, f) }
 
+// DebugContext logs a message at the Debug level with the provided context.
+func (l *AsyncLogger) DebugContext(ctx context.Context, msg string, f ...Field) {
+	l.log(LevelDebug, msg, f)
+}
+
 // Info logs a message at the Info level.
 func (l *AsyncLogger) Info(msg string, f ...Field) { l.log(LevelInfo, msg, f) }
+
+// InfoContext logs a message at the Info level with the provided context.
+func (l *AsyncLogger) InfoContext(ctx context.Context, msg string, f ...Field) {
+	l.log(LevelInfo, msg, f)
+}
 
 // Warn logs a message at the Warn level.
 func (l *AsyncLogger) Warn(msg string, f ...Field) { l.log(LevelWarn, msg, f) }
 
+// WarnContext logs a message at the Warn level with the provided context.
+func (l *AsyncLogger) WarnContext(ctx context.Context, msg string, f ...Field) {
+	l.log(LevelWarn, msg, f)
+}
+
 // Error logs a message at the Error level.
 func (l *AsyncLogger) Error(msg string, f ...Field) { l.log(LevelError, msg, f) }
 
+// ErrorContext logs a message at the Error level with the provided context.
+func (l *AsyncLogger) ErrorContext(ctx context.Context, msg string, f ...Field) {
+	l.log(LevelError, msg, f)
+}
+
 func (l *AsyncLogger) log(lvl Level, msg string, fields []Field) {
-	// Fast check for level and closed state
 	if lvl < l.cfg.Level || l.closed.Load() {
 		return
 	}
@@ -231,22 +279,23 @@ func (l *AsyncLogger) log(lvl Level, msg string, fields []Field) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 
-	l.format(buf, lvl, msg, fields)
+	if l.cfg.JSON {
+		l.formatJSON(buf, lvl, msg, fields)
+	} else {
+		l.format(buf, lvl, msg, fields)
+	}
 
-	// Safe enqueue using RLock to prevent race with Close()
 	l.mu.RLock()
 
 	if l.closed.Load() {
 		l.mu.RUnlock()
 		bufPool.Put(buf)
-
 		return
 	}
 
 	select {
 	case l.queue <- buf:
 	default:
-		// Queue is full. Record the drop and discard the buffer.
 		l.dropped.Add(1)
 		bufPool.Put(buf)
 	}
@@ -255,10 +304,7 @@ func (l *AsyncLogger) log(lvl Level, msg string, fields []Field) {
 }
 
 func (l *AsyncLogger) writerLoop() {
-	defer l.wg.Done()
-
 	for buf := range l.queue {
-		// Report dropped messages periodically or on the next successful write
 		if drops := l.dropped.Swap(0); drops > 0 {
 			warnMsg := fmt.Sprintf(
 				"%s[LOGGER WARNING] Dropped %d messages due to full queue%s\n",
@@ -292,12 +338,113 @@ func (l *AsyncLogger) writeColor(b *bytes.Buffer, colorCode string) {
 	}
 }
 
-// format handles the complex logic of building the log line, including:
-// 1. Timestamp and Level
-// 2. Module Tree (indentation)
-// 3. Main Message
-// 4. Inline Fields (short values)
-// 5. Block Fields (multi-line or very long values)
+// formatJSON serializes the log record as a structured JSON line.
+func (l *AsyncLogger) formatJSON(b *bytes.Buffer, lvl Level, msg string, callFields []Field) {
+	b.WriteString(`{"time":`)
+	b.WriteString(strconv.Quote(time.Now().Format(l.cfg.TimeFormat)))
+	b.WriteString(`,"level":`)
+
+	switch lvl {
+	case LevelDebug:
+		b.WriteString(`"DEBUG"`)
+	case LevelInfo:
+		b.WriteString(`"INFO"`)
+	case LevelWarn:
+		b.WriteString(`"WARN"`)
+	case LevelError:
+		b.WriteString(`"ERROR"`)
+	default:
+		b.WriteString(`"UNKNOWN"`)
+	}
+
+	if len(l.path) > 0 {
+		b.WriteString(`,"module":[`)
+
+		for i, p := range l.path {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+
+			b.WriteString(strconv.Quote(p))
+		}
+
+		b.WriteByte(']')
+	}
+
+	b.WriteString(`,"message":`)
+	b.WriteString(strconv.Quote(msg))
+
+	writeFieldJSON := func(f Field) {
+		if f.Key == "" {
+			return
+		}
+
+		b.WriteByte(',')
+		b.WriteString(strconv.Quote(f.Key))
+		b.WriteByte(':')
+
+		switch val := f.Value.(type) {
+		case string:
+			b.WriteString(strconv.Quote(val))
+		case int:
+			b.WriteString(strconv.Itoa(val))
+		case int8:
+			b.WriteString(strconv.FormatInt(int64(val), 10))
+		case int16:
+			b.WriteString(strconv.FormatInt(int64(val), 10))
+		case int32:
+			b.WriteString(strconv.FormatInt(int64(val), 10))
+		case int64:
+			b.WriteString(strconv.FormatInt(val, 10))
+		case uint:
+			b.WriteString(strconv.FormatUint(uint64(val), 10))
+		case uint8:
+			b.WriteString(strconv.FormatUint(uint64(val), 10))
+		case uint16:
+			b.WriteString(strconv.FormatUint(uint64(val), 10))
+		case uint32:
+			b.WriteString(strconv.FormatUint(uint64(val), 10))
+		case uint64:
+			b.WriteString(strconv.FormatUint(val, 10))
+		case float32:
+			b.WriteString(strconv.FormatFloat(float64(val), 'g', -1, 32))
+		case float64:
+			b.WriteString(strconv.FormatFloat(val, 'g', -1, 64))
+		case bool:
+			if val {
+				b.WriteString("true")
+			} else {
+				b.WriteString("false")
+			}
+
+		case error:
+			b.WriteString(strconv.Quote(val.Error()))
+		case []byte:
+			b.WriteString(strconv.Quote(formatValue(val)))
+		case time.Duration:
+			b.WriteString(strconv.Quote(val.String()))
+		case time.Time:
+			var buf [32]byte
+			b.WriteString(strconv.Quote(string(val.AppendFormat(buf[:0], "15:04:05.000"))))
+		case net.IP:
+			b.WriteString(strconv.Quote(val.String()))
+		default:
+			b.WriteString(strconv.Quote(fmt.Sprintf("%+v", val)))
+		}
+	}
+
+	for _, f := range l.context {
+		writeFieldJSON(f)
+	}
+
+	for _, f := range callFields {
+		writeFieldJSON(f)
+	}
+
+	b.WriteString("}\n")
+}
+
+// format handles the complex logic of building a terminal-friendly human-readable log line.
 func (l *AsyncLogger) format(b *bytes.Buffer, lvl Level, msg string, callFields []Field) {
 	visibleLen := 0
 
@@ -453,7 +600,8 @@ func levelColor(lvl Level) string {
 }
 
 // formatValue stringifies a value with minimal allocations.
-// Heavily optimized using strconv instead of fmt.Sprintf.
+//
+// It is heavily optimized using strconv instead of fmt.Sprintf.
 func formatValue(v any) string {
 	switch val := v.(type) {
 	case string:
@@ -496,7 +644,19 @@ func formatValue(v any) string {
 
 	case []byte:
 		if len(val) > 24 {
-			return fmt.Sprintf("[ %d bytes | preview: %x... ]", len(val), val[:16])
+			var buf [64]byte
+
+			b := buf[:0]
+			b = append(b, "[ "...)
+			b = strconv.AppendInt(b, int64(len(val)), 10)
+			b = append(b, " bytes | preview: "...)
+			offset := len(b)
+			b = b[:offset+32]
+			hex.Encode(b[offset:], val[:16])
+			b = append(b, "..."...)
+			b = append(b, " ]"...)
+
+			return string(b)
 		}
 
 		return hex.EncodeToString(val)
@@ -506,11 +666,12 @@ func formatValue(v any) string {
 	case time.Duration:
 		return val.String()
 	case time.Time:
-		return val.Format("15:04:05.000")
+		var buf [32]byte
+		return string(val.AppendFormat(buf[:0], "15:04:05.000"))
 	case net.IP:
 		return val.String()
 	default:
-		return fmt.Sprintf("%+v", v) // Fallback for complex structs
+		return fmt.Sprintf("%+v", v) // Fallback for complex reflection formatting
 	}
 }
 
@@ -519,84 +680,84 @@ var bufPool = sync.Pool{
 	New: func() any { return new(bytes.Buffer) },
 }
 
-// String creates a Field for a string value.
+// String returns a Field with a string value.
 func String(k, v string) Field { return Field{Key: k, Value: v} }
 
-// Int creates a Field for an integer value.
+// Int returns a Field with an integer value.
 func Int(k string, v int) Field { return Field{Key: k, Value: v} }
 
-// Int32 creates a Field for an int32 value.
+// Int32 returns a Field with an int32 value.
 func Int32(k string, v int32) Field { return Field{Key: k, Value: v} }
 
-// Int64 creates a Field for an int64 value.
+// Int64 returns a Field with an int64 value.
 func Int64(k string, v int64) Field { return Field{Key: k, Value: v} }
 
-// Uint creates a Field for an unsigned integer value.
+// Uint returns a Field with an unsigned integer value.
 func Uint(k string, v uint) Field { return Field{Key: k, Value: v} }
 
-// Uint32 creates a Field for a uint32 value.
+// Uint32 returns a Field with a uint32 value.
 func Uint32(k string, v uint32) Field { return Field{Key: k, Value: v} }
 
-// Uint64 creates a Field for a uint64 value.
+// Uint64 returns a Field with a uint64 value.
 func Uint64(k string, v uint64) Field { return Field{Key: k, Value: v} }
 
-// Float64 creates a Field for a float64 value.
+// Float64 returns a Field with a float64 value.
 func Float64(k string, v float64) Field { return Field{Key: k, Value: v} }
 
-// Bool creates a Field for a boolean value.
+// Bool returns a Field with a boolean value.
 func Bool(k string, v bool) Field { return Field{Key: k, Value: v} }
 
-// Duration creates a Field for a time.Duration value.
+// Duration returns a Field with a time.Duration value.
 func Duration(k string, v time.Duration) Field { return Field{Key: k, Value: v} }
 
-// Time creates a Field for a time.Time value.
+// Time returns a Field with a time.Time value.
 func Time(k string, v time.Time) Field { return Field{Key: k, Value: v} }
 
-// Err creates a Field for an error.
+// Err returns a Field with an error.
 func Err(err error) Field { return Field{Key: "error", Value: err} }
 
-// Any creates a Field for an arbitrary value.
+// Any returns a Field with an arbitrary value.
 func Any(k string, v any) Field { return Field{Key: k, Value: v} }
 
-// Module creates a special Field that defines a new level in the logger's module hierarchy.
+// Module returns a special Field that defines a new level in the logger's module hierarchy.
 func Module(name string) Field { return Field{Key: "module", Value: name} }
 
 // Component is an alias for Module, used to denote a subsection of a module.
 func Component(name string) Field { return Field{Key: "component", Value: name} }
 
-// Strings creates a Field for a slice of strings.
+// Strings returns a Field with a slice of strings.
 func Strings(k string, v []string) Field { return Field{Key: k, Value: v} }
 
-// Ints creates a Field for a slice of integers.
+// Ints returns a Field with a slice of integers.
 func Ints(k string, v []int) Field { return Field{Key: k, Value: v} }
 
-// Uints creates a Field for a slice of unsigned integers.
+// Uints returns a Field with a slice of unsigned integers.
 func Uints(k string, v []uint) Field { return Field{Key: k, Value: v} }
 
-// Bools creates a Field for a slice of booleans.
+// Bools returns a Field with a slice of booleans.
 func Bools(k string, v []bool) Field { return Field{Key: k, Value: v} }
 
-// Bytes creates a Field for a slice of bytes (logged as hex).
+// Bytes returns a Field with a slice of bytes (logged as hex).
 func Bytes(k string, v []byte) Field { return Field{Key: k, Value: v} }
 
-// ByteString creates a Field for a slice of bytes logged as a string.
+// ByteString returns a Field with a slice of bytes logged as a string.
 func ByteString(k string, v []byte) Field { return Field{Key: k, Value: string(v)} }
 
-// HexF creates a Field for a slice of bytes logged as a hex string.
+// HexF returns a Field with a slice of bytes logged as a hex string.
 func HexF(k string, v []byte) Field { return Field{Key: k, Value: hex.EncodeToString(v)} }
 
-// IP creates a Field for a net.IP value.
+// IP returns a Field with a net.IP value.
 func IP(k string, v net.IP) Field { return Field{Key: k, Value: v.String()} }
 
-// Port creates a Field for a network port.
+// Port returns a Field with a network port.
 func Port(k string, v int) Field { return Field{Key: k, Value: v} }
 
-// HostPort creates a Field for a combined host and port.
+// HostPort returns a Field with a combined host and port.
 func HostPort(k, h string, p int) Field {
 	return Field{Key: k, Value: fmt.Sprintf("%s:%d", h, p)}
 }
 
-// StringOpt returns a Field if the value is not empty.
+// StringOpt returns a Field if the string value is not empty.
 func StringOpt(k, v string) Field {
 	if v == "" {
 		return Field{}
@@ -605,7 +766,7 @@ func StringOpt(k, v string) Field {
 	return Field{Key: k, Value: v}
 }
 
-// IntOpt returns a Field if the value is not zero.
+// IntOpt returns a Field if the integer value is not zero.
 func IntOpt(k string, v int) Field {
 	if v == 0 {
 		return Field{}
@@ -658,18 +819,45 @@ func FromSlog(l *slog.Logger) Logger {
 	return &slogAdapter{l: l}
 }
 
-func (s *slogAdapter) Info(msg string, fields ...Field)  { s.log(slog.LevelInfo, msg, fields) }
-func (s *slogAdapter) Debug(msg string, fields ...Field) { s.log(slog.LevelDebug, msg, fields) }
-func (s *slogAdapter) Warn(msg string, fields ...Field)  { s.log(slog.LevelWarn, msg, fields) }
-func (s *slogAdapter) Error(msg string, fields ...Field) { s.log(slog.LevelError, msg, fields) }
+func (s *slogAdapter) Info(msg string, fields ...Field) {
+	s.log(context.Background(), slog.LevelInfo, msg, fields)
+}
 
-func (s *slogAdapter) log(lvl slog.Level, msg string, fields []Field) {
+func (s *slogAdapter) Debug(msg string, fields ...Field) {
+	s.log(context.Background(), slog.LevelDebug, msg, fields)
+}
+
+func (s *slogAdapter) Warn(msg string, fields ...Field) {
+	s.log(context.Background(), slog.LevelWarn, msg, fields)
+}
+
+func (s *slogAdapter) Error(msg string, fields ...Field) {
+	s.log(context.Background(), slog.LevelError, msg, fields)
+}
+
+func (s *slogAdapter) InfoContext(ctx context.Context, msg string, fields ...Field) {
+	s.log(ctx, slog.LevelInfo, msg, fields)
+}
+
+func (s *slogAdapter) DebugContext(ctx context.Context, msg string, fields ...Field) {
+	s.log(ctx, slog.LevelDebug, msg, fields)
+}
+
+func (s *slogAdapter) WarnContext(ctx context.Context, msg string, fields ...Field) {
+	s.log(ctx, slog.LevelWarn, msg, fields)
+}
+
+func (s *slogAdapter) ErrorContext(ctx context.Context, msg string, fields ...Field) {
+	s.log(ctx, slog.LevelError, msg, fields)
+}
+
+func (s *slogAdapter) log(ctx context.Context, lvl slog.Level, msg string, fields []Field) {
 	attrs := make([]any, len(fields))
 	for i, f := range fields {
 		attrs[i] = slog.Any(f.Key, f.Value)
 	}
 
-	s.l.Log(context.Background(), lvl, msg, attrs...)
+	s.l.Log(ctx, lvl, msg, attrs...)
 }
 
 func (s *slogAdapter) With(fields ...Field) Logger {
@@ -689,11 +877,13 @@ var Discard Logger = &discard{}
 
 type discard struct{}
 
-func (d *discard) Close() error                 { return nil }
-func (d *discard) With(fields ...Field) Logger  { return d }
-func (d *discard) WithModule(mod string) Logger { return d }
-func (d *discard) Debug(msg string, f ...Field) {}
-func (d *discard) Info(msg string, f ...Field)  {}
-func (d *discard) Warn(msg string, f ...Field)  {}
-func (d *discard) Error(msg string, f ...Field) {}
-func (d *discard) IsDebugEnabled() bool         { return false }
+func (d *discard) Close() error                                             { return nil }
+func (d *discard) With(fields ...Field) Logger                              { return d }
+func (d *discard) Debug(msg string, f ...Field)                             { _ = msg }
+func (d *discard) DebugContext(ctx context.Context, msg string, f ...Field) { _ = msg }
+func (d *discard) Info(msg string, f ...Field)                              { _ = msg }
+func (d *discard) InfoContext(ctx context.Context, msg string, f ...Field)  { _ = msg }
+func (d *discard) Warn(msg string, f ...Field)                              { _ = msg }
+func (d *discard) WarnContext(ctx context.Context, msg string, f ...Field)  { _ = msg }
+func (d *discard) Error(msg string, f ...Field)                             { _ = msg }
+func (d *discard) ErrorContext(ctx context.Context, msg string, f ...Field) { _ = msg }

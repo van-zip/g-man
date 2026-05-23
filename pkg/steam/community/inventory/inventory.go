@@ -6,8 +6,12 @@
 package inventory
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
@@ -101,4 +105,48 @@ func GetUserInventoryContents(
 	}
 
 	return inventory, currency, totalCount, nil
+}
+
+var rxAppContextData = regexp.MustCompile(`(?s)var g_rgAppContextData\s*=\s*(.*?);`)
+
+// GetUserInventoryContexts retrieves the application and context details for a user's inventory.
+func GetUserInventoryContexts(
+	ctx context.Context,
+	c community.Requester,
+	userID uint64,
+) (map[string]*AppContext, error) {
+	path := fmt.Sprintf("profiles/%d/inventory", userID)
+
+	htmlBytes, err := community.GetHTML(ctx, c, path)
+	if err != nil {
+		return nil, fmt.Errorf("inventory: failed to fetch inventory page: %w", err)
+	}
+
+	if bytes.Contains(htmlBytes, []byte("This profile is private.")) {
+		return nil, errors.New("inventory: profile is private")
+	}
+
+	if bytes.Contains(htmlBytes, []byte("The inventory is currently private.")) ||
+		bytes.Contains(htmlBytes, []byte("inventory is currently private")) {
+		return nil, errors.New("inventory: inventory is private")
+	}
+
+	match := rxAppContextData.FindSubmatch(htmlBytes)
+	if len(match) != 2 {
+		return nil, errors.New("inventory: malformed page (g_rgAppContextData not found)")
+	}
+
+	// In some cases, if the inventory is empty, Steam might return an empty JSON array `[]` instead of `{}`,
+	// which fails to unmarshal into map[string]*AppContext. We check for `[]` first.
+	cleanedJSON := bytes.TrimSpace(match[1])
+	if bytes.Equal(cleanedJSON, []byte("[]")) {
+		return make(map[string]*AppContext), nil
+	}
+
+	var data map[string]*AppContext
+	if err := json.Unmarshal(cleanedJSON, &data); err != nil {
+		return nil, fmt.Errorf("inventory: failed to parse context data JSON: %w", err)
+	}
+
+	return data, nil
 }

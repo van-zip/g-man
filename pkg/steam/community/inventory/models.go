@@ -54,3 +54,20 @@ type inventoryResponse struct {
 	LastAssetID  string        `json:"last_assetid"`
 	TotalCount   int           `json:"total_inventory_count"`
 }
+
+// AppContext represents an application context block in Steam inventory data.
+type AppContext struct {
+	AppID      uint32                    `json:"appid"`
+	Name       string                    `json:"name"`
+	Icon       string                    `json:"icon"`
+	Link       string                    `json:"link"`
+	AssetCount int                       `json:"asset_count"`
+	Contexts   map[string]*ContextDetail `json:"rgContexts"`
+}
+
+// ContextDetail represents individual context detail inside AppContext (e.g., context id "2" for tradeable items).
+type ContextDetail struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AssetCount int    `json:"asset_count"`
+}

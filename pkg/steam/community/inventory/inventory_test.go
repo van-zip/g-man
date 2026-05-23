@@ -200,3 +200,85 @@ type inventoryResponseMock struct {
 	LastAssetID  string                  `json:"last_assetid"`
 	TotalCount   int                     `json:"total_inventory_count"`
 }
+
+func TestGetUserInventoryContexts(t *testing.T) {
+	ctx := context.Background()
+	userID := uint64(76561198000000000)
+
+	t.Run("Success Scraped AppContext", func(t *testing.T) {
+		mock := requester.New()
+
+		htmlContent := `
+			var g_rgAppContextData = {
+				"730": {
+					"appid": 730,
+					"name": "Counter-Strike 2",
+					"icon": "https://media.steampowered.com/apps/730.jpg",
+					"link": "https://steamcommunity.com/app/730",
+					"asset_count": 5,
+					"rgContexts": {
+						"2": {
+							"id": "2",
+							"name": "Backpack",
+							"asset_count": 5
+						}
+					}
+				}
+			};
+		`
+
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
+			expectedPath := fmt.Sprintf("profiles/%d/inventory", userID)
+			assert.Contains(t, path, expectedPath)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       requester.NewBuffer([]byte(htmlContent)),
+			}, nil
+		}
+
+		contexts, err := inventory.GetUserInventoryContexts(ctx, mock, userID)
+		require.NoError(t, err)
+		require.Len(t, contexts, 1)
+
+		cs2 := contexts["730"]
+		require.NotNil(t, cs2)
+		assert.Equal(t, uint32(730), cs2.AppID)
+		assert.Equal(t, "Counter-Strike 2", cs2.Name)
+		assert.Equal(t, 5, cs2.AssetCount)
+		assert.Contains(t, cs2.Contexts, "2")
+		assert.Equal(t, "Backpack", cs2.Contexts["2"].Name)
+	})
+
+	t.Run("Success Empty Context List", func(t *testing.T) {
+		mock := requester.New()
+		htmlContent := `var g_rgAppContextData = [];`
+
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       requester.NewBuffer([]byte(htmlContent)),
+			}, nil
+		}
+
+		contexts, err := inventory.GetUserInventoryContexts(ctx, mock, userID)
+		require.NoError(t, err)
+		assert.Empty(t, contexts)
+	})
+
+	t.Run("Private Inventory Error", func(t *testing.T) {
+		mock := requester.New()
+		htmlContent := `This profile is private.`
+
+		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       requester.NewBuffer([]byte(htmlContent)),
+			}, nil
+		}
+
+		_, err := inventory.GetUserInventoryContexts(ctx, mock, userID)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "profile is private")
+	})
+}

@@ -289,3 +289,61 @@ func TestPriceManager_RealtimeWebsocketHandshake(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 82.0, p.Buy.Metal)
 }
+
+func TestPriceManager_SocketCustomUserAgent(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	customUA := "MySpecialTestUserAgent/1.0"
+
+	var (
+		receivedUA string
+		done       sync.WaitGroup
+	)
+
+	done.Add(1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUA = r.Header.Get("User-Agent")
+
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err == nil {
+			_ = conn.WriteMessage(
+				websocket.TextMessage,
+				[]byte(`0{"sid":"123","upgrades":[],"pingInterval":25000,"pingTimeout":5000}`),
+			)
+			conn.Close()
+		}
+
+		done.Done()
+	}))
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	logger := log.New(log.DefaultConfig(log.LevelError))
+	client := NewClient(nil).WithUserAgent(customUA)
+
+	manager := NewManager(client, logger)
+	manager.socket.url = wsURL // override url for mock
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = manager.socket.connectAndListen(ctx)
+	}()
+
+	select {
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for socket connection")
+	case <-func() chan struct{} {
+		ch := make(chan struct{})
+		go func() {
+			done.Wait()
+			close(ch)
+		}()
+
+		return ch
+	}():
+	}
+
+	assert.Equal(t, customUA, receivedUA)
+}

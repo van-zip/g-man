@@ -51,6 +51,10 @@ func NewManager(client *Client, logger log.Logger) *Manager {
 	}
 
 	m.socket = NewSocketManager("", m.logger)
+	if client != nil && client.UserAgent() != "" {
+		m.socket.WithUserAgent(client.UserAgent())
+	}
+
 	m.socket.OnPrice(func(p *Price) {
 		m.logger.Debug("Received real-time price update", log.String("sku", p.SKU))
 		m.mu.Lock()

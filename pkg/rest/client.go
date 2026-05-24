@@ -433,6 +433,11 @@ func (c *Client) WithUserAgent(ua string) *Client {
 	return c.WithHeader("User-Agent", ua)
 }
 
+// UserAgent returns the default User-Agent header value configured on the client.
+func (c *Client) UserAgent() string {
+	return c.headers.Get("User-Agent")
+}
+
 // WithOrigin returns a new Client instance with a custom Origin header.
 func (c *Client) WithOrigin(origin string) *Client {
 	return c.WithHeader("Origin", origin)

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -20,8 +21,9 @@ import (
 
 // SocketManager handles the real-time price updates via Socket.IO.
 type SocketManager struct {
-	url    string
-	logger log.Logger
+	url       string
+	logger    log.Logger
+	userAgent string
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -39,6 +41,12 @@ func NewSocketManager(rawURL string, logger log.Logger) *SocketManager {
 		url:    rawURL,
 		logger: logger.With(log.Module("pricedb_socket")),
 	}
+}
+
+// WithUserAgent sets a custom User-Agent header for the socket connection.
+func (s *SocketManager) WithUserAgent(ua string) *SocketManager {
+	s.userAgent = ua
+	return s
 }
 
 // OnPrice sets the callback for when a price update is received.
@@ -85,11 +93,20 @@ func (s *SocketManager) connectAndListen(ctx context.Context) error {
 
 	dialer := websocket.DefaultDialer
 
-	conn, resp, err := dialer.DialContext(ctx, u.String(), nil)
+	var header http.Header
+	if s.userAgent != "" {
+		header = make(http.Header)
+		header.Set("User-Agent", s.userAgent)
+	}
+
+	conn, resp, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
 
 	s.mu.Lock()
 	s.conn = conn

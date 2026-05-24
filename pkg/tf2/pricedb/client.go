@@ -33,6 +33,19 @@ func NewClient(httpClient rest.HTTPDoer) *Client {
 	}
 }
 
+// WithUserAgent returns a new Client configured with a custom User-Agent.
+func (c *Client) WithUserAgent(ua string) *Client {
+	return &Client{
+		restClient: c.restClient.WithUserAgent(ua),
+		skuClient:  c.skuClient.WithUserAgent(ua),
+	}
+}
+
+// UserAgent returns the configured User-Agent for this client.
+func (c *Client) UserAgent() string {
+	return c.restClient.UserAgent()
+}
+
 // GetItem fetches the latest price for a specific item SKU.
 func (c *Client) GetItem(ctx context.Context, sku string) (*Price, error) {
 	path := "/api/item/" + url.PathEscape(sku)

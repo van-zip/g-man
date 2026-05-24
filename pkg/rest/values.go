@@ -234,7 +234,20 @@ func fillValues(v reflect.Value, values url.Values) error {
 		field := t.Field(i)
 		fieldValue := v.Field(i)
 
+		// Handle Pointer fields by dereferencing them if not nil
+		if fieldValue.Kind() == reflect.Pointer {
+			if fieldValue.IsNil() {
+				continue
+			}
+
+			fieldValue = fieldValue.Elem()
+		}
+
 		tag := field.Tag.Get("url")
+		if tag == "" {
+			tag = field.Tag.Get("json")
+		}
+
 		parts := strings.Split(tag, ",")
 		key := parts[0]
 
@@ -250,11 +263,11 @@ func fillValues(v reflect.Value, values url.Values) error {
 			continue
 		}
 
-		if tag == "" || tag == "-" {
+		if key == "" || key == "-" {
 			continue
 		}
 
-		omitempty := len(parts) > 1 && parts[1] == "omitempty"
+		omitempty := len(parts) > 1 && (parts[1] == "omitempty" || slices.Contains(parts[1:], "omitempty"))
 		if omitempty && fieldValue.IsZero() {
 			continue
 		}
@@ -262,7 +275,16 @@ func fillValues(v reflect.Value, values url.Values) error {
 		// Handle Slices/Arrays
 		if fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Array {
 			for j := range fieldValue.Len() {
-				strValue, err := toString(fieldValue.Index(j))
+				val := fieldValue.Index(j)
+				if val.Kind() == reflect.Pointer {
+					if val.IsNil() {
+						continue
+					}
+
+					val = val.Elem()
+				}
+
+				strValue, err := toString(val)
 				if err != nil {
 					return fmt.Errorf("field %s[%d]: %w", field.Name, j, err)
 				}

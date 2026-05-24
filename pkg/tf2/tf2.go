@@ -22,6 +22,7 @@ import (
 	pb_steam "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/tf2"
 	"github.com/lemon4ksan/g-man/pkg/steam"
+	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -59,6 +60,7 @@ func AchievementConfig() achievements.Config {
 		MaxTargetPercent: 0.82,
 		UnlockChance:     0.40,
 		BreakChance:      0.10,
+		InitialDelay:     5 * time.Second,
 		AchievementPool: [][]uint32{
 			{1001, 1041}, // Scout
 			{1101, 1142}, // Sniper
@@ -117,6 +119,7 @@ type SchemaProvider interface {
 type TF2 struct {
 	module.Base
 
+	steamID id.ID
 	gc      CoordinatorProvider
 	service service.Doer
 	apps    AppsProvider
@@ -124,6 +127,8 @@ type TF2 struct {
 	state  atomic.Int32
 	cache  *SOCache
 	schema SchemaProvider
+
+	crcStats atomic.Uint32
 }
 
 // New creates a new TF2 module.
@@ -177,6 +182,10 @@ func (t *TF2) Init(init module.InitContext) error {
 // StartAuthed occurs when Steam logs in.
 // We need to "start" TF2 so that GC can start talking to us.
 func (t *TF2) StartAuthed(ctx context.Context, authCtx module.AuthContext) error {
+	if authCtx != nil {
+		t.steamID = authCtx.SteamID()
+	}
+
 	if err := t.apps.PlayGames(ctx, []uint32{AppID}, false); err != nil {
 		return err
 	}
@@ -202,8 +211,10 @@ func (t *TF2) Cache() *SOCache {
 
 // AwardAchievement unlocks the specified achievement in TF2.
 func (t *TF2) AwardAchievement(ctx context.Context, achievementID uint32) error {
+	crc := t.crcStats.Load()
 	req := &custom.CMsgClientStoreUserStats{
-		GameId: proto.Uint64(AppID),
+		GameId:   proto.Uint64(AppID),
+		CrcStats: proto.Uint32(crc),
 		Achievements: []*custom.CMsgClientStoreUserStats_Achievement{
 			{
 				AchievementId: proto.Uint32(achievementID),
@@ -212,15 +223,23 @@ func (t *TF2) AwardAchievement(ctx context.Context, achievementID uint32) error 
 		},
 	}
 
-	_, err := service.Legacy[service.NoResponse](ctx, t.service, enums.EMsg_ClientStoreUserStats, req)
+	_, err := service.LegacyProto[service.NoResponse](
+		ctx,
+		t.service,
+		enums.EMsg_ClientStoreUserStats,
+		req,
+		service.WithRoutingAppID(AppID),
+	)
 
 	return err
 }
 
 // SetStat sets the specified statistic in TF2.
 func (t *TF2) SetStat(ctx context.Context, statID, value uint32) error {
+	crc := t.crcStats.Load()
 	req := &custom.CMsgClientStoreUserStats{
-		GameId: proto.Uint64(AppID),
+		GameId:   proto.Uint64(AppID),
+		CrcStats: proto.Uint32(crc),
 		Stats: []*custom.CMsgClientStoreUserStats_Stat{
 			{
 				StatId:    proto.Uint32(statID),
@@ -229,26 +248,42 @@ func (t *TF2) SetStat(ctx context.Context, statID, value uint32) error {
 		},
 	}
 
-	_, err := service.Legacy[service.NoResponse](ctx, t.service, enums.EMsg_ClientStoreUserStats, req)
+	_, err := service.LegacyProto[service.NoResponse](
+		ctx,
+		t.service,
+		enums.EMsg_ClientStoreUserStats,
+		req,
+		service.WithRoutingAppID(AppID),
+	)
 
 	return err
 }
 
 // GetCurrentAchievements returns a map of achievements that have already been unlocked.
+//
+// NOTE: Currently doesn't work (Eresult_Fail).
 func (t *TF2) GetCurrentAchievements(ctx context.Context) (map[uint32]bool, error) {
+	t.Logger.Debug("Querying achievements progress", log.Uint64("steam_idForUser", t.steamID.Uint64()))
+
 	req := &pb_steam.CMsgClientGetUserStats{
-		GameId: proto.Uint64(AppID),
+		GameId:             proto.Uint64(AppID),
+		SteamIdForUser:     proto.Uint64(t.steamID.Uint64()),
+		SchemaLocalVersion: proto.Int32(10),
+		CrcStats:           proto.Uint32(0),
 	}
 
-	resp, err := service.Legacy[pb_steam.CMsgClientGetUserStatsResponse](
+	resp, err := service.LegacyProto[pb_steam.CMsgClientGetUserStatsResponse](
 		ctx,
 		t.service,
 		enums.EMsg_ClientGetUserStats,
 		req,
+		service.WithRoutingAppID(AppID),
 	)
 	if err != nil {
 		return nil, err
 	}
+
+	t.crcStats.Store(resp.GetCrcStats())
 
 	unlocked := make(map[uint32]bool)
 	for _, block := range resp.GetAchievementBlocks() {

@@ -643,6 +643,8 @@ func (m *Manager) doPoll(ctx context.Context) {
 		return
 	}
 
+	m.Logger.Debug("Polling trade offers...")
+
 	m.mu.RLock()
 
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
@@ -829,6 +831,11 @@ func (m *Manager) doPoll(ctx context.Context) {
 			PollData: newPollData,
 		})
 	}
+
+	m.Logger.Debug("Trade poll completed",
+		log.Int("sent_active", len(resp.Sent)),
+		log.Int("received_active", len(resp.Received)),
+	)
 }
 
 // gcKnownOffers removes stale offers from memory to prevent memory leaks.

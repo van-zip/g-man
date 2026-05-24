@@ -220,12 +220,11 @@ func (t *TF2) AwardAchievement(ctx context.Context, achievementID uint32) error 
 		},
 	}
 
-	_, err := service.LegacyProto[service.NoResponse](
+	_, err := service.Legacy[service.NoResponse]( //nolint:staticcheck // legacy EMsg does not use CM protobuf header
 		ctx,
 		t.service,
 		enums.EMsg_ClientStoreUserStats,
 		protoadapt.MessageV2Of(req),
-		service.WithRoutingAppID(AppID),
 	)
 
 	return err
@@ -243,12 +242,11 @@ func (t *TF2) SetStat(ctx context.Context, statID, value uint32) error {
 		},
 	}
 
-	_, err := service.LegacyProto[service.NoResponse](
+	_, err := service.Legacy[service.NoResponse]( //nolint:staticcheck // legacy EMsg does not use CM protobuf header
 		ctx,
 		t.service,
 		enums.EMsg_ClientStoreUserStats,
 		protoadapt.MessageV2Of(req),
-		service.WithRoutingAppID(AppID),
 	)
 
 	return err
@@ -273,9 +271,34 @@ func (t *TF2) GetCurrentAchievements(ctx context.Context) (map[uint32]bool, erro
 		return nil, err
 	}
 
+	baseIDs := map[uint32]uint32{
+		266: 1001, // Scout 1
+		267: 1033, // Scout 2
+		268: 1101, // Sniper 1
+		269: 1133, // Sniper 2
+		313: 1201, // Soldier 1
+		314: 1233, // Soldier 2
+		333: 1301, // Demoman 1
+		348: 1333, // Demoman 2
+		359: 1401, // Medic 1
+		360: 1433, // Medic 2
+		386: 1501, // Heavy 1
+		405: 1533, // Heavy 2
+		408: 1601, // Pyro 1
+		684: 1633, // Pyro 2
+		687: 1701, // Spy 1
+		748: 1733, // Spy 2
+		757: 1801, // Engy 1
+	}
+
 	unlocked := make(map[uint32]bool)
 	for _, block := range resp.GetAchievementBlocks() {
-		baseID := block.GetAchievementId()
+		statID := block.GetAchievementId()
+
+		baseID, exists := baseIDs[statID]
+		if !exists {
+			continue
+		}
 
 		for idx, unlockTime := range block.GetUnlockTime() {
 			if unlockTime > 0 {

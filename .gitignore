@@ -14,9 +14,14 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# Memory profile
+*.pprof
+
 # env file
 .env
 
 # Generated code
 cmd/**/*.json
 pkg/protobuf/tf2/tf2_gc
+**/cache/**
+storage.json

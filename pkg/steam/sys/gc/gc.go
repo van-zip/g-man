@@ -195,9 +195,14 @@ func (c *Coordinator) send(
 		return fmt.Errorf("gc serialize: %w", err)
 	}
 
+	finalMsgType := msgType
+	if msg != nil {
+		finalMsgType |= protocol.ProtoMask
+	}
+
 	wrapper := &pb.CMsgGCClient{
 		Appid:   proto.Uint32(appID),
-		Msgtype: proto.Uint32(msgType | protocol.ProtoMask),
+		Msgtype: proto.Uint32(finalMsgType),
 		Payload: gcData,
 	}
 

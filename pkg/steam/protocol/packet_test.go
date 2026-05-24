@@ -131,9 +131,8 @@ func TestGCPacket_Roundtrip(t *testing.T) {
 		serialized, err := p.Serialize()
 		require.NoError(t, err)
 
-		// Serialize for Proto includes [MsgType(4) | HdrLen(4) | Hdr | Payload]
-		// ParseGCPacket expects the data AFTER the MsgType
-		parsed, err := protocol.ParseGCPacket(appID, msgType|protocol.ProtoMask, serialized[4:])
+		// ParseGCPacket expects the full serialized data (including MsgType prefix)
+		parsed, err := protocol.ParseGCPacket(appID, msgType|protocol.ProtoMask, serialized)
 		require.NoError(t, err)
 
 		assert.Equal(t, msgType, parsed.MsgType)
@@ -169,15 +168,15 @@ func TestGCPacket_Errors(t *testing.T) {
 	appID := uint32(440)
 
 	t.Run("ParseProtoHeaderLenError", func(t *testing.T) {
-		// Only 2 bytes, can't read uint32 hdrLen
-		_, err := protocol.ParseGCPacket(appID, protocol.ProtoMask, []byte{1, 2})
+		// Can read 4-byte skippedMsgType, but only 2 bytes left, so can't read uint32 hdrLen
+		_, err := protocol.ParseGCPacket(appID, protocol.ProtoMask, []byte{1, 2, 3, 4, 5, 6})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "read proto header len")
 	})
 
 	t.Run("ParseProtoHeaderReadError", func(t *testing.T) {
-		// HdrLen says 10, but we only give 2 bytes
-		data := []byte{10, 0, 0, 0, 1, 2}
+		// Prepend 4 bytes for skippedMsgType. HdrLen says 10, but we only give 2 bytes after hdrLen
+		data := []byte{1, 2, 3, 4, 10, 0, 0, 0, 1, 2}
 		_, err := protocol.ParseGCPacket(appID, protocol.ProtoMask, data)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "read proto header")

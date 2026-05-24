@@ -260,6 +260,18 @@ func ParseGCPacket(appID, msgType uint32, data []byte) (*GCPacket, error) {
 	r := bytes.NewReader(data)
 
 	if p.IsProto {
+		// The CMsgGCClient.Payload for proto GC messages has the format:
+		//   [4 bytes: msgType | ProtoMask]  <-- redundant with wrapper.Msgtype, must be skipped
+		//   [4 bytes: hdrLen]
+		//   [hdrLen bytes: CMsgProtoBufHeader]
+		//   [remaining: message body]
+		// node-steam-user reads hdrLen at offset 4 (payload.readInt32LE(4)), confirming
+		// the first 4 bytes are the msgType prefix and must be discarded here.
+		var skippedMsgType uint32
+		if err := binary.Read(r, binary.LittleEndian, &skippedMsgType); err != nil {
+			return nil, fmt.Errorf("gc: read inner msgtype: %w", err)
+		}
+
 		// Read Header Length
 		var hdrLen uint32
 		if err := binary.Read(r, binary.LittleEndian, &hdrLen); err != nil {

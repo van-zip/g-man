@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -320,5 +321,81 @@ func TestSchemaManager_HandleUpdateRequested(t *testing.T) {
 		t.Fatalf("Schema update failed: %v", ev.(*UpdateFailedEvent).Error)
 	case <-time.After(5 * time.Second):
 		t.Error("Schema was not updated after request (timed out)")
+	}
+}
+
+func TestSchemaManager_Refresh_SingleFlight(t *testing.T) {
+	sm, mockAPI := setupSchema(t, Config{})
+
+	mockAPI.SetJSONResponse("IEconItems_440", "GetSchemaOverview", map[string]any{
+		"result": map[string]any{"qualities": map[string]any{}},
+	})
+	mockAPI.SetJSONResponse("IEconItems_440", "GetSchemaItems", map[string]any{
+		"result": map[string]any{"items": []any{}, "next": 0},
+	})
+
+	var (
+		callCount int64
+		mu        sync.Mutex
+	)
+
+	mockAPI.OnRest = func(method, path string, body any) (*http.Response, error) {
+		var content string
+		switch {
+		case strings.Contains(path, "proto_obj_defs"):
+			content = "\"lang\"\n{\n\t\"Tokens\"\n\t{\n\t}\n}\n"
+		case strings.Contains(path, "items_game"):
+			content = "\"items_game\"\n{\n\t\"valid_key\" \"value\"\n}\n"
+		case strings.Contains(path, "pricedb.io/api/schema"):
+			mu.Lock()
+			callCount++
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond) // Simulate slow fetch
+
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"version":"1.0","raw":{"schema":{"items":[]}}}`)),
+			}, nil
+		}
+
+		return &http.Response{
+			Body:       io.NopCloser(strings.NewReader(content)),
+			StatusCode: 200,
+		}, nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	start := time.Now()
+
+	go func() {
+		defer wg.Done()
+
+		_ = sm.Refresh(context.Background())
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		time.Sleep(10 * time.Millisecond) // Ensure A starts first
+
+		_ = sm.Refresh(context.Background())
+	}()
+
+	wg.Wait()
+
+	duration := time.Since(start)
+
+	mu.Lock()
+	finalCount := callCount
+	mu.Unlock()
+
+	if finalCount != 1 {
+		t.Errorf("expected PriceDB schema to only be fetched 1 time, got %d", finalCount)
+	}
+
+	if duration.Milliseconds() < 50 {
+		t.Errorf("expected concurrent calls to block and wait, took only %d ms", duration.Milliseconds())
 	}
 }

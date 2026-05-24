@@ -86,8 +86,11 @@ type Manager struct {
 	restClient    rest.Requester
 	pricedbClient *pricedb.Client
 
-	mu     sync.RWMutex
-	schema *Schema
+	mu            sync.RWMutex
+	schema        *Schema
+	refreshMu     sync.Mutex
+	refreshChan   chan struct{}
+	lastGCVersion uint32
 }
 
 // NewManager creates a manager with the given options.
@@ -176,6 +179,34 @@ func (m *Manager) StartAuthed(ctx context.Context, _ module.AuthContext) error {
 }
 
 func (m *Manager) handleUpdateRequested(req *UpdateRequestedEvent) {
+	m.mu.Lock()
+	hasSchema := m.schema != nil
+
+	currentVersion := ""
+	if hasSchema {
+		currentVersion = m.schema.Version
+	}
+
+	lastGC := m.lastGCVersion
+	m.mu.Unlock()
+
+	// Skip if we already have this version or the items_game URL matches
+	if hasSchema && (req.ItemsGameURL == "" || currentVersion == req.ItemsGameURL || lastGC == req.Version) {
+		m.Logger.Debug("Schema is already up-to-date, skipping update request",
+			log.Uint32("requested_version", req.Version),
+			log.Uint32("current_gc_version", lastGC),
+			log.String("current_url", currentVersion),
+		)
+
+		if lastGC != req.Version {
+			m.mu.Lock()
+			m.lastGCVersion = req.Version
+			m.mu.Unlock()
+		}
+
+		return
+	}
+
 	m.Logger.Info("Schema update requested",
 		log.Uint32("version", req.Version),
 		log.String("url", req.ItemsGameURL),
@@ -183,16 +214,13 @@ func (m *Manager) handleUpdateRequested(req *UpdateRequestedEvent) {
 
 	// Trigger a refresh in a separate goroutine to avoid blocking the bus
 	m.Go(func(ctx context.Context) {
-		// Prioritize PriceDB first
-		if err := m.refreshPriceDB(ctx); err == nil {
-			m.Logger.Info("Schema updated via PriceDB after update request")
-			return
-		} else {
-			m.Logger.Warn("PriceDB schema update failed on manual request, falling back to legacy", log.Err(err))
-		}
-
-		if err := m.refreshLegacy(ctx, req.ItemsGameURL); err != nil {
+		if err := m.doRefresh(ctx, req.ItemsGameURL); err != nil {
 			m.Logger.Error("Manual schema refresh failed", log.Err(err))
+		} else {
+			m.mu.Lock()
+			m.lastGCVersion = req.Version
+			m.mu.Unlock()
+			m.Logger.Info("Schema updated successfully after update request", log.Uint32("version", req.Version))
 		}
 	})
 }
@@ -207,13 +235,51 @@ func (m *Manager) Get() *Schema {
 
 // Refresh manually triggers a full schema update from PriceDB and GitHub sources.
 func (m *Manager) Refresh(ctx context.Context) error {
+	return m.doRefresh(ctx, m.config.ItemsGameMirrorURL)
+}
+
+// doRefresh prevents parallel schema refreshes by grouping duplicate concurrent calls.
+func (m *Manager) doRefresh(ctx context.Context, itemsGameURL string) error {
+	m.refreshMu.Lock()
+	if m.refreshChan != nil {
+		// A refresh is already in progress. Wait for it to complete.
+		ch := m.refreshChan
+		m.refreshMu.Unlock()
+
+		m.Logger.Debug("Schema refresh already in progress, waiting for completion...")
+
+		select {
+		case <-ch:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	ch := make(chan struct{})
+	m.refreshChan = ch
+	m.refreshMu.Unlock()
+
+	err := m.refreshSchema(ctx, itemsGameURL)
+
+	m.refreshMu.Lock()
+	m.refreshChan = nil
+
+	close(ch)
+	m.refreshMu.Unlock()
+
+	return err
+}
+
+func (m *Manager) refreshSchema(ctx context.Context, itemsGameURL string) error {
+	// Prioritize PriceDB first
 	if err := m.refreshPriceDB(ctx); err == nil {
 		return nil
 	} else {
 		m.Logger.Warn("PriceDB schema fetch failed, falling back to Steam API", log.Err(err))
 	}
 
-	return m.refreshLegacy(ctx, m.config.ItemsGameMirrorURL)
+	return m.refreshLegacy(ctx, itemsGameURL)
 }
 
 // refreshPriceDB updates the schema from PriceDB.

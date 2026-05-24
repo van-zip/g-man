@@ -98,6 +98,9 @@ func DefaultDialers() map[string]Dialer {
 		"tcp": func(ctx context.Context, l log.Logger, s, p string, _ http.Header) (network.Connection, error) {
 			return network.NewTCP(ctx, l, s, p, SteamFramer{})
 		},
+		"netfilter": func(ctx context.Context, l log.Logger, s, p string, _ http.Header) (network.Connection, error) {
+			return network.NewTCP(ctx, l, s, p, SteamFramer{})
+		},
 		"websockets": func(ctx context.Context, l log.Logger, s, p string, h http.Header) (network.Connection, error) {
 			u := url.URL{Scheme: "wss", Host: s, Path: "/cmsocket/"}
 			return network.NewWS(ctx, l, u.String(), p, h)

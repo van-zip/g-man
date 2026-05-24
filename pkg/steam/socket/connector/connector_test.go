@@ -448,3 +448,14 @@ func TestConnector_Reconnection_Interrupt(t *testing.T) {
 	// Reconnect loop should exit early due to ctx.Done()
 	assert.Less(t, dialCount.Load(), int32(5))
 }
+
+func TestConnector_DefaultDialers(t *testing.T) {
+	dialers := connector.DefaultDialers()
+	assert.Contains(t, dialers, "tcp")
+	assert.Contains(t, dialers, "netfilter")
+	assert.Contains(t, dialers, "websockets")
+
+	assert.NotNil(t, dialers["tcp"])
+	assert.NotNil(t, dialers["netfilter"])
+	assert.NotNil(t, dialers["websockets"])
+}

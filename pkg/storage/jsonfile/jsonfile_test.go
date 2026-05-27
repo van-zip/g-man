@@ -129,6 +129,20 @@ func TestKVStore(t *testing.T) {
 		_, err = kv1.Get(ctx, key)
 		assert.ErrorIs(t, err, storage.ErrNotFound)
 	})
+
+	t.Run("Keys", func(t *testing.T) {
+		require.NoError(t, kv1.Set(ctx, "prefix:item1", []byte("1")))
+		require.NoError(t, kv1.Set(ctx, "prefix:item2", []byte("2")))
+		require.NoError(t, kv1.Set(ctx, "other:item3", []byte("3")))
+
+		keys, err := kv1.Keys(ctx, "prefix:")
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"prefix:item1", "prefix:item2"}, keys)
+
+		keys, err = kv1.Keys(ctx, "nonexistent:")
+		assert.NoError(t, err)
+		assert.Empty(t, keys)
+	})
 }
 
 func TestProvider_EmptyFile(t *testing.T) {

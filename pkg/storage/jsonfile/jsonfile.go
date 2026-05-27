@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
@@ -209,4 +211,25 @@ func (s *kvStore) Has(ctx context.Context, key string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (s *kvStore) Keys(ctx context.Context, prefix string) ([]string, error) {
+	s.p.mu.RLock()
+	defer s.p.mu.RUnlock()
+
+	ns, ok := s.p.data.KV[s.namespace]
+	if !ok {
+		return []string{}, nil
+	}
+
+	var keys []string
+	for k := range ns {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+
+	sort.Strings(keys)
+
+	return keys, nil
 }

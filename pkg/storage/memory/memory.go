@@ -7,6 +7,8 @@ package memory
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,6 +172,23 @@ func (s *kvStore) Has(ctx context.Context, key string) (bool, error) {
 	_, ok := s.data[key]
 
 	return ok, nil
+}
+
+// Keys returns all keys starting with the given prefix.
+func (s *kvStore) Keys(ctx context.Context, prefix string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var keys []string
+	for k := range s.data {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+
+	sort.Strings(keys)
+
+	return keys, nil
 }
 
 // --- Time-to-Live Cache implementation ---

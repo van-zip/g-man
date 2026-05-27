@@ -105,6 +105,20 @@ func TestKVStore_Operations(t *testing.T) {
 		_, err = kv.Get(ctx, "k")
 		assert.ErrorIs(t, err, storage.ErrNotFound)
 	})
+
+	t.Run("Keys", func(t *testing.T) {
+		require.NoError(t, kv.Set(ctx, "prefix:item1", []byte("1")))
+		require.NoError(t, kv.Set(ctx, "prefix:item2", []byte("2")))
+		require.NoError(t, kv.Set(ctx, "other:item3", []byte("3")))
+
+		keys, err := kv.Keys(ctx, "prefix:")
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"prefix:item1", "prefix:item2"}, keys)
+
+		keys, err = kv.Keys(ctx, "nonexistent:")
+		assert.NoError(t, err)
+		assert.Empty(t, keys)
+	})
 }
 
 func TestTTLCache(t *testing.T) {

@@ -42,4 +42,7 @@ type KV interface {
 
 	// Has returns true if the key exists.
 	Has(ctx context.Context, key string) (bool, error)
+
+	// Keys returns all keys in the store that start with the given prefix.
+	Keys(ctx context.Context, prefix string) ([]string, error)
 }

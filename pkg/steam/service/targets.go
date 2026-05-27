@@ -18,15 +18,15 @@ import (
 // UnifiedTarget represents a modern Steam Service method call.
 // It supports both HTTP routing (via path) and Socket routing (via EMsg).
 type UnifiedTarget struct {
-	// HttpMethod is the verb used for web requests (default: POST).
+	// HttpMethod is the verb used for web requests (default is POST).
 	HttpMethod string
-	// Interface is the name of the service (e.g., "Player").
+	// Interface is the name of the service (for example, "Player").
 	Interface string
-	// Method is the name of the RPC function (e.g., "GetNickname").
+	// Method is the name of the RPC function (for example, "GetNickname").
 	Method string
-	// Version is the API version (e.g., 1).
+	// Version is the API version (for example, 1).
 	Version int
-	// IsService determines if "Service" suffix is added to the interface name in HTTP paths.
+	// IsService determines if the "Service" suffix is appended to the interface name in HTTP paths.
 	IsService bool
 }
 
@@ -116,13 +116,13 @@ func (u *UnifiedTarget) ObjectName() string { return u.String() }
 
 // WebAPITarget represents a classic JSON/VDF WebAPI call.
 type WebAPITarget struct {
-	// HttpMethod is the verb used for web requests (e.g., "GET" or "POST").
+	// HttpMethod is the verb used for web requests (such as "GET" or "POST").
 	HttpMethod string
-	// Interface is the WebAPI interface name (e.g., "ISteamUser").
+	// Interface is the WebAPI interface name (such as "ISteamUser").
 	Interface string
-	// Method is the WebAPI method name (e.g., "GetPlayerSummaries").
+	// Method is the WebAPI method name (such as "GetPlayerSummaries").
 	Method string
-	// Version is the WebAPI version (e.g., 2).
+	// Version is the WebAPI version (such as 2).
 	Version int
 }
 

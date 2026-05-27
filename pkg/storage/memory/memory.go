@@ -16,7 +16,11 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/storage"
 )
 
-// Provider implements [storage.Provider] using in-memory maps.
+// Provider implements [storage.Provider] using fast in-memory maps.
+//
+// All stored data is transient and exists only in memory. All state is lost
+// permanently when the application shuts down.
+// Create new instances of Provider using the [New] constructor.
 type Provider struct {
 	authStore *authStore
 	kvStores  map[string]*kvStore
@@ -199,6 +203,8 @@ type entry struct {
 }
 
 // TTLCache is a thread-safe in-memory cache with time-to-live support.
+//
+// Create new instances of TTLCache using the [NewTTLCache] constructor.
 type TTLCache struct {
 	mu      sync.RWMutex
 	entries map[string]entry
@@ -220,7 +226,7 @@ func (c *TTLCache) Set(key string, value any, ttl time.Duration) {
 	}
 }
 
-// Get retrieves a value from the cache by key.
+// Get retrieves a value from the cache by key if it has not expired.
 func (c *TTLCache) Get(key string) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

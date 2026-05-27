@@ -13,7 +13,9 @@ import (
 // StateEvent is emitted whenever the authenticator transitions between states.
 type StateEvent struct {
 	bus.BaseEvent
+	// Old is the previous authentication state.
 	Old State
+	// New is the updated authentication state.
 	New State
 }
 
@@ -22,11 +24,16 @@ type StateEvent struct {
 // It contains details about the logged-in session provided by the server.
 type LoggedOnEvent struct {
 	bus.BaseEvent
-	ClientInstanceID uint32                      // Instance ID for this client session
-	CellID           uint32                      // Content delivery region/cell ID
-	PublicIP         uint32                      // Client's public IP as seen by Steam
-	SteamID          uint64                      // Logged-in user's SteamID
-	Body             *pb.CMsgClientLogonResponse // Complete logon response for advanced use
+	// ClientInstanceID is the unique instance identifier for this client session.
+	ClientInstanceID uint32
+	// CellID is the content delivery region identifier assigned by Steam.
+	CellID uint32
+	// PublicIP is the client's public IP address as seen by Steam.
+	PublicIP uint32
+	// SteamID is the unique 64-bit identifier of the authenticated user.
+	SteamID uint64
+	// Body is the complete underlying logon response packet from Steam.
+	Body *pb.CMsgClientLogonResponse
 }
 
 // SteamGuardRequiredEvent is emitted during password-based authentication
@@ -34,14 +41,19 @@ type LoggedOnEvent struct {
 // from email or mobile authenticator and call the Callback function.
 type SteamGuardRequiredEvent struct {
 	bus.BaseEvent
-	IsAppConfirm bool              // True = must approve by pressing "confirm" in the mobile app
-	Is2FA        bool              // True = mobile authenticator (2FA), False = email code
-	EmailDomain  string            // For email codes, the domain of the email address (if known)
-	Callback     func(code string) // Function to call with the user-provided code to continue login
+	// IsAppConfirm is true if the confirmation must be completed via the mobile app.
+	IsAppConfirm bool
+	// Is2FA is true if the code is a mobile authenticator code, false if it is an email code.
+	Is2FA bool
+	// EmailDomain is the target domain name where the email confirmation was sent.
+	EmailDomain string
+	// Callback is the handler function that must be called with the user-provided code to continue login.
+	Callback func(code string)
 }
 
 // LoggedOffEvent is emitted after the auth client disconnected from CM server unexpectedly.
 type LoggedOffEvent struct {
 	bus.BaseEvent
+	// Result is the Steam EResult code explaining why the client was logged off.
 	Result enums.EResult
 }

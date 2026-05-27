@@ -6,46 +6,56 @@
 Package socket provides a high-level, decoupled engine for managing persistent
 connections to Steam's Connection Manager (CM) servers.
 
-It acts as a Facade, orchestrating four specialized subsystems to provide a
-seamless Request-Response and Event-driven API.
+It acts as a Facade, orchestrating the connector, processor, dispatcher, and session
+subsystems to provide a seamless Request-Response and Event-driven API.
 
-# Architecture
+# Key Components
 
-The socket layer is divided into four distinct pillars:
+  - [Socket]: The central facade wrapping all socket-related operations.
+  - [Config]: Aggregates configuration parameters for all underlying subsystems.
+  - [Session]: The thread-safe state container representing the active connection session.
 
-  - Connector: Manages the raw network lifecycle (TCP/WS), handles exponential
-    backoff, and provides a stream of raw decrypted messages.
-  - Processor: The concurrency layer. It manages a fixed worker pool that
-    parses raw bytes into protocol packets, decoupling network I/O from logic.
-  - Dispatcher: The routing brain. It handles JobID tracking (Request-Response),
-    Unified Service methods, and unpacks nested Multi-packets.
-  - Session: The source of truth for the account's state (SteamID, Tokens).
-    It is independent of the network connection, allowing state to persist
-    across reconnections.
+# Basic Usage Example
 
-# Packet Handling Flow
+	package main
 
-Data flows through the system in a linear, non-cyclic pipeline:
+	import (
+		"context"
+		"fmt"
+		"time"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/steam/socket"
+	)
 
-	Steam -> [Connector] -> (chan bytes) -> [Processor (Workers)] -> [Dispatcher] -> Handlers/Jobs
+	func main() {
+		ctx := context.Background()
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
 
-# Concurrency and Reliability
+		// Initialize a new Socket facade
+		s := socket.NewSocket(socket.DefaultConfig(), logger)
+		defer s.Close()
 
-Socket uses a fixed worker pool in the Processor to prevent goroutine leaks.
-It implements natural backpressure: if the logic layer is too slow, the
-connector stops reading from the network, signaling Steam to slow down.
+		// Define a target Connection Manager server
+		server := socket.CMServer{
+			Endpoint: "cm1-ams1.steamcontent.com:27017",
+			Type:     "tcp",
+		}
 
-# Basic Usage
+		// Connect to the CM server
+		err := s.Connect(ctx, server)
+		if err != nil {
+			fmt.Println("Connection failed:", err)
+			return
+		}
 
-	s := socket.NewSocket(cfg)
+		// Start the periodic heartbeat loop
+		err = s.StartHeartbeat(10 * time.Second)
+		if err != nil {
+			fmt.Println("Failed to start heartbeat:", err)
+			return
+		}
 
-	// Connect with automatic background reconnection
-	err := s.Connect(ctx, socket.CMServer{Endpoint: "...", Type: "tcp"})
-
-	// Send a message and wait for response (Job system)
-	resp, err := s.SendSync(ctx, socket.Proto(enums.EMsg_ClientLogon, msg))
-
-For low-level control, the underlying subsystems (Connector, Dispatcher, etc.)
-can be accessed directly, though the Facade methods are recommended for most cases.
+		fmt.Println("Successfully connected and heartbeating!")
+	}
 */
 package socket

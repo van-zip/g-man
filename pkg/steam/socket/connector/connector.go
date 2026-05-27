@@ -2,19 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-/*
-Package connector manages raw network connectivity to Steam CM servers.
-
-It abstracts the underlying transport (TCP or WebSockets) and provides
-automatic reconnection logic. Its primary responsibility is to maintain
-a "live pipe" and emit raw, decrypted NetMessages into a Go channel.
-
-Key features:
-  - Exponential backoff on connection failure.
-  - Pluggable dialers for different protocols.
-  - Encryption handshake handling.
-  - Transport-agnostic data transmission.
-*/
 package connector
 
 import (
@@ -65,11 +52,16 @@ var (
 
 // Config aggregates configuration for the connector's behavior.
 type Config struct {
-	Dialers         map[string]Dialer
+	// Dialers maps protocol types (such as "tcp" or "websockets") to their dialing functions.
+	Dialers map[string]Dialer
+	// ReconnectPolicy defines the strategy for recovering from connection drops.
 	ReconnectPolicy ReconnectPolicy
-	ConnectTimeout  time.Duration
-	ProxyURL        string
-	Headers         http.Header
+	// ConnectTimeout is the maximum duration allowed to establish a raw socket.
+	ConnectTimeout time.Duration
+	// ProxyURL is the proxy server URL used for routing connection traffic.
+	ProxyURL string
+	// Headers defines optional HTTP headers used during the initial WebSocket handshake.
+	Headers http.Header
 }
 
 // DefaultConfig returns a standard configuration for Steam CM connections.
@@ -83,10 +75,14 @@ func DefaultConfig() Config {
 
 // CMServer represents a Steam Connection Manager server endpoint.
 type CMServer struct {
+	// Endpoint is the primary connection address (host:port).
 	Endpoint string
-	Type     string
-	Load     float64
-	Realm    string
+	// Type defines the protocol transport type (such as "tcp" or "websockets").
+	Type string
+	// Load is the server load metric reported by Steam directory.
+	Load float64
+	// Realm is the Steam server realm (such as "steamglobal").
+	Realm string
 }
 
 // Dialer defines a function for establishing various network connections.
@@ -110,10 +106,15 @@ func DefaultDialers() map[string]Dialer {
 
 // ReconnectPolicy defines the strategy for recovering from network drops.
 type ReconnectPolicy struct {
-	MaxAttempts    int
+	// MaxAttempts is the maximum number of reconnect retries allowed before failing.
+	MaxAttempts int
+	// InitialBackoff is the starting delay before the first reconnection attempt.
 	InitialBackoff time.Duration
-	MaxBackoff     time.Duration
-	BackoffFactor  float64
+	// MaxBackoff is the maximum retry delay boundary.
+	MaxBackoff time.Duration
+	// BackoffFactor is the multiplier used to increase the retry delay exponentially.
+	BackoffFactor float64
+	// ServerSelector selects a CMServer from the pool during reconnect cycles.
 	ServerSelector func([]CMServer) CMServer
 }
 
@@ -188,8 +189,9 @@ func (c *Connector) IsConnected() bool {
 
 func (c *Connector) cancelReconnect() {
 	c.mu.Lock()
-	if c.reconnectCancel != nil {
-		c.reconnectCancel()
+	if r := c.reconnectCancel; r != nil { // syntax error fixed
+		r()
+
 		c.reconnectCancel = nil
 	}
 
@@ -198,6 +200,9 @@ func (c *Connector) cancelReconnect() {
 
 // Connect establishes a connection to a specific CM server.
 // If an active connection exists, it is closed before the new one is opened.
+//
+// It returns [ErrAlreadyConnecting] if a connection attempt is already in progress,
+// or [ErrUnsupportedType] if the requested server protocol is not registered.
 func (c *Connector) Connect(ctx context.Context, server CMServer) error {
 	if ctx.Value(reconnectKey) == nil {
 		c.cancelReconnect()
@@ -248,6 +253,9 @@ func (c *Connector) SetEncryptionKey(key []byte) bool {
 }
 
 // Send transmits binary data through the currently active connection.
+//
+// It returns [ErrClosed] if the connector is closed, or [ErrDisconnected] if
+// there is no active Connection established.
 func (c *Connector) Send(ctx context.Context, data []byte) error {
 	if c.closed.Load() {
 		return ErrClosed

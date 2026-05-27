@@ -12,26 +12,42 @@ import (
 
 // Asset represents an item in the inventory.
 type Asset struct {
-	AssetID    string `json:"assetid"`
-	ClassID    string `json:"classid"`
+	// AssetID is the unique string identifier of the asset.
+	AssetID string `json:"assetid"`
+	// ClassID is the class identifier of the asset.
+	ClassID string `json:"classid"`
+	// InstanceID is the instance identifier of the asset.
 	InstanceID string `json:"instanceid"`
+	// CurrencyID is the currency identifier of the asset if applicable.
 	CurrencyID string `json:"currencyid,omitempty"`
-	Amount     string `json:"amount"`
-	Pos        int    `json:"-"`
+	// Amount is the quantity of the asset.
+	Amount string `json:"amount"`
+	// Pos is the sequential position of the item in the list.
+	Pos int `json:"-"`
 }
 
 // Description represents the description of an item.
 type Description struct {
-	ClassID         string         `json:"classid"`
-	InstanceID      string         `json:"instanceid"`
-	Tradable        int            `json:"tradable"`
-	Name            string         `json:"name"`
-	MarketHashName  string         `json:"market_hash_name"`
-	BackgroundColor string         `json:"background_color"`
-	IconURL         string         `json:"icon_url"`
-	Tags            []Tag          `json:"tags"`
-	AppData         map[string]any `json:"app_data,omitempty"`
-	Descriptions    []struct {
+	// ClassID is the class identifier of the item.
+	ClassID string `json:"classid"`
+	// InstanceID is the instance identifier of the item.
+	InstanceID string `json:"instanceid"`
+	// Tradable is the tradability status (1 if tradable, 0 otherwise).
+	Tradable int `json:"tradable"`
+	// Name is the display name of the item.
+	Name string `json:"name"`
+	// MarketHashName is the standard market identifier name.
+	MarketHashName string `json:"market_hash_name"`
+	// BackgroundColor is the background color of the item's icon.
+	BackgroundColor string `json:"background_color"`
+	// IconURL is the direct path suffix to the item's icon image.
+	IconURL string `json:"icon_url"`
+	// Tags contains the parsed tags of the item.
+	Tags []Tag `json:"tags"`
+	// AppData contains optional application-specific metadata.
+	AppData map[string]any `json:"app_data,omitempty"`
+	// Descriptions contains detailed inline text descriptions.
+	Descriptions []struct {
 		Value string `json:"value"`
 		Color string `json:"color,omitempty"`
 	} `json:"descriptions,omitempty"`
@@ -39,15 +55,21 @@ type Description struct {
 
 // Tag represents a tag of an item.
 type Tag struct {
-	Category              string `json:"category"`
-	InternalName          string `json:"internal_name"`
+	// Category is the category identifier of the tag.
+	Category string `json:"category"`
+	// InternalName is the internal identifier name of the tag.
+	InternalName string `json:"internal_name"`
+	// LocalizedCategoryName is the localized name of the category.
 	LocalizedCategoryName string `json:"localized_category_name"`
-	LocalizedTagName      string `json:"localized_tag_name"`
+	// LocalizedTagName is the localized name of the tag.
+	LocalizedTagName string `json:"localized_tag_name"`
 }
 
 // CEconItem represents an item in the inventory with its description.
 type CEconItem struct {
-	Asset       Asset
+	// Asset is the underlying inventory asset details.
+	Asset Asset
+	// Description is the parsed item description details.
 	Description *Description
 }
 
@@ -63,56 +85,90 @@ type inventoryResponse struct {
 
 // AppContext represents an application context block in Steam inventory data.
 type AppContext struct {
-	AppID      uint32                    `json:"appid"`
-	Name       string                    `json:"name"`
-	Icon       string                    `json:"icon"`
-	Link       string                    `json:"link"`
-	AssetCount int                       `json:"asset_count"`
-	Contexts   map[string]*ContextDetail `json:"rgContexts"`
+	// AppID is the Steam AppID of the application.
+	AppID uint32 `json:"appid"`
+	// Name is the name of the application.
+	Name string `json:"name"`
+	// Icon is the direct URL to the application icon.
+	Icon string `json:"icon"`
+	// Link is the link to the application inventory.
+	Link string `json:"link"`
+	// AssetCount is the total number of assets in this application.
+	AssetCount int `json:"asset_count"`
+	// Contexts maps context IDs to their detailed descriptors.
+	Contexts map[string]*ContextDetail `json:"rgContexts"`
 }
 
-// ContextDetail represents individual context detail inside AppContext (e.g., context id "2" for tradeable items).
+// ContextDetail represents individual context detail inside AppContext.
 type ContextDetail struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	AssetCount int    `json:"asset_count"`
+	// ID is the unique string identifier of the context.
+	ID string `json:"id"`
+	// Name is the display name of the context.
+	Name string `json:"name"`
+	// AssetCount is the total number of assets in this specific context.
+	AssetCount int `json:"asset_count"`
 }
 
 // EconItem represents a flat description of a traded item in history.
 type EconItem struct {
-	AppID           uint32 `json:"appid"`
-	ContextID       string `json:"contextid"`
-	AssetID         string `json:"id"`
-	ClassID         string `json:"classid"`
-	InstanceID      string `json:"instanceid"`
-	Amount          int    `json:"amount,string"`
-	IconURL         string `json:"icon_url"`
-	MarketHashName  string `json:"market_hash_name"`
-	Name            string `json:"name"`
-	Type            string `json:"type"`
+	// AppID is the Steam AppID of the application.
+	AppID uint32 `json:"appid"`
+	// ContextID is the unique string identifier of the context.
+	ContextID string `json:"contextid"`
+	// AssetID is the unique string identifier of the asset.
+	AssetID string `json:"id"`
+	// ClassID is the class identifier of the asset.
+	ClassID string `json:"classid"`
+	// InstanceID is the instance identifier of the asset.
+	InstanceID string `json:"instanceid"`
+	// Amount is the quantity of the asset.
+	Amount int `json:"amount,string"`
+	// IconURL is the direct path suffix to the item's icon image.
+	IconURL string `json:"icon_url"`
+	// MarketHashName is the standard market identifier name.
+	MarketHashName string `json:"market_hash_name"`
+	// Name is the display name of the item.
+	Name string `json:"name"`
+	// Type is the localized classification type of the item.
+	Type string `json:"type"`
+	// BackgroundColor is the background color of the item's icon.
 	BackgroundColor string `json:"background_color"`
-	Marketable      bool   `json:"marketable"`
-	Tradable        bool   `json:"tradable"`
+	// Marketable is true if the item can be sold on the Steam Market.
+	Marketable bool `json:"marketable"`
+	// Tradable is true if the item can be traded.
+	Tradable bool `json:"tradable"`
 }
 
 // TradeHistoryRow represents a single completed or pending trade history event.
 type TradeHistoryRow struct {
-	Date             time.Time
-	PartnerName      string
-	PartnerSteamID   id.ID
+	// Date is the timestamp when the trade occurred.
+	Date time.Time
+	// PartnerName is the display name of the trade partner.
+	PartnerName string
+	// PartnerSteamID is the unique 64-bit Steam identifier of the trade partner.
+	PartnerSteamID id.ID
+	// PartnerVanityURL is the vanity profile slug of the trade partner.
 	PartnerVanityURL string
-	ItemsReceived    []EconItem
-	ItemsGiven       []EconItem
-	OnHold           bool
+	// ItemsReceived is the list of items received during the trade.
+	ItemsReceived []EconItem
+	// ItemsGiven is the list of items given during the trade.
+	ItemsGiven []EconItem
+	// OnHold is true if the trade is currently in a trade hold (escrow).
+	OnHold bool
 }
 
 // TradeHistoryResult aggregates all parsed trades and the pagination markers.
 type TradeHistoryResult struct {
-	Trades         []TradeHistoryRow
+	// Trades is the chronological list of parsed trades.
+	Trades []TradeHistoryRow
+	// FirstTradeTime specifies the starting time boundary for the next chronological page.
 	FirstTradeTime *time.Time
-	FirstTradeID   *uint64
-	LastTradeTime  *time.Time
-	LastTradeID    *uint64
+	// FirstTradeID specifies the starting trade ID boundary for the next chronological page.
+	FirstTradeID *uint64
+	// LastTradeTime specifies the ending time boundary for the previous chronological page.
+	LastTradeTime *time.Time
+	// LastTradeID specifies the ending trade ID boundary for the previous chronological page.
+	LastTradeID *uint64
 }
 
 type hoverInfo struct {

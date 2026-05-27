@@ -124,6 +124,8 @@ func WithStorage(store Store) Option {
 }
 
 // ExtractSteamIDFromJWT parses a Steam JWT and returns the embedded SteamID.
+//
+// If the provided token is empty, malformed, or cannot be parsed, it returns 0.
 func ExtractSteamIDFromJWT(token string) id.ID {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -156,6 +158,10 @@ func ExtractSteamIDFromJWT(token string) id.ID {
 }
 
 // Authenticator orchestrates the process of logging into Steam.
+//
+// It coordinates the low-level [SocketProvider] network transport and the
+// high-level [WebAuthenticator] WebAPI flows. Create and register new instances
+// of Authenticator using the [NewAuthenticator] constructor.
 type Authenticator struct {
 	state atomic.Int32
 
@@ -198,7 +204,12 @@ func NewAuthenticator(s SocketProvider, svc WebAuthenticator, bus *bus.Bus, opts
 // State returns the current authentication state.
 func (a *Authenticator) State() State { return State(a.state.Load()) }
 
-// LogOn initiates the login sequence. It blocks until authentication is complete or fails.
+// LogOn initiates the login sequence.
+// It blocks until authentication is complete, context is cancelled, or the process fails.
+//
+// It returns an error if another authentication attempt is already in progress,
+// if credential validation fails, if the CM server connection drops, or if credentials
+// are rejected.
 func (a *Authenticator) LogOn(ctx context.Context, details *LogOnDetails, server connector.CMServer) error {
 	if !a.tryAcquireState() {
 		return errors.New("auth: authentication already in progress")
@@ -262,6 +273,9 @@ func (a *Authenticator) LogOn(ctx context.Context, details *LogOnDetails, server
 }
 
 // LogOnAnonymous performs a login without user credentials.
+//
+// It returns an error if another authentication attempt is already in progress,
+// or if the CM server connection drops.
 func (a *Authenticator) LogOnAnonymous(ctx context.Context, server connector.CMServer) error {
 	if !a.tryAcquireState() {
 		return errors.New("auth: authentication already in progress")

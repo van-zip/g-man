@@ -3,27 +3,37 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package gc provides a multiplexing gateway for communicating with
-Steam's Game Coordinators (GC).
+Package gc provides a multiplexing gateway for communicating with Steam's Game Coordinators (GC).
 
-A Game Coordinator is a dedicated backend server for a specific game (like
-TF2, CS2, or Dota 2). This module acts as a "smart pipe", wrapping raw game
-messages in the required Steam CM envelope (`ClientToGC`) and parsing incoming
-GC messages (`ClientFromGC`).
+It acts as a smart pipe, wrapping raw game messages in the required Steam CM envelope
+and routing incoming responses.
 
-# Architectural Role:
+# Key Components
 
-The `coordinator` module itself is game-agnostic. It knows how to route
-messages based on `AppID` and manage GC-level job IDs, but it does not
-understand the content of the messages. Game-specific modules (like `tf2`)
-subscribe to the `GCMessageEvent` published by this module and handle the
-domain-specific logic.
+  - [Coordinator]: The central module manager that coordinates sending and calling GC-level requests.
+  - [GCPacket]: Represents a parsed Game Coordinator message.
+  - [MessageEvent]: Emitted when an unhandled Game Coordinator packet is received.
 
-# Key Features:
+# Basic Usage Example
 
-  - Multiplexes messages for multiple AppIDs over a single CM connection.
-  - Manages a separate `jobs.Manager` for GC request-response cycles.
-  - Abstracts the `ProtoMask` and GC packet serialization.
-  - Publishes a generic `GCMessageEvent` for any game-specific module to consume.
+	package main
+
+	import (
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/steam/protocol"
+		"github.com/lemon4ksan/g-man/pkg/steam/sys/gc"
+	)
+
+	func main() {
+		g := gc.New()
+
+		// Register a GC message handler for Team Fortress 2 (AppID: 440)
+		// and custom message type (e.g. 1001)
+		g.RegisterGCHandler(440, 1001, func(packet *protocol.GCPacket) {
+			fmt.Printf("Received GC packet of type %d, length: %d\n", packet.MsgType, len(packet.Payload))
+		})
+
+		fmt.Println("GC Handler registered successfully")
+	}
 */
 package gc

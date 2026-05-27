@@ -2,17 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-/*
-Package dispatcher handles the routing and lifecycle of parsed packets.
-
-It serves as the Request-Response manager by tracking JobIDs and matching
-incoming responses to pending requests. It also routes packets to
-registered EMsg and Unified Service handlers.
-
-The dispatcher is responsible for transparently unpacking EMsg_Multi
-packets and re-dispatching their contents, ensuring the application
-only deals with atomic Steam messages.
-*/
 package dispatcher
 
 import (
@@ -59,9 +48,9 @@ type SessionReader interface {
 
 // SendConfig contains parameters for sending a message.
 type SendConfig struct {
-	// Callback is invoked when a response to this message is received.
+	// Callback is invoked asynchronously when a response to this message is received.
 	Callback jobs.Callback[*protocol.Packet]
-	// Token is an optional WebAPI token for specific service calls.
+	// Token is an optional WebAPI access token for service method routing.
 	Token string
 }
 
@@ -135,8 +124,7 @@ func DynamicRaw(eMsg enums.EMsg, targetName string, payload []byte, routingAppID
 }
 
 // DynamicRawProto creates a PayloadBuilder that always uses a Protobuf header.
-// Use this for EMsg-based messages (like EMsg_ClientToGC) that carry a proto body
-// but are not Unified Service methods and therefore have no target name.
+// Use this for EMsg-based proto messages that are not Unified Service methods.
 func DynamicRawProto(eMsg enums.EMsg, payload []byte, routingAppID uint32) PayloadBuilder {
 	return func(sess SessionReader, buf *bytes.Buffer, sourceJobID uint64, token string) error {
 		pkt := newPacket(sess, eMsg, sourceJobID, true, "", token, routingAppID)
@@ -158,7 +146,7 @@ type Dispatcher struct {
 	serviceHandlers map[string]Handler
 	bufferPool      *sync.Pool
 
-	// DecompressionLimit defines the max size allowed for unzipped Multi-messages.
+	// DecompressionLimit defines the maximum size allowed for unzipped Multi-messages.
 	DecompressionLimit int64
 }
 
@@ -223,6 +211,8 @@ func (d *Dispatcher) ClearHandlers() {
 
 // Send is the primary method for transmitting data. It handles job registration,
 // buffer pooling, and builder execution.
+//
+// It returns an error if packet serialization fails or the underlying socket transmission fails.
 func (d *Dispatcher) Send(ctx context.Context, build PayloadBuilder, opts ...SendOption) error {
 	cfg := &SendConfig{}
 	for _, opt := range opts {

@@ -14,10 +14,14 @@ import (
 
 // DeviceConfig allows customizing how the client presents itself to Steam.
 type DeviceConfig struct {
+	// DeviceFriendlyName is the readable brand identifier of the simulated hardware.
 	DeviceFriendlyName string
-	PlatformType       pb.EAuthTokenPlatformType
-	OSType             enums.EOSType
-	GamingDeviceType   uint32 // 1 = Desktop
+	// PlatformType is the category platform identifier.
+	PlatformType pb.EAuthTokenPlatformType
+	// OSType is the operating system identifier.
+	OSType enums.EOSType
+	// GamingDeviceType is the hardware form factor type (usually 1 for Desktop).
+	GamingDeviceType uint32
 }
 
 // DefaultDeviceConfig returns settings mimicking the official Steam Desktop Client on Windows.

@@ -16,9 +16,12 @@ import (
 
 // SocketMetadata holds context-specific information from a socket-based response.
 type SocketMetadata struct {
-	Result      enums.EResult   // EResult code from the message header.
-	Header      protocol.Header // The full, parsed packet header.
-	SourceJobID uint64          // The original Job ID that this message is a response to.
+	// Result is the Steam EResult code extracted from the packet header.
+	Result enums.EResult
+	// Header contains the full, parsed binary packet header.
+	Header protocol.Header
+	// SourceJobID is the original Job ID that this message is a response to.
+	SourceJobID uint64
 }
 
 // SocketTarget is an extension of the Target interface for destinations that can be
@@ -37,8 +40,10 @@ type SocketCaller interface {
 	Session() socket.Session
 }
 
-// SocketTransport implements the Transport interface for socket-based communication.
-// It translates abstract Requests into concrete protocol.Packets.
+// SocketTransport implements the [Transport] interface for socket-based communication.
+// It translates abstract [Request] structures into concrete [protocol.Packet] messages.
+//
+// Create new instances of SocketTransport using [NewSocketTransport].
 type SocketTransport struct {
 	caller SocketCaller
 }
@@ -50,12 +55,10 @@ func NewSocketTransport(caller SocketCaller) *SocketTransport {
 	}
 }
 
-// Do executes a Request over a persistent socket. It performs the following steps:
-// 1. Asserts that the request's Target is a SocketTarget.
-// 2. Determines the correct EMsg based on the current authentication state.
-// 3. Uses the SocketCaller to send the message and wait for a response packet.
-// 4. Extracts metadata (EResult, header) from the response packet.
-// 5. Wraps the result in a generic Response container.
+// Do executes a [Request] over a persistent socket connection.
+//
+// It returns an error if the request's [Target] does not implement [SocketTarget],
+// if the connection session is missing, or if the synchronous write/read fails.
 func (t *SocketTransport) Do(ctx context.Context, req *Request) (*Response, error) {
 	target, ok := req.Target().(SocketTarget)
 	if !ok {

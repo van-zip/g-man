@@ -16,14 +16,23 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading/review"
 )
 
-// TradeExecutor is an interface for executing actions in Steam (Accept/Decline).
-// It is implemented by the trading.Manager module.
+// TradeExecutor defines the interface for executing final trade actions on Steam.
+//
+// This interface is typically implemented by the trade manager.
 type TradeExecutor interface {
+	// AcceptOffer approves and finalizes the specified trade offer ID.
 	AcceptOffer(ctx context.Context, id uint64) error
+	// DeclineOffer rejects and cancels the specified trade offer ID.
 	DeclineOffer(ctx context.Context, id uint64) error
 }
 
-// Processor coordinates the processing of one trade offer.
+// Processor coordinates the sequential processing of trade offers.
+//
+// It manages an internal, sequential processing queue to avoid concurrency races
+// in stock inventory, and maintains an active asset lock registry to prevent "double-spending"
+// (re-using the same item in parallel trade processing cycles).
+//
+// Create new instances of Processor using the [New] constructor.
 type Processor struct {
 	executor TradeExecutor
 	engine   *engine.Engine
@@ -43,7 +52,8 @@ type busyItemsMu struct {
 	sync.RWMutex
 }
 
-// New creates a new processor.
+// New creates a new Processor instance with the provided execution, decision,
+// notification, and reporting dependencies.
 func New(ex TradeExecutor, eng *engine.Engine, n *notifications.Manager, r *review.Reviewer, l log.Logger) *Processor {
 	return &Processor{
 		executor:  ex,
@@ -56,7 +66,10 @@ func New(ex TradeExecutor, eng *engine.Engine, n *notifications.Manager, r *revi
 	}
 }
 
-// Start starts a worker that cleans up the offer queue.
+// Start launches the sequential background worker goroutine.
+//
+// This worker reads from the internal queue and processes queued trade offers
+// sequentially to ensure inventory synchronization.
 func (p *Processor) Start(ctx context.Context) {
 	go func() {
 		for {
@@ -70,7 +83,9 @@ func (p *Processor) Start(ctx context.Context) {
 	}()
 }
 
-// Enqueue adds the offer to the queue for processing.
+// Enqueue adds the trade offer to the internal queue for sequential processing.
+//
+// If the internal queue buffer is full, writing to the queue blocks the caller.
 func (p *Processor) Enqueue(offer *trading.TradeOffer) {
 	p.queue <- offer
 }

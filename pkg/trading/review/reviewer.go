@@ -15,6 +15,11 @@ import (
 )
 
 // Reviewer provides functionality for generating trade reports and alerts.
+//
+// It compiles trade metadata into structured summaries using a [SchemaProvider] and
+// [ChatProvider], formatting the resulting alerts using a platform-specific [Formatter].
+//
+// Create new instances of Reviewer using the [New] constructor.
 type Reviewer struct {
 	schema SchemaProvider
 	chat   ChatProvider
@@ -26,7 +31,7 @@ func New(s SchemaProvider, c ChatProvider, l log.Logger) *Reviewer {
 	return &Reviewer{schema: s, chat: c, logger: l}
 }
 
-// BuildSummary generates a structured report based on metadata.
+// BuildSummary generates a structured [Report] based on metadata.
 func (rv *Reviewer) BuildSummary(meta *TradeMetadata, f Formatter) *Report {
 	report := &Report{}
 
@@ -46,6 +51,9 @@ func (rv *Reviewer) BuildSummary(meta *TradeMetadata, f Formatter) *Report {
 }
 
 // SendDeclinedAlert sends a detailed alert to the admin about why the offer was rejected.
+//
+// It compiles details from the [TradeMetadata] and [BotStatsProvider] and transmits
+// them using the [ChatProvider]. It returns an error if transmission fails.
 func (rv *Reviewer) SendDeclinedAlert(
 	ctx context.Context,
 	offerID uint64,
@@ -78,6 +86,9 @@ func (rv *Reviewer) SendDeclinedAlert(
 
 // SendReviewAlert sends a detailed message to the administrator that the offer
 // is awaiting manual approval and provides instructions on how to proceed.
+//
+// It compiles details from the [TradeMetadata] and transmits them using the [ChatProvider].
+// It returns an error if transmission fails.
 func (rv *Reviewer) SendReviewAlert(ctx context.Context, offerID uint64, partnerID id.ID, meta *TradeMetadata) error {
 	f := SteamFormatter{}
 	report := rv.BuildSummary(meta, f)
@@ -109,6 +120,8 @@ func (rv *Reviewer) SendReviewAlert(ctx context.Context, offerID uint64, partner
 
 // Report is an intermediate object with strings ready for output.
 type Report struct {
+	// MainReason is the formatted description of the primary decline reason.
 	MainReason string
-	Details    []string
+	// Details contains formatted detailed descriptions of each triggered reason.
+	Details []string
 }

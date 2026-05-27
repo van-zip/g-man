@@ -14,6 +14,10 @@ import (
 )
 
 // Manager is responsible for generating and sending trade-related chat notifications.
+//
+// It parses and caches Go text templates internally using [text/template] to prevent
+// redundant parsing over high-frequency notification cycles.
+// Create new instances of Manager using the [NewManager] constructor.
 type Manager struct {
 	chat   ChatProvider
 	config ConfigProvider
@@ -23,7 +27,8 @@ type Manager struct {
 	templateCache *template.Template
 }
 
-// NewManager creates a new notification manager.
+// NewManager creates a new [Manager] instance with the provided chat, config,
+// and logging dependencies.
 func NewManager(chat ChatProvider, config ConfigProvider, logger log.Logger) *Manager {
 	return &Manager{
 		chat:   chat,
@@ -37,6 +42,10 @@ func NewManager(chat ChatProvider, config ConfigProvider, logger log.Logger) *Ma
 }
 
 // SendNotification determines the correct template for a trade outcome and sends it.
+//
+// It compiles details from the [TradeInfo] and transmits the resulting message
+// using the [ChatProvider]. It returns an error if template rendering or message
+// transmission fails.
 func (m *Manager) SendNotification(ctx context.Context, info *TradeInfo) error {
 	key, defaultTpl, err := m.resolveTemplate(info)
 	if err != nil {

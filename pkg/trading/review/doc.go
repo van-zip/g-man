@@ -4,28 +4,60 @@
 
 /*
 Package review handles detailed reporting and alerting for bot administrators.
+
 It translates raw trade reasoning into human-readable summaries.
 
-# Reporting and Alerts
+# Key Components
 
-When an offer is automatically declined or flagged for manual review, the
-Reviewer generates a detailed report. These reports include:
-  - The primary reason for the decision.
-  - Granular lists of problematic items (overstocked, disabled, or duped).
-  - Bot statistics (current stock levels, backpack slots).
-  - Actionable commands (e.g., "!accept <id>") for manual intervention.
+  - [Reviewer]: The primary service that compiles trade metadata into structured reports and dispatches alerts.
+  - [Formatter]: Determines the visual style and formatting rules for specific platforms (such as Steam chat or Discord webhooks).
+  - [TradeMetadata]: Holds all metadata, reasons, and timing details collected during trade offer processing.
+  - [Report]: Contains formatted strings ready for output.
 
-# Presentation Layer
+# Basic Usage Example
 
-The package uses a 'Formatter' strategy to support different output styles.
-For example, the 'SteamFormatter' produces plain text optimized for Steam chat,
-while the 'WebhookFormatter' generates Markdown-formatted blocks for Discord
-or Slack integrations.
+	package main
 
-# Registry Pattern
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/steam/id"
+		"github.com/lemon4ksan/g-man/pkg/trading/review"
+	)
 
-Reasoning logic is decoupled from presentation via a centralized 'Registry'.
-Adding support for new game-specific item checks (like CS2 wear levels or
-Dota 2 gems) involves simply registering a new 'ReasonProcessor'.
+	// MockSchema implements review.SchemaProvider for testing.
+	type MockSchema struct{}
+
+	func (s MockSchema) GetName(sku string, useDefindex bool) string {
+		return "Test Item Name"
+	}
+
+	// MockChat implements review.ChatProvider for testing.
+	type MockChat struct{}
+
+	func (c MockChat) SendMessage(ctx context.Context, steamID uint64, message string) error {
+		return nil
+	}
+
+	func (c MockChat) MessageAdmins(ctx context.Context, message string) error {
+		fmt.Println("Admin Alert:", message)
+		return nil
+	}
+
+	func main() {
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
+		reviewer := review.New(MockSchema{}, MockChat{}, logger)
+
+		ctx := context.Background()
+		partnerID := id.FromAccountID(12345678)
+		meta := &review.TradeMetadata{
+			PrimaryReason: "OVERSTOCKED",
+			ProcessTimeMS: 45,
+		}
+
+		// Send alert to administrators
+		_ = reviewer.SendReviewAlert(ctx, 123456, partnerID, meta)
+	}
 */
 package review

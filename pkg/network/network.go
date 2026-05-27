@@ -42,6 +42,7 @@ type Framer interface {
 // Connection represents a bi-directional network connection that can send
 // and receive discrete messages.
 //
+// Standard implementations include [TCP] (created via [NewTCP]) and [WS] (created via [NewWS]).
 // Implementations of Connection are expected to handle transport-specific details,
 // such as read/write deadlines, encryption, and framing, in a concurrent-safe manner.
 type Connection interface {
@@ -80,11 +81,12 @@ type Connection interface {
 	Closed() <-chan struct{}
 }
 
-// Encryptable is an optional interface that can be implemented by a Connection
+// Encryptable is an optional interface that can be implemented by a [Connection]
 // to support post-handshake, session-based symmetric encryption.
 type Encryptable interface {
-	// SetCipher configures the Connection to use the specified Cipher for
+	// SetCipher configures the Connection to use the specified [Cipher] for
 	// encrypting all subsequent outgoing messages and decrypting incoming ones.
+	// Pass nil to disable encryption on the connection.
 	// It returns true if the cipher was successfully applied.
 	SetCipher(cipher Cipher) bool
 }
@@ -92,7 +94,7 @@ type Encryptable interface {
 // BaseConnection provides common fields and methods shared by all connection
 // implementations, such as connection tracking and identity.
 //
-// It is intended to be embedded in concrete Connection implementations.
+// It is intended to be embedded in concrete [Connection] implementations.
 type BaseConnection struct {
 	id   int64
 	name string
@@ -100,6 +102,8 @@ type BaseConnection struct {
 
 // NewBaseConnection returns a new BaseConnection initialized with a unique identifier
 // and the specified protocol name.
+//
+// The unique identifier is generated using a global, thread-safe atomic counter.
 func NewBaseConnection(name string) BaseConnection {
 	return BaseConnection{
 		id:   globalConnectionID.Add(1),

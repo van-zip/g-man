@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package websession provides a high-level interface for managing Steam web sessions.
-//
-// It automates the process of obtaining and synchronizing authentication cookies
-// ('steamLoginSecure' and 'sessionid') across multiple Steam domains such as
-// steamcommunity.com and steampowered.com.
 package websession
 
 import (
@@ -49,6 +44,10 @@ const (
 //
 // It implements the [rest.HTTPDoer] interface, allowing it to be used
 // as a transport for REST clients that require session-aware cookies.
+//
+// By default, cookies are synchronized across standard Steam domains. To add
+// additional custom domains, use [WebSession.AddDomains].
+// Use [New] to create new instances of WebSession.
 type WebSession struct {
 	mu sync.RWMutex
 
@@ -70,6 +69,9 @@ func (d *doerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // New creates a new, unauthenticated web session for the provided SteamID.
+//
+// If the baseDoer argument is nil, it automatically initializes a default
+// [http.Client] with a 30-second timeout.
 func New(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) *WebSession {
 	ws := &WebSession{
 		steamID:  steamID,
@@ -125,6 +127,13 @@ func (s *WebSession) AddDomains(domains ...string) {
 }
 
 // Authenticate synchronizes the web session with Steam's OIDC providers.
+//
+// If the platform type is a client or mobile app and a non-empty accessToken is provided,
+// Authenticate performs a fast-path direct cookie injection. Otherwise, it executes
+// the slow-path OIDC finalization flow, resolving TransferInfo redirects.
+//
+// It returns an error if the refreshToken is empty, if the network request fails,
+// or if Steam returns an EResult failure.
 func (s *WebSession) Authenticate(
 	ctx context.Context,
 	platform pb.EAuthTokenPlatformType,
@@ -147,6 +156,10 @@ func (s *WebSession) Authenticate(
 }
 
 // Verify proactively checks if the current web session is still valid.
+//
+// It performs a GET request to the Steam chat client interfaces endpoint.
+// If the session is invalid, expired, or redirected to the login page, Verify
+// automatically clears the internal cookie jar and returns false.
 func (s *WebSession) Verify(ctx context.Context) (bool, error) {
 	if !s.IsAuthenticated() {
 		return false, nil
@@ -175,6 +188,8 @@ func (s *WebSession) IsAuthenticated() bool {
 }
 
 // SessionID retrieves the value of the 'sessionid' cookie for a specific target URL.
+//
+// It returns an empty string if the targetURL is empty or cannot be parsed as a valid URL.
 func (s *WebSession) SessionID(targetURL string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -193,15 +208,17 @@ func (s *WebSession) SessionID(targetURL string) string {
 	return ""
 }
 
-// Clear completely resets the web session state.
+// Clear completely resets the web session state by instantiating a fresh cookie jar.
 func (s *WebSession) Clear() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.httpClient != nil {
+		jar, _ := cookiejar.New(nil)
+		s.jar = jar
+		s.httpClient.Jar = jar
+	}
 
-	jar, _ := cookiejar.New(nil)
-	s.jar = jar
-	s.httpClient.Jar = jar
 	s.isAuth = false
+	s.mu.Unlock()
 }
 
 func (s *WebSession) applyFastPath(accessToken, sessionID string) error {

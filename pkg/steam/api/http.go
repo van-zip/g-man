@@ -13,7 +13,9 @@ import (
 
 // CallConfig holds internal configuration for an API call.
 type CallConfig struct {
-	Format   ResponseFormat
+	// Format is the expected response format used by the unmarshaler.
+	Format ResponseFormat
+	// Registry is the unmarshal registry containing decoders.
 	Registry *UnmarshalRegistry
 }
 
@@ -89,10 +91,15 @@ func WithCustomRegistry(r *UnmarshalRegistry) CallOption {
 	}
 }
 
-// HTTPTarget implements the transport.Target interface for basic HTTP calls.
+// HTTPTarget implements the transport Target interface for basic HTTP calls.
+//
+// It represents an HTTP-specific request target. Use inline initialization
+// or helper functions like [NewHTTPRequest] to build requests using this target.
 type HTTPTarget struct {
+	// Method is the HTTP verb (e.g., "GET", "POST").
 	Method string
-	URL    string
+	// URL is the destination endpoint address.
+	URL string
 }
 
 // String returns the underlying url.

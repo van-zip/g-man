@@ -7,57 +7,57 @@ Package network provides low-level, protocol-specific network connection
 implementations (TCP and WebSocket). It is the foundational "socket layer"
 of the library, responsible for raw data transmission and framing.
 
-# Architectural Role
+# Key Components
 
-This package deals with the raw realities of network programming:
-  - Dialing endpoints.
-  - Framing messages (via the `Framer` interface).
-  - Handling encryption and decryption (via the optional `Cipher` interface).
-  - Reading from the socket in a dedicated loop and pushing messages up.
-
-It abstracts these details behind a single `Connection` interface. Higher-level
-packages like `steam.transport` use this interface to send and receive logical
-Steam messages without needing to know if they are traveling over TCP or WebSockets.
+  - [Connection]: The primary interface representing a bi-directional connection.
+  - [Framer]: Handles message framing and unframing on stream-oriented transports.
+  - [Cipher]: Provides optional symmetric encryption and decryption for payloads.
+  - [Error]: Represents structured, transport-agnostic network errors.
 
 # Connection Lifecycle
 
- 1. A connection is established using a `New...` function (e.g., `NewTCP`, `NewWS`).
-    WebSocket connections support optional HTTP headers for the initial handshake.
- 2. The function immediately starts a `readLoop` in a background goroutine.
- 3. The `readLoop` continuously reads data from the socket. When a full message
-    is received, it is pushed into the channel returned by `Messages()`.
- 4. Other parts of the application can send data using the `Send` method.
- 5. If the connection is terminated (by the remote peer or an error), the `Closed()`
-    channel is closed, and any fatal errors are sent to the `Errors()` channel.
+A connection is established using constructor functions like [NewTCP] or [NewWS].
+Incoming messages are read asynchronously in a background loop and sent to
+the channel returned by [Connection.Messages]. Outgoing messages are sent using
+the [Connection.Send] method.
 
-This asynchronous model (via Go channels) allows for a clean
-separation of network I/O from the business logic of processing messages.
+# Basic Usage Example
 
-# Error Handling
+	package main
 
-All functions and methods in the package return structured, custom errors of type `*Error`.
-This allows callers to easily programmatically inspect the failed operation, transport type,
-and underlying causes:
+	import (
+		"context"
+		"fmt"
+		"io"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/network"
+	)
 
-  - `Op`: Represents the specific operation that failed (e.g. `OpDial`, `OpSend`, `OpRead`, etc.).
-  - `Net`: Indicates the transport protocol name (`"TCP"` or `"WS"`).
-  - `Err`: The wrapped underlying error (e.g., a standard `net.OpError` or custom protocol failure).
+	// DummyFramer implements network.Framer for basic testing.
+	type DummyFramer struct{}
 
-To inspect the error programmatically:
-
-	if err != nil {
-		var netErr *network.Error
-		if errors.As(err, &netErr) {
-			switch netErr.Op {
-			case network.OpDial:
-				// handle connection failures
-			case network.OpSend:
-				// handle write failures
-			}
-		}
+	func (f DummyFramer) ReadFrame(r io.Reader) ([]byte, error) {
+		buf := make([]byte, 1024)
+		n, err := r.Read(buf)
+		return buf[:n], err
 	}
 
-Additionally, `network.Error` supports standard Go wrapping. Calling `errors.Is(err, context.Canceled)` or
-`errors.Is(err, io.EOF)` on a returned `network.Error` will transparently verify the underlying error.
+	func (f DummyFramer) WriteFrame(w io.Writer, data []byte) error {
+		_, err := w.Write(data)
+		return err
+	}
+
+	func main() {
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
+		ctx := context.Background()
+
+		// Connect to a local server
+		conn, err := network.NewTCP(ctx, logger, "127.0.0.1:8080", "", DummyFramer{})
+		if err != nil {
+			fmt.Println("Connection failed:", err)
+			return
+		}
+		defer conn.Close()
+	}
 */
 package network

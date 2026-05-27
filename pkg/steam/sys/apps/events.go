@@ -9,12 +9,14 @@ import "github.com/lemon4ksan/g-man/pkg/bus"
 // AppLaunchedEvent is emitted when the client reports playing a new game.
 type AppLaunchedEvent struct {
 	bus.BaseEvent
+	// AppID is the Steam AppID of the launched game.
 	AppID uint32
 }
 
 // AppQuitEvent is emitted when the client stops playing a game.
 type AppQuitEvent struct {
 	bus.BaseEvent
+	// AppID is the Steam AppID of the stopped game.
 	AppID uint32
 }
 
@@ -22,6 +24,8 @@ type AppQuitEvent struct {
 // Blocked is true when another session is currently playing a game on this account.
 type PlayingStateEvent struct {
 	bus.BaseEvent
-	Blocked    bool
+	// Blocked is true if another active session is currently playing a game on this account.
+	Blocked bool
+	// PlayingApp is the Steam AppID currently being played by the conflicting session.
 	PlayingApp uint32
 }

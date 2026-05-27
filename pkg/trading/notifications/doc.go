@@ -6,20 +6,61 @@
 Package notifications provides a flexible system for generating user-facing
 chat messages based on trade outcomes.
 
-# Template-based Messaging
+# Key Components
 
-The package leverages Go's 'text/template' engine to allow highly customizable
-and brandable notifications. This enables bot owners to change the wording,
-formatting (e.g., using Steam's /pre tag), or localization of messages without
-modifying the bot's core logic.
+  - [Manager]: The central service responsible for rendering and dispatching notifications using Go text templates.
+  - [TradeInfo]: Contains detailed metadata about a finalized trade, used to populate templates.
+  - [ChatProvider]: Defines the contract for sending messages to Steam users.
+  - [ConfigProvider]: Defines the contract for retrieving customized notification templates and prefixes.
 
-# Key Features
+# Basic Usage Example
 
-  - Dynamic Context: Data from the trade (e.g., missing value, item names,
-    ban status) is automatically injected into templates.
-  - Fallback Mechanism: The package provides a comprehensive set of default
-    English templates for all common trade scenarios (Accept, Decline, Escrow, etc.).
-  - Decoupled Delivery: The 'Manager' uses a 'ChatProvider' interface, making
-    it compatible with any messaging service (Steam Chat, Discord, etc.).
+	package main
+
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/steam/id"
+		"github.com/lemon4ksan/g-man/pkg/trading/notifications"
+	)
+
+	// MockChat implements notifications.ChatProvider for testing.
+	type MockChat struct{}
+
+	func (c MockChat) SendMessage(ctx context.Context, steamID id.ID, message string) error {
+		fmt.Println("Sent Chat:", message)
+		return nil
+	}
+
+	// MockConfig implements notifications.ConfigProvider for testing.
+	type MockConfig struct{}
+
+	func (c MockConfig) GetTemplate(key string) string {
+		return "Trade accepted! Thank you!"
+	}
+
+	func (c MockConfig) GetCommandPrefix() string {
+		return "!"
+	}
+
+	func main() {
+		ctx := context.Background()
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
+
+		// Create and initialize the manager
+		mgr := notifications.NewManager(MockChat{}, MockConfig{}, logger)
+		partnerID := id.FromAccountID(123456)
+
+		// Prepare trade info for an accepted trade
+		info := &notifications.TradeInfo{
+			OfferID:        78910,
+			PartnerSteamID: partnerID,
+			OldState:       notifications.StateAccepted,
+		}
+
+		// Dispatch the notification
+		_ = mgr.SendNotification(ctx, info)
+	}
 */
 package notifications

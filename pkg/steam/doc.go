@@ -21,8 +21,6 @@ dynamically routing requests over TCP/WebSockets or HTTP depending on connection
 
 # Basic Usage Example
 
-Here is a simple, self-contained example demonstrating how to initialize and run a client:
-
 	package main
 
 	import (

@@ -12,14 +12,19 @@ import (
 // requires mobile or email confirmation.
 type ConfirmationRequiredEvent struct {
 	bus.BaseEvent
+	// TradeOfferID is the unique identifier of the trade offer.
 	TradeOfferID string
+	// IsAppConfirm is true if the confirmation must be completed via the mobile app.
 	IsAppConfirm bool
-	IsEmail      bool
-	EmailDomain  string
+	// IsEmail is true if the confirmation code was sent via email.
+	IsEmail bool
+	// EmailDomain is the target domain name where the email confirmation was sent.
+	EmailDomain string
 }
 
 // NeedAuthEvent is emitted when confirmation is returned with NeedAuth field set to True.
 type NeedAuthEvent struct {
 	bus.BaseEvent
+	// Message is the authentication failure description from Steam.
 	Message string
 }

@@ -41,6 +41,9 @@ func From(c *steam.Client) *Apps {
 }
 
 // Apps manages the "In-Game" status and interacts with Steam's app services.
+//
+// It provides methods for launching games, stopping play status, and checking player counts.
+// Create new instances of Apps using the [New] constructor.
 type Apps struct {
 	module.Base
 
@@ -95,6 +98,9 @@ func (a *Apps) Close() error {
 
 // GetPlayerCount requests the current number of online players for a specific AppID.
 // Set appID to 0 to get the total number of users currently connected to Steam.
+//
+// It returns an error if the request fails, or if Steam returns an EResult
+// other than OK.
 func (a *Apps) GetPlayerCount(ctx context.Context, appID uint32) (int32, error) {
 	req := &pb.CMsgDPGetNumberOfCurrentPlayers{
 		Appid: proto.Uint32(appID),

@@ -122,15 +122,11 @@ func NewResponse(body []byte, meta any) *Response {
 	}
 }
 
-// As provides a type-safe way to extract protocol-specific metadata from a Response.
+// As provides a type-safe way to extract protocol-specific metadata from a [Response].
 // It functions similarly to errors.As, populating the target if the types match.
 //
-// Example:
-//
-//	var meta transport.HTTPMetadata
-//	if resp.As(&meta) {
-//	    fmt.Println("Status Code:", meta.StatusCode)
-//	}
+// The target argument must be a non-nil pointer. If target is nil or not a pointer,
+// As panics with an invalid target description.
 func (r *Response) As(target any) bool {
 	if r.metadata == nil {
 		return false

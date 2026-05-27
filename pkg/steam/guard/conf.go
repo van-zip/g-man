@@ -11,11 +11,16 @@ import (
 
 // ConfirmationsList is the api response structure for confirmations.
 type ConfirmationsList struct {
-	Success       bool            `json:"success"`
+	// Success is true if the confirmations were successfully retrieved.
+	Success bool `json:"success"`
+	// Confirmations is the list of retrieved pending confirmations.
 	Confirmations []*Confirmation `json:"conf"`
-	Message       string          `json:"message"`
-	Detail        string          `json:"detail"`
-	NeedAuth      bool            `json:"needauth"`
+	// Message is an optional status message returned by Steam.
+	Message string `json:"message"`
+	// Detail is an optional detail message returned by Steam.
+	Detail string `json:"detail"`
+	// NeedAuth is true if the request requires re-authentication.
+	NeedAuth bool `json:"needauth"`
 }
 
 // ConfirmationType represents the type of Steam Guard confirmation.

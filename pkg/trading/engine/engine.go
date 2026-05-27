@@ -19,6 +19,10 @@ type Handler func(ctx *TradeContext) error
 type Middleware func(next Handler) Handler
 
 // Engine orchestrates the execution of trade middlewares.
+//
+// Middlewares are executed sequentially from the outermost layer to the innermost layer.
+// Callers can register middlewares using the [Engine.Use] method.
+// Create new instances of the engine using the [New] constructor.
 type Engine struct {
 	middlewares []Middleware
 }
@@ -31,13 +35,16 @@ func New() *Engine {
 }
 
 // Use appends one or more middlewares to the execution chain.
-// Order matters: middlewares added first will execute first.
+//
+// Order is respected: middlewares added first execute first.
 func (e *Engine) Use(mws ...Middleware) {
 	e.middlewares = append(e.middlewares, mws...)
 }
 
 // Process passes the TradeOffer through the entire middleware chain.
-// It returns the final Verdict reached by the chain.
+//
+// It returns the final [Verdict] reached by the chain.
+// It returns an error if any of the registered middlewares return an error during execution.
 func (e *Engine) Process(ctx context.Context, offer *trading.TradeOffer) (*Verdict, error) {
 	tCtx := NewTradeContext(ctx, offer)
 

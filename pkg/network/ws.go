@@ -20,11 +20,13 @@ import (
 
 var _ Connection = (*WS)(nil)
 
-// WS implements the Connection interface using the WebSocket protocol.
+// WS implements the [Connection] interface using the WebSocket protocol.
 //
 // It wraps gorilla/websocket to handle connection establishment, message framing,
 // and WebSocket close handshake rules. All WebSocket operations are thread-safe and
 // respect contexts and write deadlines.
+//
+// Create new instances of WS using the [NewWS] constructor.
 type WS struct {
 	BaseConnection
 
@@ -48,7 +50,9 @@ type WS struct {
 // through the specified HTTP proxy. Handshake headers can be optionally provided
 // via the headers argument.
 //
-// If connection or handshake fails, it returns an *Error with OpDial.
+// If the context ctx is canceled before or during connection establishment,
+// NewWS cancels the dial and returns the context error.
+// If connection or handshake fails, it returns an *[Error] with [OpDial].
 func NewWS(
 	ctx context.Context,
 	logger log.Logger,
@@ -126,7 +130,7 @@ func (w *WS) Closed() <-chan struct{} { return w.closedChan }
 // Send transmits the message payload as a binary frame over the WebSocket.
 //
 // Send blocks until the write completes, the context is canceled, or the write deadline
-// is reached. It returns an *Error if write deadline configuration or write operation fails.
+// is reached. It returns an *[Error] if write deadline configuration or write operation fails.
 // This method is safe for concurrent use.
 func (w *WS) Send(ctx context.Context, data []byte) error {
 	w.writeMu.Lock()

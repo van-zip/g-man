@@ -30,8 +30,16 @@ func WithModule() steam.Option {
 	}
 }
 
+// From returns the live trading module from the client.
+func From(c *steam.Client) *Manager {
+	return steam.GetModule[*Manager](c)
+}
+
 // Manager handles trade invitations (proposing, accepting, canceling).
-// It embeds modules.BaseModule for lifecycle and concurrency management.
+//
+// It registers low-level binary message handlers on the client socket to monitor
+// incoming invitations, and manages real-time session transitions.
+// Create new instances of Manager using the [New] constructor.
 type Manager struct {
 	module.Base
 
@@ -84,6 +92,8 @@ func (m *Manager) Close() error {
 }
 
 // Invite sends a trade invitation to another Steam user.
+//
+// It returns an error if the underlying legacy packet transmission fails.
 func (m *Manager) Invite(ctx context.Context, otherSteamID uint64) error {
 	req := &pb.CMsgTrading_InitiateTradeRequest{
 		OtherSteamid: proto.Uint64(otherSteamID),
@@ -100,6 +110,8 @@ func (m *Manager) Invite(ctx context.Context, otherSteamID uint64) error {
 }
 
 // CancelInvitation revokes a pending trade invitation sent to another user.
+//
+// It returns an error if the underlying legacy packet transmission fails.
 func (m *Manager) CancelInvitation(ctx context.Context, otherSteamID uint64) error {
 	req := &pb.CMsgTrading_CancelTradeRequest{
 		OtherSteamid: proto.Uint64(otherSteamID),
@@ -113,6 +125,8 @@ func (m *Manager) CancelInvitation(ctx context.Context, otherSteamID uint64) err
 }
 
 // RespondToInvite approves or declines an incoming trade invitation.
+//
+// It returns an error if the underlying legacy packet transmission fails.
 func (m *Manager) RespondToInvite(ctx context.Context, tradeID uint32, accept bool) error {
 	responseCode := enums.EEconTradeResponse_Declined
 	if accept {

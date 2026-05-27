@@ -36,10 +36,13 @@ const (
 
 // RegistryProvider defines the contract for components that maintain an UnmarshalRegistry.
 type RegistryProvider interface {
+	// Registry returns the underlying UnmarshalRegistry.
 	Registry() *UnmarshalRegistry
 }
 
 // UnmarshalRegistry is a thread-safe registry of decoders.
+//
+// Create and initialize new instances of the registry using the [NewUnmarshalRegistry] constructor.
 type UnmarshalRegistry struct {
 	decoders map[ResponseFormat]rest.Decoder
 }
@@ -66,6 +69,9 @@ func (r *UnmarshalRegistry) Register(format ResponseFormat, d rest.Decoder) {
 }
 
 // Unmarshal searches the registry for a suitable decoder and runs it.
+//
+// If the data slice is empty, it returns nil immediately without executing any decoders.
+// If no decoder is registered for the specified format, it returns [ErrFormat].
 func (r *UnmarshalRegistry) Unmarshal(data []byte, target any, format ResponseFormat) error {
 	if len(data) == 0 {
 		return nil

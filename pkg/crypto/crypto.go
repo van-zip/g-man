@@ -2,7 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package crypto provides cryptographic utilities for the steam client, including totp.
+// Package crypto provides cryptographic utilities for the Steam client.
+//
+// It implements Steam-specific security operations including RSA-OAEP session
+// key generation, symmetric AES-256-CBC and AES-256-ECB encryption, and Steam
+// Guard Mobile Authenticator TOTP algorithms.
+//
+// Common operations include:
+//   - Generating temporary encrypted session keys using [GenerateSessionKey].
+//   - Performing AES encryption and decryption using [SymmetricEncrypt] and [SymmetricDecrypt].
+//   - Constructing deterministic hardware identifiers using [GenerateAccountMachineID].
+//   - Generating 2FA authentication codes via [GenerateAuthCode].
 package crypto
 
 import (
@@ -33,7 +43,14 @@ func init() {
 }
 
 // GenerateSessionKey creates a 32-byte random session key, optionally appends a nonce,
-// and encrypts it with the system public key using RSA-OAEP (SHA1).
+// and encrypts it with the system public key using RSA-OAEP (SHA-1).
+//
+// If the nonce is provided, the function appends it to the generated session key
+// before encrypting the combined buffer. An empty or nil nonce is ignored and
+// only the session key is encrypted.
+//
+// It returns an error if the cryptographically secure random number generator
+// fails, or if the RSA encryption fails.
 func GenerateSessionKey(nonce []byte) (sessionKey, encrypted []byte, err error) {
 	sessionKey = make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, sessionKey); err != nil {
@@ -42,7 +59,6 @@ func GenerateSessionKey(nonce []byte) (sessionKey, encrypted []byte, err error) 
 
 	toEncrypt := sessionKey
 	if len(nonce) > 0 {
-		// Create a new slice to avoid modifying the original sessionKey underlying array
 		toEncrypt = make([]byte, len(sessionKey)+len(nonce))
 		copy(toEncrypt, sessionKey)
 		copy(toEncrypt[len(sessionKey):], nonce)
@@ -56,8 +72,15 @@ func GenerateSessionKey(nonce []byte) (sessionKey, encrypted []byte, err error) 
 	return sessionKey, encrypted, nil
 }
 
-// SymmetricEncrypt performs AES-256-CBC encryption.
-// The IV is encrypted with AES-256-ECB and prepended to the ciphertext.
+// SymmetricEncrypt performs AES-256-CBC encryption on the input payload.
+// The initialization vector (IV) is encrypted with AES-256-ECB and prepended
+// to the resulting ciphertext.
+//
+// If the iv argument is nil, the function automatically generates a secure
+// random vector of the standard block size.
+//
+// It returns an error if the provided key is not exactly 32 bytes, if the iv is
+// non-nil but is not exactly 16 bytes, or if the secure random generator fails.
 func SymmetricEncrypt(input, key, iv []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes for AES-256")
@@ -84,8 +107,12 @@ func SymmetricEncrypt(input, key, iv []byte) ([]byte, error) {
 	return append(ecbIV, cbcBytes...), nil
 }
 
-// SymmetricEncryptWithHmacIv is a custom encryption that constructs the IV from
-// an HMAC-SHA1 of (random + plaintext) and a 3-byte random, using the first 16 bytes of the key for HMAC.
+// SymmetricEncryptWithHmacIv encrypts the input payload using a derived initialization vector.
+// It constructs the IV from an HMAC-SHA1 of a random 3-byte prefix and the plaintext,
+// using the first 16 bytes of the key as the HMAC secret.
+//
+// It returns an error if the key is not exactly 32 bytes, if the system random
+// generator fails, or if the underlying [SymmetricEncrypt] fails.
 func SymmetricEncryptWithHmacIv(input, key []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes")
@@ -104,8 +131,14 @@ func SymmetricEncryptWithHmacIv(input, key []byte) ([]byte, error) {
 	return SymmetricEncrypt(input, key, append(h.Sum(nil)[:13], random...))
 }
 
-// SymmetricDecrypt decrypts data produced by SymmetricEncrypt or SymmetricEncryptWithHmacIv.
-// If checkHmac is true, it verifies the HMAC embedded in the IV.
+// SymmetricDecrypt decrypts ciphertext produced by [SymmetricEncrypt] or [SymmetricEncryptWithHmacIv].
+//
+// If checkHmac is true, the function verifies the integrity of the decrypted payload
+// against the HMAC signature embedded within the initialization vector.
+//
+// It returns an error if the key is not exactly 32 bytes, if the input ciphertext is
+// shorter than the block size, if the ciphertext length is not a multiple of the
+// block size, if padding removal fails, or if HMAC verification fails.
 func SymmetricDecrypt(input, key []byte, checkHmac bool) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes")
@@ -145,7 +178,10 @@ func SymmetricDecrypt(input, key []byte, checkHmac bool) ([]byte, error) {
 	return plaintext, nil
 }
 
-// SymmetricDecryptECB decrypts data that was encrypted with AES-256-ECB + PKCS7 padding.
+// SymmetricDecryptECB decrypts data encrypted with AES-256-ECB using PKCS7 padding.
+//
+// It returns an error if the key is not exactly 32 bytes, if the input ciphertext is
+// not a multiple of the block size, or if padding removal fails.
 func SymmetricDecryptECB(input, key []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes")
@@ -165,7 +201,9 @@ func SymmetricDecryptECB(input, key []byte) ([]byte, error) {
 	return pkcs7Unpad(plaintext, aes.BlockSize)
 }
 
-// GenerateAccountMachineID creates a deterministic ID based on the account name.
+// GenerateAccountMachineID creates a deterministic machine identifier based on the Steam account name.
+// It uses predefined formatting strings and hashing algorithms to produce a consistent ID
+// for recognized device identification.
 func GenerateAccountMachineID(accountName string) []byte {
 	format := "SteamUser Hash %s %s"
 	val1 := fmt.Sprintf(format, "BB3", accountName)
@@ -175,7 +213,9 @@ func GenerateAccountMachineID(accountName string) []byte {
 	return CreateVDFMachineID(val1, val2, val3)
 }
 
-// CreateVDFMachineID packs three hashes into the Valve VDF binary format.
+// CreateVDFMachineID packs three string hashes into the Valve VDF binary format.
+// It serializes the identifiers into a structured, null-terminated VDF map structure
+// that matches the Steam client hardware registration format.
 func CreateVDFMachineID(v1, v2, v3 string) []byte {
 	sha1Hex := func(s string) string {
 		h := sha1.New()
@@ -205,14 +245,13 @@ func CreateVDFMachineID(v1, v2, v3 string) []byte {
 	return buf.Bytes()
 }
 
-// Wipe overwrites the given byte slice with zeros to remove sensitive data from memory.
+// Wipe overwrites the given byte slice with zero bytes to clear sensitive data from memory.
 func Wipe(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
 }
 
-// pkcs7Pad adds PKCS7 padding. Block size is assumed to be small (e.g., 16 or 32).
 func pkcs7Pad(data []byte, blockSize int) []byte {
 	padding := blockSize - (len(data) % blockSize)
 	result := make([]byte, len(data)+padding)
@@ -226,7 +265,6 @@ func pkcs7Pad(data []byte, blockSize int) []byte {
 	return result
 }
 
-// pkcs7Unpad removes PKCS7 padding, verifying its correctness.
 func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty data")

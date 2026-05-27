@@ -33,15 +33,17 @@ type Doer interface {
 	Do(ctx context.Context, req *tr.Request) (*tr.Response, error)
 }
 
-// NoResponse is a sentinel type that indicates that the marshaling should be skipped entirely.
+// NoResponse is a sentinel type that indicates that marshaling should be skipped entirely.
 type NoResponse struct{}
 
 // Option defines a functional configuration for the Client.
 type Option = bus.Option[*Client]
 
 // Client is the primary entry point for calling Steam Services.
+//
 // It acts as a decorator for a [tr.Transport], automatically injecting
-// API keys or Access Tokens and validating Steam-specific error results.
+// API keys or Access Tokens, and validating Steam-specific error results.
+// Create and configure new instances of Client using [New].
 type Client struct {
 	transport   tr.Transport
 	apiKey      string
@@ -55,7 +57,7 @@ func (c *Client) Registry() *api.UnmarshalRegistry {
 	return c.registry
 }
 
-// APIKey returns the underlying api key.
+// APIKey returns the underlying API key.
 func (c *Client) APIKey() string {
 	return c.apiKey
 }
@@ -86,7 +88,7 @@ func New(tr tr.Transport, opts ...Option) *Client {
 	return c
 }
 
-// WithAPIKey returns a copy of the client with the WebAPI key (v000x style) for subsequent requests.
+// WithAPIKey returns a copy of the client with the WebAPI key configured for subsequent requests.
 func (c *Client) WithAPIKey(key string) *Client {
 	clone := *c
 	clone.apiKey = key
@@ -109,10 +111,12 @@ func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
 	return &clone
 }
 
-// Do executes a request through the underlying transport. It automatically:
-//   - Injects credentials (key/token).
-//   - Checks HTTP status codes (for Web).
-//   - Inspects Steam EResult codes in both HTTP and Socket metadata.
+// Do executes a request through the underlying transport.
+//
+// It automatically injects credentials (key/token) and intercepts responses
+// to check for Steam-specific results. If an authentication failure occurs,
+// it returns [api.ErrSessionExpired] wrapped in an [api.SteamAPIError].
+// If the Steam EResult code is not OK, it returns an [api.EResultError].
 func (c *Client) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	if c.apiKey != "" {
 		req.WithParam("key", c.apiKey)
@@ -319,7 +323,8 @@ type methodInfo struct {
 // inferUnifiedMethod extracts the Steam Service name and Method from a Protobuf
 // message type using Go reflection and naming conventions.
 //
-// Converts "CPlayer_GetGameBadgeLevels_Request" -> "Player", "GetGameBadgeLevels"
+// It returns [ErrInvalidMessage] if the provided request message req is nil,
+// or if the message name cannot be parsed.
 func inferUnifiedMethod(req proto.Message) (string, string, error) {
 	if req == nil {
 		return "", "", fmt.Errorf("%w: request message cannot be nil", ErrInvalidMessage)

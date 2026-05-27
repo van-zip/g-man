@@ -5,24 +5,42 @@
 /*
 Package web manages asynchronous trade offers via the Steam WebAPI.
 
-This is one of the most critical modules for any trading bot. It periodically
-polls the `IEconService/GetTradeOffers` endpoint to discover new and updated
-trade offers, manages their state, and provides methods to accept, decline,
-or cancel them.
+# Key Components
 
-# Architectural Role:
+  - [Manager]: The central coordinator that polls for sent and received trade offers, managing their states.
+  - [Config]: Configures parameters for polling intervals, language settings, and auto-cancellation limits.
+  - [NewOfferEvent]: Emitted via the event bus when a new, active trade offer is received.
+  - [OfferChangedEvent]: Emitted via the event bus when a tracked offer's transactional state changes.
 
-The `trading` module acts as the primary "sensor" for trade-related activity.
-It publishes events (`NewOfferEvent`, `OfferChangedEvent`) that trigger the
-bot's business logic, which is typically handled by a higher-level `Processor`.
+# Basic Usage Example
 
-# Key Features:
+	package main
 
-  - Periodically polls for sent and received trade offers.
-  - Tracks the state of each offer to detect changes (e.g., from Active to Accepted).
-  - Provides `AcceptOffer`, `DeclineOffer`, and `CancelOffer` methods.
-  - Includes a `SetOfferHandler` hook to integrate with a custom business logic
-    processor (like the Trade Middleware Engine).
-  - Fetches detailed offer contents and escrow duration information.
+	import (
+		"context"
+		"fmt"
+		"time"
+		"github.com/lemon4ksan/g-man/pkg/bus"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/trading/web"
+	)
+
+	func main() {
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
+		eventBus := bus.New()
+
+		// Build the configuration
+		cfg := web.DefaultConfig()
+		cfg.PollInterval = 10 * time.Second
+
+		// Create a new trade manager
+		manager := web.New(cfg)
+
+		// Subscribe to new offers
+		sub := eventBus.Subscribe(&web.NewOfferEvent{})
+		defer sub.Unsubscribe()
+
+		fmt.Println("Trade manager initialized with poll interval:", manager.Count())
+	}
 */
 package web

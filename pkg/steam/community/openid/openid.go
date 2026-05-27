@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package openid provides automated OpenID authentication for third-party websites
-// that use "Sign in through Steam".
 package openid
 
 import (
@@ -38,17 +36,13 @@ var (
 // Login performs an automated OpenID authorization flow on a third-party website
 // using active Steam session cookies.
 //
-// The function returns a configured *rest.Client which contains a CookieJar populated
+// The function returns a configured [rest.Client] which contains a CookieJar populated
 // with the target website's authorization cookies. This client can be used for
 // subsequent API requests to the third-party service.
 //
-// Example:
-//
-//	// Get cookies from your active auth.WebSession
-//	cookies := mySession.Client().(*rest.Client).Jar().Cookies(steamURL)
-//
-//	// Login to a trading site
-//	siteClient, err := openid.Login(ctx, "https://csgo-trading-site.com/login", cookies)
+// It returns [ErrNotSignedIn] if the provided Steam cookies are expired or invalid,
+// [ErrNoForm] if the hidden form is missing from the page, [ErrWrongHost] if the target
+// host does not match, or standard network errors on request failure.
 func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (*rest.Client, error) {
 	parsedTarget, err := url.Parse(targetURL)
 	if err != nil {

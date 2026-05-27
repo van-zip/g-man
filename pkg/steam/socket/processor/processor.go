@@ -2,13 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-/*
-Package processor is the computation layer of the socket system.
-
-It translates the raw network stream into structured protocol packets.
-By using a fixed-size worker pool, it ensures that expensive parsing and
-decompression tasks do not block the network thread.
-*/
 package processor
 
 import (
@@ -29,7 +22,8 @@ type Dispatcher interface {
 
 // Config defines the concurrency and buffering parameters for the processor.
 type Config struct {
-	WorkerCount int // Number of parallel goroutines processing packets.
+	// WorkerCount is the number of parallel goroutines processing raw packets.
+	WorkerCount int
 }
 
 // DefaultConfig returns a balanced configuration based on the available CPU cores.

@@ -18,19 +18,19 @@ import (
 
 // CMServer represents a Steam Connection Manager server endpoint with load metrics.
 type CMServer struct {
-	// Endpoint is the primary address (Host:Port).
+	// Endpoint is the primary host and port address of the server.
 	Endpoint string
-	// LegacyEndpoint is an alternative address format for older clients.
+	// LegacyEndpoint is an alternative port or address format for older client protocols.
 	LegacyEndpoint string
-	// Type defines the transport protocol: "tcp", "websocket", or "netfilter".
+	// Type defines the protocol transport type (such as "tcp" or "websockets").
 	Type string
 	// DC is the data center identifier.
 	DC string
-	// Realm is the Steam realm, usually "steamglobal".
+	// Realm is the Steam server realm (such as "steamglobal").
 	Realm string
-	// Load is a metric representing the current server utilization.
+	// Load is the server load metric reported by Steam.
 	Load int
-	// WtdLoad is the weighted load metric.
+	// WtdLoad is the weighted load metric calculated by Steam.
 	WtdLoad float64
 }
 
@@ -38,15 +38,18 @@ type CMServer struct {
 type CMCfg struct {
 	// CellID is the geographical location ID of the client.
 	CellID uint32
-	// MaxCount limits the number of servers returned.
+	// MaxCount limits the maximum number of servers returned.
 	MaxCount uint32
-	// CmType filters by protocol ("tcp" or "websockets").
+	// CmType filters by protocol transport type (such as "tcp" or "websockets").
 	CmType string
 	// Realm filters by Steam realm.
 	Realm string
 }
 
 // Service orchestrates requests to the ISteamDirectory interface.
+//
+// It provides standard methods for retrieving Connection Manager endpoints.
+// Create new instances of Service using the [New] constructor.
 type Service struct {
 	client service.Doer
 }
@@ -101,7 +104,8 @@ func (d *Service) GetCMListForConnect(ctx context.Context, cfg CMCfg) ([]CMServe
 }
 
 // GetOptimalCMServer discovers available servers and returns the one with the lowest reported load.
-// It returns an error if no servers are found.
+//
+// It returns an error if the WebAPI call fails, or if Steam returns an empty list of servers.
 func (d *Service) GetOptimalCMServer(ctx context.Context) (socket.CMServer, error) {
 	cmList, err := d.GetCMListForConnect(ctx, CMCfg{})
 	if err != nil {

@@ -42,9 +42,6 @@ preventing leaked goroutines and race conditions during client restarts.
 
 # Example: Creating a Simple Module
 
-Here is a complete, self-contained example of a custom module that declares
-dependencies and handles all errors during lifecycle hooks:
-
 	package main
 
 	import (

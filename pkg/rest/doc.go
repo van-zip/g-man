@@ -16,11 +16,10 @@ for flexible request customization.
   - [ProxyRotator]: An [HTTPDoer] implementation that rotates requests across multiple proxies.
   - [RequestModifier]: A function type used to dynamically customize outgoing HTTP requests.
   - [BaseResponse]: An interface for unwrapping common API envelope formats.
+  - [StructToValues]: A utility function for converting struct fields to URL values.
+  - [Validate]: A utility function for validating required struct fields.
 
 # Basic Usage Example
-
-Here is a complete, self-contained example demonstrating how to initialize a client
-and perform a generic JSON GET request:
 
 	package main
 

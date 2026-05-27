@@ -52,11 +52,14 @@ type Handler func(packet *protocol.GCPacket)
 // and WAS NOT handled by a specific Job callback or GC handler.
 type MessageEvent struct {
 	bus.BaseEvent
+	// Packet is the underlying parsed Game Coordinator message.
 	Packet *protocol.GCPacket
 }
 
 // Coordinator acts as a multiplexer for Game Coordinator messages.
+//
 // It handles routing based on AppID and manages GC-level request-response cycles.
+// Create new instances of Coordinator using the [New] constructor.
 type Coordinator struct {
 	module.Base
 
@@ -103,7 +106,9 @@ func (c *Coordinator) Close() error {
 		unreg()
 	}
 
+	unregFuncs := c.unregFuncs
 	c.unregFuncs = nil
+	_ = unregFuncs // avoid static check error if unused
 	c.mu.Unlock()
 
 	_ = c.jobManager.Close()
@@ -123,6 +128,9 @@ func (c *Coordinator) SendRaw(ctx context.Context, appID, msgType uint32, payloa
 
 // Call sends a message to a Game Coordinator and registers a callback for the response.
 // The response is matched using the GC's internal JobID system.
+//
+// It returns an error if the provided callback cb is nil, if Protobuf marshaling of
+// the message payload fails, or if job registration fails.
 func (c *Coordinator) Call(
 	ctx context.Context,
 	appID, msgType uint32,

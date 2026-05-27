@@ -5,34 +5,40 @@
 /*
 Package trading provides a generic, game-agnostic trade reasoning engine for Steam.
 
-The package is designed to be highly extensible and reusable across different Steam games
-(TF2, CS2, Dota 2, etc.) by following a middleware-based architecture and using
-plug-and-play components for game-specific logic.
+# Key Components
 
-# Core Components
+  - [TradeOffer]: Represents a snapshot of a trade offer, including items, states, and escrow information.
+  - [Item]: Represents a specific Steam inventory item defined by its asset and class identifiers.
+  - [OfferParams]: Configures parameters for creating and sending a new trade offer.
+  - [CounterParams]: Holds parameters required to send a counter-offer.
 
-  - Engine: Orchestrates the execution of a middleware pipeline for trade offers.
-  - Middleware: Encapsulates individual pieces of trading logic (e.g., ban checks, escrow, valuation).
-  - TradeContext: Carries the state and metadata of a trade through the pipeline.
-  - Reason: A set of common, game-agnostic reasons for trade decisions (Accept, Decline, Review).
+# Basic Usage Example
 
-# Separation of Responsibilities
+	package main
 
-To maintain game-agnosticism, this package provides only the foundation. Game-specific
-logic should be implemented in separate packages (e.g., pkg/tf2/trading).
+	import (
+		"github.com/lemon4ksan/g-man/pkg/steam/id"
+		"github.com/lemon4ksan/g-man/pkg/trading"
+	)
 
- 1. Trade Reasons: Generic reasons are defined in pkg/trading/reason. Game-specific
-    reasons should be defined in the game's own reason package (e.g., pkg/tf2/reason).
- 2. Notification Templates: Common templates are registered in notifications/defaults.go.
-    Game-specific templates should be registered via RegisterDefaultTemplate() during
-    the game module's initialization.
- 3. Review Formatting: The review registry can be extended using review.RegisterReason()
-    to provide human-readable descriptions and links for game-specific reasons.
+	func main() {
+		partnerID := id.FromAccountID(12345678)
 
-# Web Manager
-
-The web.Manager handles the low-level Steam trade offer API interactions. It is configured
-via web.Config, which must specify the AppID and ContextID for the target game, ensuring
-correct inventory fetching and offer processing.
+		// Create parameters for a new trade offer
+		_ = trading.OfferParams{
+			PartnerID: partnerID,
+			Token:     "trade_token_abc",
+			Message:   "Here is your traded item!",
+			ItemsToGive: []*trading.Item{
+				{
+					AppID:     440,
+					ContextID: 2,
+					AssetID:   123456789,
+					Amount:    1,
+				},
+			},
+			ItemsToReceive: []*trading.Item{},
+		}
+	}
 */
 package trading

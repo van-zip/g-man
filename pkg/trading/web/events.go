@@ -9,26 +9,30 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
-// StateEvent is emitted whenever the manager transitions between states.
+// StateEvent is emitted whenever the manager transitions between state lifecycles.
 type StateEvent struct {
 	bus.BaseEvent
+	// New represents the target state the manager transitioned to.
 	New State
 }
 
-// NewOfferEvent is emitted when a new trade offer is received.
+// NewOfferEvent is emitted when a new active trade offer is received.
 type NewOfferEvent struct {
 	bus.BaseEvent
+	// Offer is the newly received trade offer details.
 	Offer *trading.TradeOffer
 }
 
-// OfferChangedEvent is emitted when a tracked offer changes state (e.g. Accepted, Declined).
+// OfferChangedEvent is emitted when a tracked offer changes its transactional state.
 type OfferChangedEvent struct {
 	bus.BaseEvent
-	Offer    *trading.TradeOffer
+	// Offer is the updated trade offer details.
+	Offer *trading.TradeOffer
+	// OldState is the state the offer transitioned away from.
 	OldState trading.OfferState
 }
 
-// PollSuccessEvent is emitted after a successful poll cycle.
+// PollSuccessEvent is emitted after a successful poll cycle completes.
 type PollSuccessEvent struct {
 	bus.BaseEvent
 }
@@ -36,5 +40,6 @@ type PollSuccessEvent struct {
 // PollDataEvent is emitted when polling state changes and needs to be persisted.
 type PollDataEvent struct {
 	bus.BaseEvent
+	// PollData contains the serialized state tracking details.
 	PollData trading.PollData
 }

@@ -152,14 +152,21 @@ func From(c *steam.Client) *Guardian {
 
 // GuardianMetrics tracks operational metrics for monitoring using atomics.
 type GuardianMetrics struct {
-	TotalFetched  atomic.Int64
+	// TotalFetched is the total number of confirmations retrieved.
+	TotalFetched atomic.Int64
+	// TotalAccepted is the total number of confirmations successfully approved.
 	TotalAccepted atomic.Int64
+	// TotalRejected is the total number of confirmations successfully declined.
 	TotalRejected atomic.Int64
-	TotalErrors   atomic.Int64
+	// TotalErrors is the total number of API errors encountered.
+	TotalErrors atomic.Int64
 }
 
 // Guardian manages Steam Guard mobile confirmations.
 // It acts as a mechanism provider, while decision-making is delegated to behaviors.
+//
+// Use [New] to construct new instances of Guardian. It integrates with
+// [Config] to manage device credentials, and exposes [GuardianMetrics] for monitoring.
 type Guardian struct {
 	module.Base
 
@@ -250,6 +257,10 @@ func (g *Guardian) GenerateAuthCode() (string, error) {
 }
 
 // FetchConfirmations requests the list of active confirmations from Steam.
+//
+// It returns an error if the request fails, if Steam rejects the request,
+// or if the identity secret is invalid. It increments the TotalErrors metric
+// and TotalFetched metric in [GuardianMetrics] accordingly.
 func (g *Guardian) FetchConfirmations(ctx context.Context) ([]*Confirmation, error) {
 	if g == nil {
 		return nil, ErrNotConfigured
@@ -292,21 +303,33 @@ func (g *Guardian) FetchConfirmations(ctx context.Context) ([]*Confirmation, err
 }
 
 // Accept approves a single confirmation.
+//
+// It returns an error if the approval action is rejected by Steam. On failure,
+// the TotalErrors metric in [GuardianMetrics] is incremented.
 func (g *Guardian) Accept(ctx context.Context, conf *Confirmation) error {
 	return g.respond(ctx, []*Confirmation{conf}, true)
 }
 
 // AcceptMultiple accepts multiple confirmations at once (uses multiajaxop).
+//
+// It returns an error if any of the approvals fail. On failure,
+// the TotalErrors metric in [GuardianMetrics] is incremented.
 func (g *Guardian) AcceptMultiple(ctx context.Context, confs []*Confirmation) error {
 	return g.respond(ctx, confs, true)
 }
 
 // Cancel declines a single confirmation.
+//
+// It returns an error if the cancel action is rejected by Steam. On failure,
+// the TotalErrors metric in [GuardianMetrics] is incremented.
 func (g *Guardian) Cancel(ctx context.Context, conf *Confirmation) error {
 	return g.respond(ctx, []*Confirmation{conf}, false)
 }
 
 // CancelMultiple rejects multiple confirmations at once.
+//
+// It returns an error if any of the rejections fail. On failure,
+// the TotalErrors metric in [GuardianMetrics] is incremented.
 func (g *Guardian) CancelMultiple(ctx context.Context, confs []*Confirmation) error {
 	return g.respond(ctx, confs, false)
 }

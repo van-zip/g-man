@@ -26,11 +26,7 @@ concerns and scalability:
     It features a middleware-based "Onion" architecture for request validation
     and a stateful processor for trade lifecycles.
 
- 4. Game Domains (e.g., pkg/tf2): Specialized logic for specific games.
-    The TF2 domain includes item schema indexing, SKU parsing, and backpack
-    management using both Web and GC interfaces.
-
- 5. Infrastructure: Common utilities like 'storage' (SQLite/JSON/Memory),
+ 4. Infrastructure: Common utilities like 'storage' (SQLite/JSON/Memory),
     'bus' (event-driven communication), and 'crypto' (Steam-specific TOTP).
 
 # Core Philosophy

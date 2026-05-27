@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package profile implements profile, privacy settings, and avatar management for Steam Community accounts.
 package profile
 
 import (
@@ -25,13 +24,23 @@ import (
 )
 
 // Settings represents customizable profile details.
+//
+// Struct fields are pointers. Any field set to nil is ignored during update,
+// keeping the existing profile values in Steam.
 type Settings struct {
-	Name      *string
-	RealName  *string
-	Summary   *string
-	Country   *string
-	State     *string
-	City      *string
+	// Name is the custom display nickname of the user.
+	Name *string
+	// RealName is the user's real name.
+	RealName *string
+	// Summary is the user's custom bio description.
+	Summary *string
+	// Country is the ISO two-letter country code of the location.
+	Country *string
+	// State is the state code of the location.
+	State *string
+	// City is the city code of the location.
+	City *string
+	// CustomURL is the custom vanity URL slug.
 	CustomURL *string
 }
 
@@ -70,17 +79,30 @@ const (
 )
 
 // PrivacySettings represents customizable profile privacy details.
+//
+// Struct fields are pointers. Any field set to nil is ignored during update,
+// keeping the existing privacy values in Steam.
 type PrivacySettings struct {
-	Profile        *PrivacyState
-	Comments       *CommentPermission
-	Inventory      *PrivacyState
-	InventoryGifts *bool // true: private, false: public
-	GameDetails    *PrivacyState
-	Playtime       *bool // true: private, false: public
-	FriendsList    *PrivacyState
+	// Profile is the general privacy level of the profile.
+	Profile *PrivacyState
+	// Comments is the commentary permission level of the profile.
+	Comments *CommentPermission
+	// Inventory is the privacy level of the inventory.
+	Inventory *PrivacyState
+	// InventoryGifts specifies if inventory gifts are kept private (true) or public (false).
+	InventoryGifts *bool
+	// GameDetails is the privacy level of active game playtimes and details.
+	GameDetails *PrivacyState
+	// Playtime specifies if total gameplay playtime is kept private (true) or public (false).
+	Playtime *bool
+	// FriendsList is the privacy level of the friends list.
+	FriendsList *PrivacyState
 }
 
 // EditProfile retrieves the existing profile configuration, merges the changes, and saves the updated settings.
+//
+// It returns an error if the request fails, if the edit page cannot be parsed,
+// or if Steam rejects the updated parameters with an error description.
 func EditProfile(ctx context.Context, client community.Requester, steamID id.ID, settings Settings) error {
 	path := fmt.Sprintf("profiles/%d/edit/info", steamID)
 
@@ -188,7 +210,10 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 	return nil
 }
 
-// UpdatePrivacySettings fetches the current privacy status, merges the changes, and posts updates to ajaxsetprivacy.
+// UpdatePrivacySettings fetches the current privacy status, merges the changes, and posts updates.
+//
+// It returns an error if the request fails, if the settings page cannot be parsed,
+// or if the update request is rejected by Steam.
 func UpdatePrivacySettings(
 	ctx context.Context,
 	client community.Requester,
@@ -297,6 +322,10 @@ func UpdatePrivacySettings(
 }
 
 // UploadAvatar uploads a new profile avatar image and returns its secure hash.
+//
+// It accepts "image/jpeg", "image/png", and "image/gif" content types.
+// It returns an error if the image buffer is empty, if the content type is unsupported,
+// if the multipart form cannot be constructed, or if the upload is rejected.
 func UploadAvatar(
 	ctx context.Context,
 	client community.Requester,

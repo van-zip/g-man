@@ -45,9 +45,12 @@ func From(c *steam.Client) *Market {
 
 // Config contains settings for requests to the Trading Platform.
 type Config struct {
+	// Currency is the standard currency code used for pricing.
 	Currency CurrencyCode
-	Country  string // e.g. "US", "RU"
-	Language string // e.g. "english", "russian"
+	// Country is the ISO two-letter country code (for example, "US").
+	Country string
+	// Language is the localization language name (for example, "english").
+	Language string
 }
 
 // DefaultConfig returns the default settings (USD, US, english).
@@ -60,7 +63,9 @@ func DefaultConfig() Config {
 }
 
 // Market manages interactions with the Steam Community Market.
-// It embeds modules.BaseModule for lifecycle and logging consistency.
+//
+// It handles buy and sell orders, cancellations, price history, and item crafting.
+// Create new instances of Market using the [New] constructor.
 type Market struct {
 	module.Base
 
@@ -108,6 +113,8 @@ func (m *Market) Close() error {
 // CreateSellOrder places an item from the user's inventory onto the market.
 // The price should be in the smallest currency unit (e.g., cents/kopecks)
 // and represents the amount the seller receives.
+//
+// It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOptions) (*CreateSellOrder, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -148,6 +155,8 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 }
 
 // CreateBuyOrder creates a buy order (buy order) for a specific item.
+//
+// It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions) (*CreateBuyOrderResponse, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -201,6 +210,8 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 }
 
 // CancelBuyOrder cancels an existing active buy order.
+//
+// It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 	m.mu.RLock()
 	comm := m.community
@@ -228,6 +239,8 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 }
 
 // CancelSellOrder removes an item from sale on the market.
+//
+// It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 	m.mu.RLock()
 	comm := m.community
@@ -248,6 +261,8 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 }
 
 // Search searches for items on the marketplace.
+//
+// It returns the search results or an error if the request fails.
 func (m *Market) Search(ctx context.Context, appID uint32, opts SearchOptions) (*SearchResponse, error) {
 	referer := fmt.Sprintf("https://steamcommunity.com/market/search?appid=%d", appID)
 
@@ -285,6 +300,8 @@ func (m *Market) Search(ctx context.Context, appID uint32, opts SearchOptions) (
 }
 
 // GetPriceOverview gets a quick summary of the item's price.
+//
+// It returns the price summary or an error if the request fails.
 func (m *Market) GetPriceOverview(
 	ctx context.Context,
 	appID uint32,
@@ -303,6 +320,8 @@ func (m *Market) GetPriceOverview(
 
 // GetItemOrdersHistogram gets a histogram of active buy and sell orders.
 // The itemNameID can be obtained by parsing the lot page (usually cached by the bot).
+//
+// It returns the histogram details or an error if the request fails.
 func (m *Market) GetItemOrdersHistogram(
 	ctx context.Context,
 	appID uint32,
@@ -356,6 +375,8 @@ func (m *Market) GetItemOrdersHistogram(
 }
 
 // GetMyListings gets the active lots and orders of an account.
+//
+// It returns the active listings or an error if the request fails.
 func (m *Market) GetMyListings(ctx context.Context, start, count int) (*MyListingsResponse, error) {
 	if count == 0 {
 		count = 100
@@ -406,6 +427,8 @@ var (
 )
 
 // GetMarketApps retrieves all apps listed on the Steam Community Market.
+//
+// It returns the apps mapped by AppID or an error if parsing fails.
 func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -447,6 +470,8 @@ func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
 }
 
 // GetGemValue checks if an item is eligible to be turned into gems and gets its gem value.
+//
+// It returns the gem value details or an error if Steam rejects the query.
 func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) (*GemValue, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -489,6 +514,8 @@ func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) 
 }
 
 // TurnItemIntoGems converts an eligible item into gems.
+//
+// It returns the gems received or an error if Steam rejects the transaction.
 func (m *Market) TurnItemIntoGems(
 	ctx context.Context,
 	appID uint32,
@@ -538,6 +565,8 @@ func (m *Market) TurnItemIntoGems(
 }
 
 // OpenBoosterPack unpacks a game booster pack into trading cards.
+//
+// It returns the unpacked items details or an error if the request is rejected.
 func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint64) ([]any, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -573,6 +602,8 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 }
 
 // GetBoosterPackCatalog retrieves the user's gem count and booster pack creator list.
+//
+// It returns the catalog details or an error if parsing from JS config block fails.
 func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -615,6 +646,8 @@ func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, er
 }
 
 // CreateBoosterPack crafts a booster pack using gems.
+//
+// It returns the resulting gem balances and item details, or an error if purchase fails.
 func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntradableGems bool) (*BoosterResult, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -667,6 +700,8 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 }
 
 // GetGiftDetails gets information about a gift package in inventory.
+//
+// It returns the gift details or an error if validation fails.
 func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetails, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -708,6 +743,8 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 }
 
 // RedeemGift unpacks a gift in inventory to the user's library.
+//
+// It returns an error if unpacking fails.
 func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 	m.mu.RLock()
 	comm := m.community
@@ -740,6 +777,8 @@ func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 }
 
 // GemExchange exchanges or packs/unpacks gems.
+//
+// It returns an error if exchange fails.
 func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denomOut, qtyIn, qtyOutExpected int) error {
 	m.mu.RLock()
 	comm := m.community
@@ -778,11 +817,15 @@ func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denom
 }
 
 // PackGemSacks packs raw gems into sacks of gems (1 sack = 1000 gems).
+//
+// It returns an error if packing fails.
 func (m *Market) PackGemSacks(ctx context.Context, assetID uint64, sackCount int) error {
 	return m.GemExchange(ctx, assetID, 1, 1000, sackCount*1000, sackCount)
 }
 
 // UnpackGemSacks unpacks sacks of gems into raw gems (1 sack = 1000 gems).
+//
+// It returns an error if unpacking fails.
 func (m *Market) UnpackGemSacks(ctx context.Context, assetID uint64, sackCount int) error {
 	return m.GemExchange(ctx, assetID, 1000, 1, sackCount, sackCount*1000)
 }

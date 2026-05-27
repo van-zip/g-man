@@ -3,64 +3,46 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package auth implements the complex, multi-stage authentication logic required to
-establish a secure session with Steam.
+Package auth implements the complex, multi-stage authentication logic required to establish a secure session with Steam.
 
-Unlike standard modules (like 'friends' or 'market') which operate after a
-connection is established, the 'auth' module is responsible for bootstrapping
-the connection itself. It is deeply integrated into the lifecycle of the
-main 'steam.Client'.
+# Key Components
 
-# Core Responsibilities
+  - [Authenticator]: The primary orchestrator that negotiates the secure handshake and logon phase with Steam CMs.
+  - [AuthenticationService]: A gateway for Steam's modern Unified WebAPI authentication endpoints.
+  - [LogOnDetails]: Holds credential parameters, refresh tokens, and device identifiers used during authentication.
+  - [Store]: An interface used to persist authentication states (such as tokens and machine IDs).
+  - [DeviceConfig]: Allows customizing how the client presents its hardware profile to Steam.
 
- 1. Credential Encryption: Securely encrypting passwords using Steam's RSA public
-    keys before transmission.
+# Basic Usage Example
 
- 2. Multi-Factor Authentication: Handling Steam Guard (Email), Two-Factor (Mobile
-    App), and modern Mobile App Confirmations via an event-driven callback system.
+	package main
 
- 3. Token Management: Orchestrating the lifecycle of JWT-based Refresh and Access
-    tokens to provide persistent, long-running sessions.
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/steam/auth"
+		"github.com/lemon4ksan/g-man/pkg/steam/service"
+		tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
+	)
 
- 4. Transport Encryption: Handling the TCP handshake (ChannelEncrypt) to establish
-    a symmetric encrypted tunnel with Steam CMs.
+	func main() {
+		ctx := context.Background()
 
- 5. Web Session Synchronization: Executing the OpenID Connect (OIDC) flow to
-    synchronize authentication cookies across all Steam domains (community, store, help).
+		// Prepare HTTP transport wrapping the WebAPI base
+		transport := tr.NewHTTPTransport(nil, service.WebAPIBase)
+		serviceClient := service.New(transport)
 
-# The Two-Phase Authentication Flow
+		// Create a new authentication service
+		authSvc := auth.NewAuthenticationService(serviceClient, nil)
 
-Steam's authentication is historically complex, blending modern OAuth-like
-flows with legacy binary socket handshakes. This package abstracts that
-complexity into a seamless two-phase process:
+		// Retrieve the public key for an account
+		resp, err := authSvc.GetPasswordRSAPublicKey(ctx, "steam_user")
+		if err != nil {
+			fmt.Println("Failed to retrieve public key:", err)
+			return
+		}
 
- 1. WebAPI Phase (AuthenticationService):
-    Uses the 'service' package (REST over HTTP) to perform a modern JWT-based
-    login. It fetches RSA keys, encrypts the password, handles 2FA/Email Guard
-    challenges, and polls until Steam issues a "Refresh Token".
-
- 2. Socket Phase (Authenticator):
-    Takes the Refresh Token from Phase 1 and establishes a persistent TCP/WebSocket
-    connection to a Connection Manager (CM) server. It negotiates the symmetric
-    channel encryption (ChannelEncryptRequest/Response) and sends a `ClientLogOn`
-    message containing the token to finalize the session.
-
-# Handling Steam Guard
-
-Authentication often requires user interaction. When a challenge is issued,
-the Authenticator emits a SteamGuardRequiredEvent via the event bus.
-This event contains a 'Callback' function. To continue the login, the consumer
-must obtain the code from the user and invoke this callback:
-
-	bus.Subscribe(func(ev *auth.SteamGuardRequiredEvent) {
-		code := promptUserForCode() // e.g., via CLI or UI
-		ev.Callback(code)
-	})
-
-# Security and Persistence
-
-To minimize 2FA prompts, it is highly recommended to provide a storage.AuthStore
-implementation. This allows the Authenticator to persist MachineIDs and
-Refresh Tokens, making the client appear as a "Recognized Device" to Steam.
+		fmt.Println("Timestamp of key:", resp.GetTimestamp())
+	}
 */
 package auth

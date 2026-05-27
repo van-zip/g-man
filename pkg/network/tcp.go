@@ -36,11 +36,13 @@ var (
 	_ Encryptable = (*TCP)(nil)
 )
 
-// TCP implements the Connection interface using stream-oriented TCP sockets.
+// TCP implements the [Connection] interface using stream-oriented TCP sockets.
 //
-// It handles raw framing over TCP by utilizing a Framer implementation, and
-// supports message-level encryption and decryption if configured with a Cipher.
+// It handles raw framing over TCP by utilizing a [Framer] implementation, and
+// supports message-level encryption and decryption if configured with a [Cipher].
 // All TCP operations are thread-safe and respect contexts and timeouts.
+//
+// Create new instances of TCP using the [NewTCP] constructor.
 type TCP struct {
 	BaseConnection
 	conn   net.Conn
@@ -61,12 +63,14 @@ type TCP struct {
 //
 // The endpoint should be a host address or host:port combination. If proxyURL
 // is not empty, the connection is routed through the specified SOCKS5 or HTTP
-// proxy using the net/proxy package.
+// proxy.
 //
 // The framer cannot be nil and is used to frame outgoing messages and unframe
 // incoming stream packets.
 //
-// If the connection establishment fails, it returns an *Error with OpDial.
+// If the context ctx is canceled before or during connection establishment,
+// NewTCP cancels the dial and returns the context error.
+// If the connection establishment fails, it returns an *[Error] with [OpDial].
 func NewTCP(
 	ctx context.Context,
 	logger log.Logger,
@@ -122,8 +126,9 @@ func (t *TCP) Errors() <-chan error { return t.errChan }
 // and all cleanup is complete.
 func (t *TCP) Closed() <-chan struct{} { return t.closedChan }
 
-// SetCipher configures the TCP connection to use the provided Cipher for encrypting
+// SetCipher configures the TCP connection to use the provided [Cipher] for encrypting
 // all future outgoing messages and decrypting incoming ones.
+// Pass nil to disable encryption on the connection.
 //
 // It returns true once the cipher is applied. This method is safe for concurrent use.
 func (t *TCP) SetCipher(c Cipher) bool {
@@ -139,7 +144,7 @@ func (t *TCP) SetCipher(c Cipher) bool {
 // to the underlying TCP socket.
 //
 // Send blocks until the write completes, the context is canceled, or the write deadline
-// is reached. It returns an *Error if encryption, deadline setting, framing, or
+// is reached. It returns an *[Error] if encryption, deadline setting, framing, or
 // writing fails. This method is safe for concurrent use.
 func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {

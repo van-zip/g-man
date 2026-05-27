@@ -37,9 +37,9 @@ const (
 
 // Error represents a structured error within the network package.
 //
+// Create new instances of the error using the [NewError] constructor.
 // It provides detailed context about a network failure, including the operation
-// that failed (such as dial, read, or write), the transport protocol, and the
-// underlying cause.
+// that failed, the transport protocol, and the underlying cause.
 type Error struct {
 	// Op is the network operation that failed.
 	Op Op

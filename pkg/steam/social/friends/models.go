@@ -14,19 +14,29 @@ import (
 
 // PersonaState represents cached information about the user.
 type PersonaState struct {
-	PlayerName      string
-	AvatarHash      []byte
-	LastLogoff      time.Time
-	LastLogon       time.Time
-	LastSeenOnline  time.Time
-	AvatarURLIcon   string
+	// PlayerName is the user's current Steam nickname.
+	PlayerName string
+	// AvatarHash is the unique hash identifier of the user's avatar image.
+	AvatarHash []byte
+	// LastLogoff is the timestamp when the user was last seen logging off.
+	LastLogoff time.Time
+	// LastLogon is the timestamp when the user was last seen logging on.
+	LastLogon time.Time
+	// LastSeenOnline is the timestamp when the user was last seen online.
+	LastSeenOnline time.Time
+	// AvatarURLIcon is the direct URL to the small icon avatar image.
+	AvatarURLIcon string
+	// AvatarURLMedium is the direct URL to the medium-sized avatar image.
 	AvatarURLMedium string
-	AvatarURLFull   string
-	RichPresence    map[string]string
+	// AvatarURLFull is the direct URL to the full-sized avatar image.
+	AvatarURLFull string
+	// RichPresence maps custom rich presence keys to their current string values.
+	RichPresence map[string]string
 }
 
 // GetBadgesResponse describes the response from the IPlayerService/GetBadges WebAPI.
 type GetBadgesResponse struct {
+	// PlayerLevel is the user's current Steam profile level.
 	PlayerLevel int `json:"player_level"`
 }
 
@@ -34,24 +44,35 @@ type GetBadgesResponse struct {
 // removes us, or we accept the request.
 type RelationshipChangedEvent struct {
 	bus.BaseEvent
+	// SteamID is the unique 64-bit identifier of the target user.
 	SteamID id.ID
-	Old     enums.EFriendRelationship
-	New     enums.EFriendRelationship
+	// Old is the previous relationship status.
+	Old enums.EFriendRelationship
+	// New is the updated relationship status.
+	New enums.EFriendRelationship
 }
 
 // PersonaStateUpdatedEvent is called when a friend changes their nickname, avatar, or status (enters the game).
 type PersonaStateUpdatedEvent struct {
 	bus.BaseEvent
+	// SteamID is the unique 64-bit identifier of the updated user.
 	SteamID id.ID
-	State   *PersonaState
+	// State is the updated cached persona details.
+	State *PersonaState
 }
 
 // Comment represents a profile comment.
 type Comment struct {
-	ID            string    `json:"id"`
-	AuthorSteamID id.ID     `json:"author_steam_id"`
-	AuthorName    string    `json:"author_name"`
-	AuthorAvatar  string    `json:"author_avatar"`
-	Date          time.Time `json:"date"`
-	Text          string    `json:"text"`
+	// ID is the unique string identifier of the comment.
+	ID string `json:"id"`
+	// AuthorSteamID is the 64-bit identifier of the comment's author.
+	AuthorSteamID id.ID `json:"author_steam_id"`
+	// AuthorName is the display name of the comment's author.
+	AuthorName string `json:"author_name"`
+	// AuthorAvatar is the direct URL to the author's avatar image.
+	AuthorAvatar string `json:"author_avatar"`
+	// Date is the timestamp when the comment was posted.
+	Date time.Time `json:"date"`
+	// Text is the plain-text content of the comment.
+	Text string `json:"text"`
 }

@@ -3,27 +3,57 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package processor acts as the central orchestrator for the trade management
-subsystem. It glues together the engine, notifications, and review packages
-to provide a seamless trade processing pipeline.
+Package processor acts as the central orchestrator for the trade management subsystem.
 
-# Lifecycle of a Trade Offer
+It coordinates the sequential evaluation and execution of trade offers, ensuring
+concurrency safety and transaction integrity.
 
-The Processor manages the complete flow of an incoming 'trading.TradeOffer':
- 1. Sequential Queueing: Offers are processed one-by-one to prevent inventory
-    desynchronization and race conditions.
- 2. Asset Locking: Prevents "double-spending" by tracking asset IDs currently
-    occupied in active processing cycles.
- 3. Decision Making: Invokes the 'engine' to determine the correct action.
- 4. Execution: Calls the Steam API to accept or decline the offer.
- 5. Feedback Loop: Sends chat notifications to the partner and alerts the
-    admin if intervention is required.
+# Key Components
 
-# Stability and Performance
+  - [Processor]: The primary orchestrator that coordinates sequential trade offer processing, asset locking, and action execution.
+  - [TradeExecutor]: Defines the contract for executing final trade actions (Accept/Decline) on Steam.
 
-By utilizing internal channels and background workers, the Processor ensures
-that the bot remains responsive even under heavy trade volume. It also includes
-concurrency primitives to safely manage shared state across different stages
-of the pipeline.
+# Basic Usage Example
+
+	package main
+
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/trading"
+		"github.com/lemon4ksan/g-man/pkg/trading/engine"
+		"github.com/lemon4ksan/g-man/pkg/trading/notifications"
+		"github.com/lemon4ksan/g-man/pkg/trading/processor"
+		"github.com/lemon4ksan/g-man/pkg/trading/review"
+	)
+
+	// MockExecutor implements processor.TradeExecutor for testing.
+	type MockExecutor struct{}
+
+	func (e MockExecutor) AcceptOffer(ctx context.Context, id uint64) error {
+		fmt.Println("Accepted offer:", id)
+		return nil
+	}
+
+	func (e MockExecutor) DeclineOffer(ctx context.Context, id uint64) error {
+		fmt.Println("Declined offer:", id)
+		return nil
+	}
+
+	func main() {
+		ctx := context.Background()
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
+
+		// Initialize dependencies
+		exec := MockExecutor{}
+		eng := engine.New()
+		notif := &notifications.Manager{}
+		reviewer := &review.Reviewer{}
+
+		// Create and start the processor
+		p := processor.New(exec, eng, notif, reviewer, logger)
+		p.Start(ctx)
+	}
 */
 package processor

@@ -22,6 +22,8 @@ import (
 
 // AuthenticationService acts as a gateway for Steam's Unified WebAPI authentication endpoints.
 // It handles password encryption and JWT token lifecycle management.
+//
+// Create new instances of the service using the [NewAuthenticationService] constructor.
 type AuthenticationService struct {
 	client service.Doer
 	conf   DeviceConfig
@@ -176,7 +178,8 @@ func (s *AuthenticationService) GenerateAccessTokenForApp(
 	req := &pb.CAuthentication_AccessToken_GenerateForApp_Request{
 		RefreshToken: proto.String(refreshToken),
 		Steamid:      proto.Uint64(steamID),
-		RenewalType:  pb.ETokenRenewalType_k_ETokenRenewalType_None.Enum(),
+		// Since ETokenRenewalType is defined on pb package, we use it directly.
+		RenewalType: pb.ETokenRenewalType_k_ETokenRenewalType_None.Enum(),
 	}
 
 	return service.UnifiedExplicit[pb.CAuthentication_AccessToken_GenerateForApp_Response](

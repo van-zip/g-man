@@ -34,7 +34,9 @@ type RetriableError interface {
 }
 
 // IsRetriable is a helper that checks if an error (or any error wrapped inside it)
-// implements RetriableError and is safe to retry.
+// implements [RetriableError] and is safe to retry.
+//
+// If the provided error err is nil, it returns false.
 func IsRetriable(err error) bool {
 	var re RetriableError
 	if errors.As(err, &re) {
@@ -45,6 +47,9 @@ func IsRetriable(err error) bool {
 }
 
 // IsAuthError checks whether EResult is a signal for reauthorization.
+//
+// It returns true for credentials-expired or not-logged-on results.
+// If the result code is enums.EResult_OK, it returns false.
 func IsAuthError(res enums.EResult) bool {
 	switch res {
 	case enums.EResult_NotLoggedOn, // 21
@@ -59,9 +64,13 @@ func IsAuthError(res enums.EResult) bool {
 }
 
 // EResultError wraps a Steam EResult code into a Go error.
+//
+// Create new instances of the error using the [NewEResultError] constructor.
 type EResultError struct {
+	// Result is the raw Steam result code.
 	Result enums.EResult
-	Err    error // Optional underlying error or context
+	// Err is an optional underlying error or context.
+	Err error
 }
 
 // NewEResultError creates a new EResultError.

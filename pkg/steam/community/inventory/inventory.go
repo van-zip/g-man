@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package inventory allows retrieving user inventory using community requester.
 package inventory
 
 import (
@@ -24,9 +23,12 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 )
 
-// GetUserInventoryContents recursively parses user inventory using
-// community requester and returns the list of items and currencies
-// with their total count.
+// GetUserInventoryContents recursively parses user inventory using community requester
+// and returns the list of items and currencies with their total count.
+//
+// If language is empty, it automatically defaults to "english".
+// It returns an error if the underlying WebAPI request fails or if Steam returns
+// an unsuccessful status payload.
 func GetUserInventoryContents(
 	ctx context.Context,
 	c community.Requester,
@@ -117,6 +119,9 @@ func GetUserInventoryContents(
 var rxAppContextData = regexp.MustCompile(`(?s)var g_rgAppContextData\s*=\s*(.*?);`)
 
 // GetUserInventoryContexts retrieves the application and context details for a user's inventory.
+//
+// It returns an error if the user's profile or inventory is private, if the HTML payload
+// is malformed, or if the context data JSON fails to unmarshal.
 func GetUserInventoryContexts(
 	ctx context.Context,
 	c community.Requester,
@@ -185,6 +190,9 @@ var (
 )
 
 // GetInventoryHistory fetches and parses the Steam inventory history for the specified user.
+//
+// It returns an error if the request fails, if the page is malformed, or if
+// the HTML elements cannot be successfully parsed.
 func GetInventoryHistory(
 	ctx context.Context,
 	client community.Requester,

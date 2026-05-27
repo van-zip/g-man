@@ -34,8 +34,11 @@ const (
 // the initial connection phase and encryption handshake.
 // It does not contain SteamID or SessionID.
 type MsgHdr struct {
-	EMsg        enums.EMsg
+	// EMsg is the Steam protocol message type identifier.
+	EMsg enums.EMsg
+	// TargetJobID is the unique job correlation ID of the recipient.
 	TargetJobID uint64
+	// SourceJobID is the unique job correlation ID of the sender.
 	SourceJobID uint64
 }
 
@@ -97,14 +100,22 @@ const (
 // MsgHdrExtended (Extended Header) is used for legacy Steam messages that require
 // session state (SteamID and SessionID) but do not use Protobuf.
 type MsgHdrExtended struct {
-	EMsg         enums.EMsg
-	HeaderSize   byte   // Always HeaderSizeExtended (36)
-	HeaderVer    uint16 // Always HeaderVersion (2)
-	TargetJobID  uint64
-	SourceJobID  uint64
-	HeaderCanary byte // Always HeaderCanary (239)
-	SteamID      uint64
-	SessionID    int32
+	// EMsg is the Steam protocol message type identifier.
+	EMsg enums.EMsg
+	// HeaderSize is the size of the legacy extended header in bytes (always 36).
+	HeaderSize byte
+	// HeaderVer is the protocol version for extended headers (always 2).
+	HeaderVer uint16
+	// TargetJobID is the unique job correlation ID of the recipient.
+	TargetJobID uint64
+	// SourceJobID is the unique job correlation ID of the sender.
+	SourceJobID uint64
+	// HeaderCanary is a magic byte used to verify header integrity (always 0xEF).
+	HeaderCanary byte
+	// SteamID is the 64-bit Steam identifier associated with the active session.
+	SteamID uint64
+	// SessionID is the 32-bit session ID assigned by the Connection Manager.
+	SessionID int32
 }
 
 // NewMsgHdrExtended creates an extended header for authorized messages.
@@ -185,7 +196,9 @@ func (h *MsgHdrExtended) Deserialize(r io.Reader) error {
 // MsgHdrProtoBuf is the modern Steam header format. It wraps
 // a Protobuf message containing routing and session metadata.
 type MsgHdrProtoBuf struct {
-	EMsg  enums.EMsg
+	// EMsg is the Steam protocol message type identifier.
+	EMsg enums.EMsg
+	// Proto is the Protobuf-encoded routing and session metadata.
 	Proto *pb.CMsgProtoBufHeader
 }
 

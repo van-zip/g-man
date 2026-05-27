@@ -3,47 +3,59 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package service provides a high-level RPC-like commander for interacting with Steam's
-official interfaces. It abstracts the three primary ways to communicate with Steam.
+Package service provides a high-level RPC-like commander for interacting with Steam's official interfaces.
 
-# Communication Patterns
+It abstracts the three primary ways to communicate with Steam: WebAPI, Unified Services,
+and legacy EMsg-based socket requests.
 
-1. WebAPI (Classic):
-Standard JSON-based endpoints (e.g., ISteamUser/GetPlayerSummaries). These usually
-require a WebAPI Key and return results in JSON or VDF.
+# Key Components
 
-2. Unified Services (Modern):
-The modern, Protobuf-based service architecture (e.g., IPlayerService/GetNickname).
-These can be called over HTTP (POST + Protobuf) or via WebSockets/TCP.
+  - [Client]: The primary entry point that decorates a [tr.Transport] with session credentials and validations.
+  - [Doer]: An interface representing objects capable of executing transport-agnostic requests.
+  - [UnifiedTarget]: Represents a modern Protobuf-based Steam Service method call.
+  - [WebAPITarget]: Represents a classic JSON/VDF WebAPI call.
+  - [LegacyTarget]: Represents a raw EMsg-based message used in socket connections.
 
-3. Legacy (Socket-only):
-Raw messages identified by an EMsg (e.g., EMsgClientLogOn), primarily used for
-low-level Steam client logic over a socket connection.
+# Basic Usage Example
 
-# Transport Agnosticism
+	package main
 
-The package is built on top of the 'transport' layer. This means you can use
-the same 'service.Client' to send a request regardless of whether you are
-connected via a standard HTTP client or a persistent WebSocket/TCP connection.
-The underlying 'Target' implementations handle the mapping to the correct
-URL path or EMsg identifier.
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/steam/service"
+		tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
+	)
 
-# Automatic Method Inference
+	type ResolveVanityURLResponse struct {
+		SteamID string `json:"steamid" url:"steamid"`
+		Success int    `json:"success" url:"success"`
+	}
 
-To reduce boilerplate, the package can infer the Steam Interface and Method name
-directly from the Protobuf request struct's name using reflection:
+	func main() {
+		ctx := context.Background()
 
-	// Infers "Player" interface and "GetGameBadgeLevels" method
-	req := &CPlayer_GetGameBadgeLevels_Request{...}
-	res, err := service.Unified[MyResponse](ctx, client, req)
+		// Initialize HTTP transport with a base URL
+		transport := tr.NewHTTPTransport(nil, service.WebAPIBase)
 
-# Error Handling
+		// Create a Service Client wrapping the transport
+		client := service.New(transport).WithAPIKey("WEB_API_KEY")
 
-The package automatically intercepts and validates Steam-specific results.
-It checks for:
-  - HTTP Status Codes (standard 4xx/5xx errors).
-  - Steam EResult codes (provided in HTTP headers or Socket metadata).
+		// Prepare query parameters
+		reqMsg := struct {
+			VanityURL string `url:"vanityurl"`
+		}{VanityURL: "lemon4ksan"}
 
-If an EResult is not 'OK', the client returns an 'api.EResultError'.
+		// Call the classic WebAPI method
+		resp, err := service.WebAPI[ResolveVanityURLResponse](
+			ctx, client, "GET", "ISteamUser", "ResolveVanityURL", 1, reqMsg,
+		)
+		if err != nil {
+			fmt.Println("API call failed:", err)
+			return
+		}
+
+		fmt.Println("Resolved SteamID:", resp.SteamID)
+	}
 */
 package service

@@ -8,45 +8,52 @@ Package protocol implements the low-level binary wire format used by Steam Conne
 At its core, every communication with Steam is a "Packet". This package provides the
 primitives to encode, decode, and route these packets based on their headers.
 
-# Packet Structure
+# Key Components
 
-A Steam message consists of three parts:
- 1. EMsg (4 bytes): Identifies the message type and indicates if it's a Protobuf message via ProtoMask.
- 2. Header: Metadata containing session info and routing data.
- 3. Payload: The actual body of the message (Protobuf, VDF, or raw bytes).
+  - [Packet]: Represents a parsed message consisting of an EMsg, a Header, and a raw binary payload.
+  - [Header]: The common interface representing various Steam message headers.
+  - [MsgHdr]: A basic, non-authorized standard header used during handshakes.
+  - [MsgHdrExtended]: A legacy authorized header format containing SteamID and SessionID.
+  - [MsgHdrProtoBuf]: The modern, Protobuf-based header format wrapping routing metadata.
+  - [GCPacket]: Represents a message sent to or received from a Game Coordinator (GC).
 
-# Header Evolution
+# Basic Usage Example
 
-Steam uses three distinct header formats, which this package unifies under the Header interface:
+	package main
 
-  - MsgHdr (Standard): Used for low-level handshakes (e.g., encryption setup).
-    Contains only Job IDs.
-  - MsgHdrExtended: Used for legacy messages. Adds SteamID and SessionID fields
-    directly into the binary stream.
-  - MsgHdrProtoBuf: The modern format. Encapsulates a Protobuf-encoded header
-    (CMsgProtoBufHeader), allowing for flexible routing and detailed error reporting.
+	import (
+		"bytes"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/steam/protocol"
+		"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
+	)
 
-# Job Tracking (Asynchronous RPC)
+	func main() {
+		// Create a basic packet with standard header
+		hdr := protocol.NewMsgHdr(enums.EMsg_ChannelEncryptRequest, 0)
+		pkt := &protocol.Packet{
+			EMsg:    enums.EMsg_ChannelEncryptRequest,
+			IsProto: false,
+			Header:  hdr,
+			Payload: []byte{0x01, 0x02, 0x03, 0x04},
+		}
 
-Steam's protocol is inherently asynchronous. Unlike standard HTTP, responses
-are matched to requests using Job IDs:
+		// Serialize the packet to a buffer
+		var buf bytes.Buffer
+		if err := pkt.SerializeTo(&buf); err != nil {
+			fmt.Println("Serialization failed:", err)
+			return
+		}
 
-  - SourceJobID: A unique ID assigned by the sender of a request.
-  - TargetJobID: When responding, Steam puts the sender's SourceID into this field.
+		// Parse the packet back from the buffer
+		parsed, err := protocol.ParsePacket(&buf)
+		if err != nil {
+			fmt.Println("Parsing failed:", err)
+			return
+		}
 
-This mechanism allows the high-level 'socket' package to track multiple
-concurrent requests over a single TCP/WebSocket connection.
-
-# Bitmasking
-
-The package handles the ProtoMask automatically.
-When parsing, the mask is stripped to reveal the underlying EMsg, and when
-serializing MsgHdrProtoBuf, the mask is restored to inform the CM that
-Protobuf decoding is required.
-
-# Enums
-
-The package also contains a complete list of possible EMessages and flags that may be encountered.
-They were automatically generated from legacy steamd files that can be found at https://github.com/SteamRE/SteamKit/tree/master/Resources/SteamLanguage.
+		fmt.Println("Parsed EMsg:", parsed.EMsg)
+		fmt.Println("Payload length:", len(parsed.Payload))
+	}
 */
 package protocol

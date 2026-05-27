@@ -50,7 +50,9 @@ type EHeader interface {
 }
 
 // Packet represents a parsed message received from or sent to a Steam Connection Manager.
-// It serves as a unified interface regardless of the underlying header format (Standard, Extended, or Protobuf).
+// It serves as a unified interface regardless of the underlying header format.
+//
+// Parse raw bytes into a Packet using the [ParsePacket] function.
 type Packet struct {
 	// EMsg identifies the type of message this packet contains
 	EMsg enums.EMsg
@@ -66,13 +68,7 @@ type Packet struct {
 // ParsePacket decodes a steam network message from an [io.Reader].
 //
 // It automatically detects the header format by examining EMsg bitmask.
-// Specifically, it handles:
-//   - Protobuf headers (if the ProtoMask bit is set)
-//   - Basic headers (for low-level encryption handshakes)
-//   - Extended headers (for most legacy-style Steam messages)
-//
-// An error is returned if the header length is suspiciously large (>1MB)
-// or if the binary data is malformed.
+// If the provided reader r is nil, ParsePacket returns a nil reader error.
 func ParsePacket(r io.Reader) (*Packet, error) {
 	var rawEMsg uint32
 	if err := binary.Read(r, binary.LittleEndian, &rawEMsg); err != nil {
@@ -190,12 +186,18 @@ func (p *Packet) SerializeTo(w io.Writer) error {
 
 // GCPacket represents a Game Coordinator message.
 type GCPacket struct {
-	AppID       uint32
-	MsgType     uint32
-	IsProto     bool
+	// AppID is the Steam AppID of the target game (for example, 440 for TF2).
+	AppID uint32
+	// MsgType is the game-specific Game Coordinator message type identifier.
+	MsgType uint32
+	// IsProto is true if the Game Coordinator message is encoded using Protobuf.
+	IsProto bool
+	// TargetJobID is the unique job correlation ID of the recipient GC.
 	TargetJobID uint64
+	// SourceJobID is the unique job correlation ID of the sender GC.
 	SourceJobID uint64
-	Payload     []byte
+	// Payload is the raw game-specific payload data.
+	Payload []byte
 }
 
 // NewGCPacket creates a new GC packet with the given parameters.
@@ -208,7 +210,8 @@ func NewGCPacket(appID, msgType uint32, payload []byte) *GCPacket {
 }
 
 // Serialize encodes the packet into the wire format expected by the Steam GC.
-// It automatically handles the protobuf header wrapping if IsProto is true.
+//
+// It returns an error if Protobuf marshaling of the header fails.
 func (p *GCPacket) Serialize() ([]byte, error) {
 	buf := new(bytes.Buffer)
 

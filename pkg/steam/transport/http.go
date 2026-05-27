@@ -21,13 +21,18 @@ const HTTPUserAgent = "Valve/Steam HTTP Client 1.0"
 
 // HTTPMetadata holds context-specific information from an HTTP response.
 type HTTPMetadata struct {
-	Result     enums.EResult // EResult code from the 'x-eresult' header.
-	StatusCode int           // Standard HTTP status code (e.g., 200, 404).
-	Header     http.Header   // Full HTTP response headers.
+	// Result is the Steam result code extracted from the response headers.
+	Result enums.EResult
+	// StatusCode is the standard HTTP status code returned by the server.
+	StatusCode int
+	// Header contains the full set of HTTP response headers.
+	Header http.Header
 }
 
-// HTTPTransport implements the Transport interface for HTTP-based communication.
-// It translates abstract Requests into concrete http.Requests.
+// HTTPTransport implements the [Transport] interface for HTTP-based communication.
+// It translates abstract [Request] structures into concrete HTTP requests.
+//
+// Create new instances of HTTPTransport using [NewHTTPTransport].
 type HTTPTransport struct {
 	client *rest.Client
 }
@@ -50,12 +55,10 @@ func NewHTTPTransport(doer rest.HTTPDoer, baseURL string) *HTTPTransport {
 	}
 }
 
-// Do executes a Request over HTTP. It performs the following steps:
-// 1. Asserts that the request's Target is an HTTPTarget.
-// 2. Encodes the request body into a base64 string for the 'input_protobuf_encoded' parameter.
-// 3. Builds and sends the request using the underlying rest.Client.
-// 4. Parses the EResult from the 'x-eresult' header.
-// 5. Wraps the result in a generic Response container.
+// Do executes a [Request] over HTTP.
+//
+// It returns an error if the request's [Target] does not implement [HTTPTarget],
+// if the underlying REST call fails, or if reading the response body fails.
 func (t *HTTPTransport) Do(ctx context.Context, req *Request) (*Response, error) {
 	target, ok := req.Target().(HTTPTarget)
 	if !ok {

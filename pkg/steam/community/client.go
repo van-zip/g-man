@@ -33,7 +33,7 @@ var (
 )
 
 // Requester defines the requirements for making Community requests.
-// It embeds rest.Requester and adds Steam session management.
+// It embeds [rest.Requester] and adds Steam session management.
 type Requester interface {
 	rest.Requester
 	// SessionID returns the current Steam session identifier for the given base URL.
@@ -89,6 +89,10 @@ func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
 }
 
 // Client handles communication with Steam Community, backed by a generic REST client.
+//
+// It wraps a [rest.Client] and automatically configures default headers such as
+// Origin and Referer, which are required by Steam. Use [NewClient] to construct
+// new instances of the client.
 type Client struct {
 	restClient  rest.Requester
 	sessionFunc func(string) string
@@ -99,7 +103,7 @@ type Client struct {
 }
 
 // NewClient creates a new Community Client.
-// It initializes a rest.Client with the required default browser-like headers.
+// It initializes a [rest.Client] with the required default browser-like headers.
 func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
 	rc := rest.NewClient(httpClient).
 		WithBaseURL(BaseURL).
@@ -136,6 +140,9 @@ func (c *Client) SessionID(targetURI string) string {
 
 // Request implements [rest.Requester]. It executes the HTTP request and deeply
 // inspects the response for Steam-specific soft errors.
+//
+// If an authentication failure, rate limit, family view, or generic Steam "Sorry!" error
+// page is detected, Request intercepts the response and returns an [api.SteamAPIError].
 func (c *Client) Request(
 	ctx context.Context,
 	method, path string,
@@ -170,7 +177,10 @@ func (c *Client) Request(
 }
 
 // GetOrRegisterAPIKey checks for the presence of a WebAPI key on the account.
-// If no key exists, it registers a new one for the specified domain (default: localhost).
+// If no key exists, it registers a new one for the specified domain.
+//
+// If the domain is empty, it defaults to "localhost".
+// It returns [ErrAPITokenNotFound] if a key cannot be found or registered.
 func (c *Client) GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error) {
 	if domain == "" {
 		domain = "localhost"
@@ -227,6 +237,8 @@ func (c *Client) registerAPIKey(ctx context.Context, domain string) (string, err
 }
 
 // Get performs a GET request and unmarshals the resulting JSON into the Resp type.
+//
+// If the reqMsg argument is nil, query parameters are omitted.
 func Get[Resp any](ctx context.Context, r Requester, path string, reqMsg any, opts ...api.CallOption) (*Resp, error) {
 	var query url.Values
 
@@ -248,6 +260,8 @@ func Get[Resp any](ctx context.Context, r Requester, path string, reqMsg any, op
 }
 
 // GetHTML performs a GET request specifically for raw HTML content.
+//
+// If the reqMsg argument is nil, query parameters are omitted.
 func GetHTML(ctx context.Context, r Requester, path string, opts ...api.CallOption) ([]byte, error) {
 	myOpts := append([]api.CallOption{
 		api.WithHeader(
@@ -267,6 +281,8 @@ func GetHTML(ctx context.Context, r Requester, path string, opts ...api.CallOpti
 
 // PostForm performs a POST request with application/x-www-form-urlencoded data.
 // It automatically injects the "sessionid" into the form parameters.
+//
+// If the reqMsg argument is nil, form parameters are initialized containing only the session ID.
 func PostForm[Resp any](
 	ctx context.Context,
 	r Requester,
@@ -301,6 +317,8 @@ func PostForm[Resp any](
 
 // PostJSON performs a POST request with a JSON body.
 // It automatically injects the "sessionid" into the URL query parameters.
+//
+// If the reqMsg argument is nil, the request payload is omitted.
 func PostJSON[Resp any](
 	ctx context.Context,
 	r Requester,
@@ -397,8 +415,6 @@ func getRegistry(r Requester) *api.UnmarshalRegistry {
 	return api.NewUnmarshalRegistry()
 }
 
-// checkSteamErrors scrapes the response body and headers to detect
-// authentication failures, rate limits, or parental blocks.
 func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	if statusCode == http.StatusTooManyRequests {
 		return api.NewSteamAPIError("Rate limit exceeded", statusCode, api.ErrRateLimited)

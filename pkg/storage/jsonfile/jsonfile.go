@@ -23,14 +23,21 @@ type dataLayout struct {
 	KV       map[string]map[string][]byte `json:"kv"`
 }
 
-// Provider implements storage.Provider, storing data in a single JSON file.
+// Provider implements [storage.Provider], persisting all data in a single JSON file.
+//
+// All read and write operations are concurrent-safe and synchronized using an internal mutex.
+// Create new instances of Provider using the [New] constructor.
 type Provider struct {
 	path string
 	mu   sync.RWMutex
 	data dataLayout
 }
 
-// New creates a new JSON provider. If the file exists, it will be loaded.
+// New creates a new JSON file storage provider at the specified file path.
+//
+// If the file already exists, it is parsed and loaded into memory.
+// If the file path is empty, or if the directory cannot be accessed,
+// or if the existing file contains invalid JSON, New returns an error.
 func New(path string) (*Provider, error) {
 	p := &Provider{
 		path: path,
@@ -47,17 +54,17 @@ func New(path string) (*Provider, error) {
 	return p, nil
 }
 
-// Auth returns an auth store.
+// Auth returns an [auth.Store] dedicated to authentication data.
 func (p *Provider) Auth() auth.Store {
 	return &authStore{p}
 }
 
-// KV returns a KV store for the given namespace.
+// KV returns a generic key-value store for the given namespace.
 func (p *Provider) KV(namespace string) storage.KV {
 	return &kvStore{p, namespace}
 }
 
-// Close saves the data to the file.
+// Close writes all in-memory data back to the file and closes the provider.
 func (p *Provider) Close() error {
 	return p.save()
 }

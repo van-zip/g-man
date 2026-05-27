@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package id provides utilities for parsing, validating, and converting SteamIDs
-// between various formats (Steam2, Steam3, AccountID, and SteamID64).
 package id
 
 import (
@@ -20,6 +18,9 @@ import (
 // ID represents a unique 64-bit Steam identifier.
 // Bit structure:
 // [ 8 bits: Universe | 4 bits: Account Type | 20 bits: Instance | 32 bits: Account ID ]
+//
+// Create new instances of ID using [New], [Parse], [FromAccountID], or [Resolve].
+// To verify if a parsed ID contains valid bits within a plausible range, use [ID.IsValid].
 type ID uint64
 
 const (
@@ -66,7 +67,7 @@ func (u Universe) String() string {
 	}
 }
 
-// AccountType defines the type of account an ID belongs to.
+// AccountType defines the classification of the account.
 type AccountType uint8
 
 const (
@@ -130,15 +131,18 @@ var (
 	reURL    = regexp.MustCompile(`(?:https?://)?steamcommunity\.com/(?:profiles|id)/([a-zA-Z0-9_-]+)`)
 )
 
-// New constructs a SteamID from a uint64.
+// New constructs a SteamID from a raw 64-bit unsigned integer.
 func New(id uint64) ID { return ID(id) }
 
-// FromAccountID creates an individual SteamID from a 32-bit AccountID.
+// FromAccountID creates a standard individual [ID] in the public universe from a 32-bit AccountID.
 func FromAccountID(accountID uint32) ID {
 	return ID(accountID) + individualBase
 }
 
-// Parse parses a string representation of a SteamID (Steam2, Steam3, or 64-bit string).
+// Parse parses a string representation of a SteamID.
+// It supports parsing legacy Steam2 formats, modern Steam3 formats, and raw 64-bit string values.
+//
+// If the input string is empty, malformed, or invalid, Parse returns [InvalidID].
 func Parse(s string) ID {
 	if s == "" {
 		return InvalidID
@@ -166,27 +170,27 @@ func Parse(s string) ID {
 	return InvalidID
 }
 
-// AccountID returns the 32-bit part of the SteamID.
+// AccountID returns the 32-bit portion of the [ID] representing the user's account number.
 func (id ID) AccountID() uint32 {
 	return uint32(uint64(id) & 0xFFFFFFFF)
 }
 
-// Instance returns the 20-bit portion of the identifier (account instance).
+// Instance returns the 20-bit portion of the [ID] representing the account instance.
 func (id ID) Instance() uint32 {
 	return uint32((uint64(id) >> 32) & 0xFFFFF)
 }
 
-// Type returns account type.
+// Type returns the account classification of the [ID] as an [AccountType].
 func (id ID) Type() AccountType {
 	return AccountType((uint64(id) >> 52) & 0xF)
 }
 
-// Universe returns the account's universe.
+// Universe returns the Steam network universe of the [ID] as a [Universe].
 func (id ID) Universe() Universe {
 	return Universe((uint64(id) >> 56) & 0xFF)
 }
 
-// IsValid checks if the ID is within a plausible range.
+// IsValid checks if the [ID] bits are within a plausible range of universes and account types.
 func (id ID) IsValid() bool {
 	t := id.Type()
 	u := id.Universe()
@@ -194,35 +198,37 @@ func (id ID) IsValid() bool {
 	return u > UniverseInvalid && u <= UniverseDev && t > AccountTypeInvalid && t <= AccountTypeAnonUser
 }
 
-// Steam2 returns the legacy format: STEAM_0:0:42063864
+// Steam2 returns the legacy string representation of the [ID] (for example, STEAM_0:0:42063864).
 func (id ID) Steam2() string {
 	accID := uint64(id.AccountID())
 	return fmt.Sprintf("STEAM_0:%d:%d", accID%2, accID/2)
 }
 
-// Steam3 returns the modern format: [U:1:84127728]
+// Steam3 returns the modern string representation of the [ID] (for example, [U:1:84127728]).
 func (id ID) Steam3() string {
 	return fmt.Sprintf("[U:1:%d]", id.AccountID())
 }
 
-// String returns the SteamID64 as a string.
+// String returns the 64-bit SteamID as a decimal string.
 func (id ID) String() string {
 	return strconv.FormatUint(uint64(id), 10)
 }
 
-// Uint64 returns the raw 64-bit value.
+// Uint64 returns the raw 64-bit value of the [ID] as an unsigned integer.
 func (id ID) Uint64() uint64 {
 	return uint64(id)
 }
 
-// MarshalJSON implements the json.Marshaler interface.
-// SteamID is always marshaled to a string, as JavaScript does not support 64-bit integers without loss of precision.
+// MarshalJSON implements the [json.Marshaler] interface.
+// It serializes the [ID] as a decimal string to prevent precision loss in JavaScript environments.
 func (id ID) MarshalJSON() ([]byte, error) {
 	return fmt.Appendf(nil, `"%d"`, id), nil
 }
 
-// UnmarshalJSON implements the json.Unmarshaler interface.
-// Supports parsing from both numbers and strings.
+// UnmarshalJSON implements the [json.Unmarshaler] interface.
+// It supports parsing the [ID] from both JSON numeric values and decimal strings.
+//
+// If the JSON data is empty or represents a null value, the [ID] is set to [InvalidID].
 func (id *ID) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 {
 		*id = InvalidID
@@ -246,8 +252,13 @@ func (id *ID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Resolve attempts to get a SteamID from a string that could be an ID or a URL.
-// If it's a Vanity URL (e.g. /id/lemon4ksan), it uses the service.Doer to resolve it via WebAPI.
+// Resolve attempts to extract a Steam [ID] from an input string which can be a raw ID, profile URL, or custom URL.
+//
+// If the input is a vanity custom URL slug, Resolve makes an API call using the [service.Doer]
+// client to resolve the custom vanity URL using Steam WebAPI.
+//
+// It returns [InvalidID] and an error if the input format is invalid, if vanity resolution fails,
+// or if the underlying service call fails.
 func Resolve(ctx context.Context, d service.Doer, input string) (ID, error) {
 	input = strings.TrimSpace(input)
 	if id := Parse(input); id.IsValid() {
@@ -270,7 +281,10 @@ func Resolve(ctx context.Context, d service.Doer, input string) (ID, error) {
 	return ResolveVanityURL(ctx, d, slug)
 }
 
-// ResolveVanityURL calls ISteamUser/ResolveVanityURL WebAPI.
+// ResolveVanityURL resolves a custom Steam vanity URL slug into a 64-bit [ID] using the Steam WebAPI.
+//
+// It returns [InvalidID] and an error if the WebAPI request fails, or if Steam returns an unsuccessful
+// status code where the success result field is not equal to 1.
 func ResolveVanityURL(ctx context.Context, d service.Doer, vanityURL string) (ID, error) {
 	type response struct {
 		SteamID string `json:"steamid"`

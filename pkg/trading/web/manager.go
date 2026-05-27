@@ -57,9 +57,12 @@ var (
 
 // ItemsCollection represents items for one side of the offer.
 type ItemsCollection struct {
-	Items    []trading.Item // Items from someone else's inventory
-	Assets   []uint64       // IDs of items from our inventory
-	Currency []uint64       // Currency ID from our inventory
+	// Items is the list of fully populated items.
+	Items []trading.Item
+	// Assets is the list of unique asset identifiers.
+	Assets []uint64
+	// Currency is the list of unique currency identifiers.
+	Currency []uint64
 }
 
 // State constants representing the module lifecycle.
@@ -120,7 +123,12 @@ func DefaultConfig() Config {
 }
 
 // Manager handles trade offer synchronization, polling, and state tracking.
-// It integrates with a Processor to handle business logic for individual offers.
+//
+// It runs a background polling loop, monitors state transitions of sent and
+// received offers, and coordinates asynchronous decision processing via an internal
+// [processor.Processor] instance.
+//
+// Create new instances of Manager using the [New] constructor.
 type Manager struct {
 	module.Base
 
@@ -250,6 +258,11 @@ func (m *Manager) StopPolling() {
 }
 
 // SendOffer builds and sends a new trade offer based on provided parameters.
+//
+// It enforces rate limiting on outgoing calls and may block the current goroutine.
+// If the rate limit wait is canceled, or if the underlying HTTP request fails,
+// it returns an error. If Steam requires manual validation, it publishes a
+// [guard.ConfirmationRequiredEvent] before returning the offer ID.
 func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64, error) {
 	if err := m.rateLimiter.Wait(ctx); err != nil {
 		return 0, err
@@ -323,6 +336,11 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 }
 
 // AcceptOffer accepts a trade offer.
+//
+// It enforces rate limiting and may block the current goroutine.
+// If the rate limit wait is canceled, or if the underlying HTTP request fails,
+// it returns an error. If the trade requires additional mobile or email confirmation,
+// it publishes a [guard.ConfirmationRequiredEvent].
 func (m *Manager) AcceptOffer(ctx context.Context, offerID uint64) error {
 	if err := m.rateLimiter.Wait(ctx); err != nil {
 		return err
@@ -358,6 +376,10 @@ func (m *Manager) AcceptOffer(ctx context.Context, offerID uint64) error {
 }
 
 // DeclineOffer declines a trade offer.
+//
+// It enforces rate limiting and may block the current goroutine.
+// If the rate limit wait is canceled, or if the underlying HTTP request fails,
+// it returns an error.
 func (m *Manager) DeclineOffer(ctx context.Context, offerID uint64) error {
 	if err := m.rateLimiter.Wait(ctx); err != nil {
 		return err
@@ -372,6 +394,10 @@ func (m *Manager) DeclineOffer(ctx context.Context, offerID uint64) error {
 }
 
 // CancelOffer cancels a trade offer sent by us.
+//
+// It enforces rate limiting and may block the current goroutine.
+// If the rate limit wait is canceled, or if the underlying HTTP request fails,
+// it returns an error.
 func (m *Manager) CancelOffer(ctx context.Context, offerID uint64) error {
 	if err := m.rateLimiter.Wait(ctx); err != nil {
 		return err
@@ -562,6 +588,9 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 }
 
 // GetEscrowDuration loads the trade page and parses the Trade Hold information.
+//
+// It returns [processor.ErrCommunityNotReady] if the community requester is nil.
+// It returns [processor.ErrEscrowNotFound] if it fails to parse valid escrow hold durations from the page.
 func (m *Manager) GetEscrowDuration(ctx context.Context, offerID uint64) (processor.Details, error) {
 	m.mu.RLock()
 	c := m.community

@@ -8,7 +8,7 @@
 
 </div>
 
-This directory contains the public API surface of the **G-man** framework. These packages form a highly decoupled, modular ecosystem. You can import the entire suite to build a full-featured Steam bot, or cherry-pick individual packages (e.g., `tf2/sku` for price parsing, `steam/community` for inventory scraping, or `crypto` for mobile TOTP generation) to integrate directly into your existing Go applications.
+This directory contains the public API surface of the **G-man** framework. These packages form a highly decoupled, modular ecosystem. You can import the entire suite to build a full-featured Steam bot, or cherry-pick individual packages (e.g., `steam/community` for inventory scraping, `trading/engine` for Onion middleware, or `crypto` for mobile TOTP generation) to integrate directly into your existing Go applications.
 
 ## 🏗 Package Dependency Hierarchy
 
@@ -23,14 +23,12 @@ flowchart TD
 
     subgraph L4 ["🚀 Layer 4: Domain & Execution (Business Logic)"]
         direction LR
-        TF2["<b>🎒 tf2</b><br/>Game Coordinator, Autopricer<br/>Economy & Item Schema"]
         Trading["<b>🤝 trading</b><br/>Onion Middleware Engine<br/>Offers Handling"]
         Client["<b>🤖 steam.Client</b><br/>Central Orchestrator<br/>Lifecycle Management"]
         
-        TF2 -->|Triggers| Trading
         Trading ~~~ Client
     end
-    class L4,TF2,Trading,Client l4_node;
+    class L4,Trading,Client l4_node;
 
     subgraph L3 ["🌐 Layer 3: Steam Networking & Social (Active Services)"]
         direction LR
@@ -84,11 +82,11 @@ flowchart TD
 ## 📦 Package Overview
 
 ### 1. ⚙️ Core Layer (`pkg/steam`)
-The foundation of the framework. It handles low-level heavy lifting: network communication, protocol serialization, and API orchestration.
+The foundation of the framework. It handles network communication, protocol serialization, and API orchestration.
 
 | Package | Description |
 | :--- | :--- |
-| 🔌 **[steam](steam/)** | The main **Orchestrator**. Connects Socket, Auth, and Modules into a thread-safe `Client`. |
+| 🔌 **[steam](steam/)** | The main **Orchestrator**. Connects Socket, Auth, and Modules into a thread-safe, topologically booted `Client`. |
 | 🌐 **[steam/api](steam/api/)** | Target specifications, Steam error types (`EResult`), and response unmarshalers (VDF, JSON, Proto). |
 | 🔑 **[steam/auth](steam/auth/)** | Modern OAuth2 flows. Supports JWT, Refresh Tokens, and background re-auth cycles. |
 | 🕵️‍♂️ **[steam/community](steam/community/)** | Defensive Web Client for scraping `steamcommunity.com` inventories, market, and OpenID. |
@@ -120,31 +118,19 @@ The high-level request-response engine for automated trading behaviors.
 | 🤝 **[trading/live](trading/live/)** | Support for GC-based real-time "Live Trade" sessions. |
 | 🌐 **[trading/web](trading/web/)** | Traditional Web-based Trade Offer operations via the Community API. |
 
-### ⚔️ 4. TF2 Domain (`pkg/tf2`)
-Specialized packages built for Team Fortress 2 item schemas, pricing, and coordinate automation.
-
-| Package | Description |
-| :--- | :--- |
-| 🏷 **[tf2/sku](tf2/sku/)** | String-based SKU parser and generator for unique TF2 item identifiers. |
-| 📈 **[tf2/bptf](tf2/bptf/)** | Interface for backpack.tf snapshot, pricing, and active listing managers. |
-| 🪙 **[tf2/currency](tf2/currency/)** | Metal & Key arithmetic. Safe math for Refined, Reclaimed, Scrap, and Key consolidation. |
-| 🎒 **[tf2/inventory](tf2/inventory/)** | Unified inventory coordinator syncing Web and Game Coordinator (`SOCache`) inventories. |
-| 💲 **[tf2/pricedb](tf2/pricedb/)** | Pluggable local price manager synchronized with real-time Socket.IO pricing providers. |
-| 📖 **[tf2/schema](tf2/schema/)** | Dynamically updated TF2 item schema indexer for O(1) attribute and defindex lookups. |
-| 🔨 **[tf2/crafting](tf2/crafting/)** | Automated crafting routines: weapon combining, smelting, and key refining. |
-
-### 🛠 5. Infrastructure & Storage
+### 🛠 4. Infrastructure & Storage
 Utilities and core persistent storage providers used across the SDK.
 
 | Package | Description |
 | :--- | :--- |
 | 🎭 **[behavior](behavior/)** | Universal autonomous routines, including human-mimicking achievements and stats simulation. |
-| 🚌 **[bus](bus/)** | High-performance, lock-free **Event Bus** for decoupled pub/sub modules. |
+| 🚌 **[bus](bus/)** | High-performance **Event Bus** for decoupled pub/sub modules. |
 | 🔐 **[crypto](crypto/)** | ECC, RSA cryptography, and TOTP algorithms for security operations. |
-| ⏳ **[jobs](jobs/)** | Thread-safe asynchronous job tracker for matching socket requests with responses. |
+| ⏳ **[jobs](jobs/)** | Thread-safe asynchronous job execution unit and async worker manager. |
 | 📝 **[log](log/)** | Contextual, structured, module-aware logger. |
 | 🚀 **[rest](rest/)** | HTTP client wrapper featuring automatic retries, exponential backoffs, and parameters serialization. |
-| 💾 **[storage](storage/)** | Interface-first storage provider with SQLite, JSON, and in-memory backends. |
+| 💾 **[storage](storage/)** | Interface-first storage provider with JSON and in-memory backends. |
+| 🔌 **[command](command/)** | CLI command routing, registration, and human command executor. |
 
 ## 🏗 Architecture & Philosophy
 
@@ -154,3 +140,4 @@ G-man packages are engineered with **Go best practices** in mind:
 2. **Interface-First Design**: Components communicate using tight consumer-defined interfaces. Rather than depending on concrete clients, structures depend on `Requester` or `Doer` contracts, keeping the system fully mockable.
 3. **Concurrency Safety**: Circular states, heartbeats, and packet routing are managed using `sync/atomic` and read-write mutexes. All blocking operations explicitly accept a `context.Context`.
 4. **Defensive Web Scraping**: The `community` client proactively converts hidden HTML errors (e.g., rate limits disguised as standard web views) into strictly typed Go errors like `ErrRateLimited`.
+5. **Decoupled Extensions**: Domain-specific logic (e.g. game schemas, currency, item attributes) is pushed into external packages (like `g-man-tf2`), keeping the core framework lean and fast.

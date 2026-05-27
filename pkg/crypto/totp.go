@@ -18,7 +18,13 @@ const (
 	steamChars = "23456789BCDFGHJKMNPQRTVWXY"
 )
 
-// GenerateAuthCode generates a 5-digit Steam Guard code for the given timestamp.
+var secretRegex = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// GenerateAuthCode generates a 5-digit Steam Guard two-factor authentication code for the given timestamp.
+//
+// The sharedSecret argument must be a base64-encoded or 40-character hex-encoded string.
+//
+// It returns an error if the shared secret cannot be decoded from base64 or hexadecimal.
 func GenerateAuthCode(sharedSecret string, timestamp int64) (string, error) {
 	secret, err := decodeSecret(sharedSecret)
 	if err != nil {
@@ -47,7 +53,13 @@ func GenerateAuthCode(sharedSecret string, timestamp int64) (string, error) {
 	return string(code), nil
 }
 
-// GenerateConfirmationKey generates a key to confirm mobile actions
+// GenerateConfirmationKey generates a base64-encoded key required to confirm mobile actions.
+//
+// The identitySecret must be a base64-encoded or 40-character hex-encoded string.
+// The tag parameter represents the action type (such as "conf", "allow", or "cancel").
+// If the tag exceeds 32 bytes, only the first 32 bytes of the tag are used.
+//
+// It returns an error if the identity secret cannot be decoded from base64 or hexadecimal.
 func GenerateConfirmationKey(identitySecret string, timestamp int64, tag string) (string, error) {
 	secret, err := decodeSecret(identitySecret)
 	if err != nil {
@@ -71,7 +83,8 @@ func GenerateConfirmationKey(identitySecret string, timestamp int64, tag string)
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-// GetDeviceID generates a unique device ID based on the SteamID
+// GetDeviceID generates a unique, deterministic device identifier based on the SteamID.
+// It returns a formatted UUID string with an "android:" prefix.
 func GetDeviceID(steamID uint64) string {
 	h := sha1.New()
 	fmt.Fprintf(h, "%d", steamID)
@@ -88,7 +101,7 @@ func GetDeviceID(steamID uint64) string {
 }
 
 func decodeSecret(secret string) ([]byte, error) {
-	if isHex, _ := regexp.MatchString(`^[0-9a-fA-F]{40}$`, secret); isHex {
+	if secretRegex.MatchString(secret) {
 		return hex.DecodeString(secret)
 	}
 

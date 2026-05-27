@@ -22,6 +22,8 @@ import (
 var rxTradeOfferID = regexp.MustCompile(`id="tradeofferid_(\d+)"`)
 
 // TwoFactorService covers ITwoFactorService methods.
+//
+// Create new instances of the service using the [NewTwoFactorService] constructor.
 type TwoFactorService struct {
 	client service.Doer
 }
@@ -60,6 +62,8 @@ func (s *TwoFactorService) QueryTimeOffset(ctx context.Context) (time.Duration, 
 }
 
 // MobileConf provides access to Steam's mobile verification endpoints.
+//
+// Create new instances of the service using the [NewMobileConf] constructor.
 type MobileConf struct {
 	client community.Requester
 }

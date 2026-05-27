@@ -93,9 +93,12 @@ type Session interface {
 
 // Config aggregates configurations for all underlying socket subsystems.
 type Config struct {
+	// Connector holds configuration parameters for raw network dials.
 	Connector connector.Config
+	// Processor holds configuration parameters for concurrent packet decoding.
 	Processor processor.Config
-	MaxJobs   int
+	// MaxJobs specifies the maximum number of active tracking jobs in the dispatcher.
+	MaxJobs int
 }
 
 // DefaultConfig returns a recommended baseline for high-performance Steam bots.
@@ -108,7 +111,10 @@ func DefaultConfig() Config {
 }
 
 // Socket acts as the central facade for Steam network operations.
-// It orchestrates the connection lifecycle, message processing, and routing.
+//
+// It orchestrates the raw connection lifecycle via [connector.Connector], concurrent packet parsing
+// via [processor.Processor], and packet routing via [dispatcher.Dispatcher].
+// Create new instances of Socket using the [NewSocket] constructor.
 type Socket struct {
 	cfg    Config
 	logger log.Logger
@@ -198,6 +204,9 @@ func (s *Socket) SendUnified(ctx context.Context, method string, req proto.Messa
 }
 
 // SendSync blocks until a response is received or the context is canceled.
+//
+// It returns an error if the context ctx is canceled before the response arrives,
+// returning [ctx.Err()].
 func (s *Socket) SendSync(ctx context.Context, build PayloadBuilder, opts ...SendOption) (*protocol.Packet, error) {
 	type result struct {
 		pkt *protocol.Packet

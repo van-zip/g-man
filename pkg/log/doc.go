@@ -11,42 +11,32 @@ in the calling goroutine and then sent to a background worker via a fixed-size
 buffer (channel). This ensures that logging operations have minimal impact
 on the latency of the main application logic.
 
-# Structured Logging
+# Key Components
 
-Structured logging is achieved through the use of Fields. Rather than formatting
-strings manually, you provide a message and a set of typed fields:
+  - [Logger]: The primary interface that defines all structured logging methods.
+  - [Field]: A key-value pair used to represent structured context.
+  - [Config]: Controls the output destination, severity level, and visual style of the logger.
+  - [AsyncLogger]: The default thread-safe, non-blocking implementation of the [Logger] interface.
 
-	logger.Info("user logged in",
-	    log.String("username", "john_doe"),
-	    log.Int("attempts", 3),
+# Basic Usage (Asynchronous Text Logger)
+
+	package main
+
+	import (
+		"github.com/lemon4ksan/g-man/pkg/log"
 	)
 
-# Module Hierarchy
+	func main() {
+		// Initialize default configuration
+		cfg := log.DefaultConfig(log.LevelInfo)
+		logger := log.New(cfg)
+		defer logger.Close()
 
-The logger supports a hierarchical module system. You can create sub-loggers
-that represent different components of your system. Depending on the Config,
-these will be displayed as a tree or as a full path string.
-
-	root := log.New(log.DefaultConfig(log.InfoLevel))
-	apiLogger := root.With(log.Module("API"))
-	dbLogger := apiLogger.With(log.Component("Database"))
-
-	dbLogger.Info("connection established")
-	// Output: 12:00:00.000 [I]    └─ API └─ Database connection established
-
-# Asynchronous Nature and Shutdown
-
-Because logging is asynchronous, it is critical to call Close() before the
-application exits. This flushes the internal queue and ensures all pending
-messages are written to the output.
-
-	l := log.New(log.DefaultConfig(log.InfoLevel))
-	defer l.Close()
-
-# Performance
-
-The package is optimized to reduce GC pressure by using sync.Pool for byte
-buffers and specialized formatters (strconv) instead of fmt.Sprintf where
-possible.
+		// Log messages with structured context
+		logger.Info("user logged in",
+			log.String("username", "john_doe"),
+			log.Int("attempts", 3),
+		)
+	}
 */
 package log

@@ -46,6 +46,10 @@ func From(c *steam.Client) *Manager {
 }
 
 // Manager handles friends list synchronization and user status tracking.
+//
+// It maintains a real-time cache of friendship relationships, persona states,
+// and provides rich interfaces for community comment moderation and invite links.
+// Use [New] to construct new instances of the manager.
 type Manager struct {
 	module.Base
 
@@ -112,6 +116,8 @@ func (m *Manager) Close() error {
 }
 
 // GetFriend returns cached user information (persona state) for a given SteamID.
+//
+// It returns nil if the user is not found in the local cache.
 func (m *Manager) GetFriend(steamID id.ID) *PersonaState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -143,6 +149,8 @@ func (m *Manager) GetFriends() []id.ID {
 }
 
 // GetMaxFriends calculates the friend limit based on the user's Steam level.
+//
+// It returns an error if the underlying WebAPI request to IPlayerService/GetBadges fails.
 func (m *Manager) GetMaxFriends(ctx context.Context) (int, error) {
 	m.mu.RLock()
 
@@ -285,6 +293,8 @@ func (m *Manager) handlePersonaState(packet *protocol.Packet) {
 }
 
 // AcceptFriendRequestWeb accepts an incoming friend invitation using the web-based Steam Community API.
+//
+// It returns an error if the web-based request fails or is rejected by Steam.
 func (m *Manager) AcceptFriendRequestWeb(ctx context.Context, steamID id.ID) error {
 	m.mu.RLock()
 	comm := m.community
@@ -317,6 +327,8 @@ func (m *Manager) AcceptFriendRequestWeb(ctx context.Context, steamID id.ID) err
 }
 
 // BlockCommunication blocks all communications from the specified SteamID.
+//
+// It returns an error if the request fails or is rejected by Steam.
 func (m *Manager) BlockCommunication(ctx context.Context, steamID id.ID) error {
 	m.mu.RLock()
 	comm := m.community
@@ -348,6 +360,8 @@ func (m *Manager) BlockCommunication(ctx context.Context, steamID id.ID) error {
 }
 
 // UnblockCommunication unblocks communication for the specified SteamID.
+//
+// It returns an error if the request fails or is rejected by Steam.
 func (m *Manager) UnblockCommunication(ctx context.Context, steamID id.ID) error {
 	m.mu.RLock()
 	comm := m.community
@@ -389,6 +403,9 @@ func (m *Manager) UnblockCommunication(ctx context.Context, steamID id.ID) error
 }
 
 // PostUserComment posts a text comment on the user's profile and returns the new comment ID.
+//
+// It returns an error if the request fails, if Steam returns an error message,
+// or if the comment element cannot be parsed from the returned HTML payload.
 func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message string) (string, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -450,6 +467,9 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 }
 
 // DeleteUserComment deletes a text comment on the user's profile.
+//
+// It returns an error if the request fails, if Steam returns an error message,
+// or if the comment remains inside the returned HTML payload.
 func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentID string) error {
 	m.mu.RLock()
 	comm := m.community
@@ -497,6 +517,9 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 }
 
 // GetUserComments retrieves a list of profile comments for the specified user.
+//
+// It returns the parsed comment list, the total number of comments available on the profile,
+// and any error encountered during network request or HTML parsing.
 func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, count int) ([]Comment, int, error) {
 	m.mu.RLock()
 	comm := m.community
@@ -631,4 +654,100 @@ func (m *Manager) UploadRichPresence(ctx context.Context, appID uint32, richPres
 	_, err := service.LegacyProto[service.NoResponse](ctx, m.client, enums.EMsg_ClientRichPresenceUpload, req)
 
 	return err
+}
+
+// CreateFriendInviteToken creates a quick-invite token/link that allows any user to add you.
+// limit: maximum number of uses allowed.
+// duration: invite link duration in seconds.
+func (m *Manager) CreateFriendInviteToken(ctx context.Context, limit, duration uint32) (string, error) {
+	req := &pb.CUserAccount_CreateFriendInviteToken_Request{
+		InviteLimit:    &limit,
+		InviteDuration: &duration,
+	}
+
+	resp, err := service.WebAPI[pb.CUserAccount_CreateFriendInviteToken_Response](
+		ctx,
+		m.client,
+		"POST",
+		"UserAccount",
+		"CreateFriendInviteToken",
+		1,
+		req,
+	)
+	if err != nil {
+		return "", fmt.Errorf("friends: failed to create quick-invite token: %w", err)
+	}
+
+	return resp.GetInviteToken(), nil
+}
+
+// GetFriendInviteTokens retrieves the list of active quick-invite tokens for this account.
+func (m *Manager) GetFriendInviteTokens(
+	ctx context.Context,
+) ([]*pb.CUserAccount_CreateFriendInviteToken_Response, error) {
+	req := &pb.CUserAccount_GetFriendInviteTokens_Request{}
+
+	resp, err := service.WebAPI[pb.CUserAccount_GetFriendInviteTokens_Response](
+		ctx,
+		m.client,
+		"GET",
+		"UserAccount",
+		"GetFriendInviteTokens",
+		1,
+		req,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("friends: failed to list quick-invite tokens: %w", err)
+	}
+
+	return resp.GetTokens(), nil
+}
+
+// RevokeFriendInviteToken revokes (invalidates) an active quick-invite token.
+func (m *Manager) RevokeFriendInviteToken(ctx context.Context, token string) error {
+	req := &pb.CUserAccount_RevokeFriendInviteToken_Request{
+		InviteToken: &token,
+	}
+
+	_, err := service.WebAPI[service.NoResponse](
+		ctx,
+		m.client,
+		"POST",
+		"UserAccount",
+		"RevokeFriendInviteToken",
+		1,
+		req,
+	)
+	if err != nil {
+		return fmt.Errorf("friends: failed to revoke quick-invite token: %w", err)
+	}
+
+	return nil
+}
+
+// ViewFriendInviteToken checks the validity of a quick-invite token belonging to another user.
+func (m *Manager) ViewFriendInviteToken(
+	ctx context.Context,
+	steamID uint64,
+	token string,
+) (*pb.CUserAccount_ViewFriendInviteToken_Response, error) {
+	req := &pb.CUserAccount_ViewFriendInviteToken_Request{
+		Steamid:     &steamID,
+		InviteToken: &token,
+	}
+
+	resp, err := service.WebAPI[pb.CUserAccount_ViewFriendInviteToken_Response](
+		ctx,
+		m.client,
+		"GET",
+		"UserAccount",
+		"ViewFriendInviteToken",
+		1,
+		req,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("friends: failed to view quick-invite token: %w", err)
+	}
+
+	return resp, nil
 }

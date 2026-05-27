@@ -11,59 +11,64 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
 
-// TradeState represents the state of the offer as passed from the offer manager.
+// TradeState represents the transactional state of a trade offer.
 type TradeState int
 
 const (
-	// StateInvalid means the offer is invalid.
+	// StateInvalid represents a malformed or invalid offer state.
 	StateInvalid TradeState = iota
-	// StateActive means the offer is active.
+	// StateActive represents an active offer awaiting response.
 	StateActive
-	// StateAccepted means the offer is accepted.
+	// StateAccepted represents an offer that has been accepted and finalized.
 	StateAccepted
-	// StateCountered means the offer is countered.
+	// StateCountered represents an offer that was countered with modified parameters.
 	StateCountered
-	// StateExpired means the offer is expired.
+	// StateExpired represents an offer that passed its expiration threshold.
 	StateExpired
-	// StateCanceled means the offer is canceled.
+	// StateCanceled represents an offer initiated by us that we withdrew.
 	StateCanceled
-	// StateDeclined means the offer is declined.
+	// StateDeclined represents an offer that we declined.
 	StateDeclined
-	// StateInvalidItems means the offer has invalid items.
+	// StateInvalidItems represents an offer that failed because items are no longer available.
 	StateInvalidItems
-	// StateCreatedNeedsConfirmation means the offer was created and needs confirmation.
+	// StateCreatedNeedsConfirmation represents an offer that is pending mobile app confirmation.
 	StateCreatedNeedsConfirmation
-	// StateCanceledBySecondFactor means the offer was canceled by second factor.
+	// StateCanceledBySecondFactor represents an offer canceled due to a failed mobile confirmation.
 	StateCanceledBySecondFactor
-	// StateInEscrow means the offer is in escrow.
+	// StateInEscrow represents an offer accepted but currently held in Steam escrow.
 	StateInEscrow
 )
 
-// TradeInfo contains the information needed to generate a notification.
+// TradeInfo contains the detailed metadata required to populate notification templates.
 type TradeInfo struct {
-	OfferID        uint64
+	// OfferID is the unique transaction identifier assigned by Steam.
+	OfferID uint64
+	// PartnerSteamID is the 64-bit Steam ID of the trade partner.
 	PartnerSteamID id.ID
-	ReasonType     reason.TradeReason
-	OldState       TradeState
-
-	// Data for templates
+	// ReasonType is the specific reasoning decision triggered by the offer.
+	ReasonType reason.TradeReason
+	// OldState is the previous transactional state of the trade offer.
+	OldState TradeState
+	// IsCanceledByUser is true if the offer was canceled by the initiating user.
 	IsCanceledByUser bool
-	BannedStatus     map[string]string
-	HighValueNames   []string
-	MissingValue     string // e.g., "1.33 ref" or "1 key, 2 ref"
+	// BannedStatus holds the community ban status checks for the partner.
+	BannedStatus map[string]string
+	// HighValueNames contains the names of high-value items involved in the trade.
+	HighValueNames []string
+	// MissingValue is the text representation of value discrepancies (e.g. "1.33 ref").
+	MissingValue string
 }
 
-// ConfigProvider provides notification templates and global settings.
+// ConfigProvider defines the contract for retrieving customized notification templates and prefixes.
 type ConfigProvider interface {
-	// GetTemplate returns the template string for a given key.
-	// Example keys: "success", "success_escrow", "decline.escrow".
+	// GetTemplate retrieves the template string associated with a specific key.
 	GetTemplate(key string) string
-
-	// GetCommandPrefix returns the chat command prefix (e.g., "!").
+	// GetCommandPrefix retrieves the chat command prefix (such as "!").
 	GetCommandPrefix() string
 }
 
-// ChatProvider defines an interface for sending messages to a Steam user.
+// ChatProvider defines the interface for sending messages to a Steam user.
 type ChatProvider interface {
+	// SendMessage transmits a text message to a specific Steam user ID.
 	SendMessage(ctx context.Context, steamID id.ID, message string) error
 }

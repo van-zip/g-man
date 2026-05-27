@@ -17,10 +17,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
-	bm "github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
-	"github.com/lemon4ksan/g-man/pkg/tf2/backpack"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/web/processor"
 	"github.com/lemon4ksan/g-man/test/community"
@@ -33,41 +31,6 @@ const (
 	OtherAccountID = 45678
 )
 
-type backpackMock struct {
-	bm.Base
-
-	mu          sync.Mutex
-	lockedItems map[uint64]bool
-	lockCalls   int
-	unlockCalls int
-}
-
-func newBackpackMock() *backpackMock {
-	return &backpackMock{lockedItems: make(map[uint64]bool)}
-}
-
-func (m *backpackMock) LockItems(ids []uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.lockCalls++
-	for _, id := range ids {
-		m.lockedItems[id] = true
-	}
-}
-
-func (m *backpackMock) UnlockItems(ids []uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.unlockCalls++
-	for _, id := range ids {
-		delete(m.lockedItems, id)
-	}
-}
-
-func (m *backpackMock) GetLockedAssetIDs() []uint64 { return nil }
-
 func setupTrading(t *testing.T) (*Manager, *requester.Mock, *community.Mock) {
 	t.Helper()
 
@@ -76,7 +39,6 @@ func setupTrading(t *testing.T) (*Manager, *requester.Mock, *community.Mock) {
 
 	init := module.NewInitContext()
 	init.SetService(web)
-	init.SetModule(backpack.ModuleName, newBackpackMock())
 
 	m := New(DefaultConfig())
 	m.rateLimiter = rate.NewLimiter(rate.Inf, 0)

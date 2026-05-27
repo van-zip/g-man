@@ -8,47 +8,46 @@ import (
 	"context"
 	"fmt"
 
-	tf2trading "github.com/lemon4ksan/g-man/pkg/tf2/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 	tradingtest "github.com/lemon4ksan/g-man/test/trading"
 )
 
-// TF2 Attribute IDs (from schema)
+// Item Attribute IDs (generic representation)
 const (
-	AttrItemOrigin = 12345 // Placeholder for demo, in reality TF2 uses internal fields for Origin
+	AttrItemOrigin = 12345 // Attribute ID representing item origin/type
 )
 
 func main() {
 	fmt.Println("G-man: Advanced Trade Testing Engine Example")
 	fmt.Println("--------------------------------------------")
 
-	// 1. Initialize the TF2 Trade Tester with a base price feed.
-	tester := tf2trading.NewTF2TradeTester().
+	// 1. Initialize the generic Trade Tester with a base price feed.
+	tester := tradingtest.NewTradeTester().
 		WithPrices(map[string]int{
-			"5021;6": 60, // Key: 60 Ref
-			"5002;6": 1,  // Refined Metal: 1 Ref
-			"263;6":  5,  // Reclaimed Metal: 0.33 Ref (represented as 5 units in our internal int-math)
+			"item_premium":      60, // Premium item, e.g., 60 currency units
+			"item_currency":     1,  // Base currency item, e.g., 1 unit
+			"item_sub_currency": 5,  // Sub-currency item, e.g., 5 units
 		})
 
 	// 2. Add "Bulk Discount" Middleware
-	// If a partner sells 10+ keys, we give them a 1 Ref bonus per key.
+	// If a partner sells 10+ premium items, we give them a 1 currency unit bonus per premium item.
 	tester.AddMiddleware(func(next engine.Handler) engine.Handler {
 		return func(ctx *engine.TradeContext) error {
-			keysToReceive := 0
+			premiumToReceive := 0
 			for _, it := range ctx.Offer.ItemsToReceive {
-				if it.SKU == "5021;6" {
-					keysToReceive++
+				if it.SKU == "item_premium" {
+					premiumToReceive++
 				}
 			}
 
-			if keysToReceive >= 10 {
+			if premiumToReceive >= 10 {
 				fmt.Printf(
-					"[Logic] Bulk seller detected! Applying 1 Ref bonus per key (%d bonus Ref).\n",
-					keysToReceive,
+					"[Logic] Bulk seller detected! Applying 1 currency unit bonus per premium item (%d bonus units).\n",
+					premiumToReceive,
 				)
-				ctx.Set("bulk_bonus", keysToReceive)
+				ctx.Set("bulk_bonus", premiumToReceive)
 			}
 
 			return next(ctx)
@@ -92,51 +91,51 @@ func main() {
 		}
 	})
 
-	// We want to buy 10 keys. Total value is 600 Ref.
-	// We give 610 Ref (thinking it's fair), but with our 10 Ref bonus (1 per key),
+	// We want to buy 10 premium items. Total value is 600 currency units.
+	// We give 610 currency units, but with our 10 unit bonus (1 per premium item),
 	// the received value effectively becomes 600 + 10 = 610.
-	fmt.Println("\n>>> Scenario 1: Bulk Key Sale (10 keys) with 10 Ref bonus")
+	fmt.Println("\n>>> Scenario 1: Bulk Premium Sale (10 premium items) with 10 unit bonus")
 
 	bulkOffer := tradingtest.NewOfferBuilder().
-		AddReceiveItem("5021;6", 10). // 10 Keys (600 Ref)
-		AddGiveItem("5002;6", 610).   // We give 610 Ref (normally we'd decline, but bonus makes it 610)
+		AddReceiveItem("item_premium", 10). // 10 premium items (600 value)
+		AddGiveItem("item_currency", 610).   // We give 610 currency units (normally we'd decline, but bonus makes it 610)
 		Build()
 
 	verdict, _ := tester.Run(context.Background(), bulkOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 
-	// Partner sells 9 keys (no bonus). Total value is 540 Ref.
-	// They want 549 Ref.
-	fmt.Println("\n>>> Scenario 2: 9 Keys (no bonus) for 549 Ref")
+	// Partner sells 9 premium items (no bonus). Total value is 540.
+	// They want 549 currency units.
+	fmt.Println("\n>>> Scenario 2: 9 Premium Items (no bonus) for 549 currency units")
 
 	cheaterOffer := tradingtest.NewOfferBuilder().
-		AddReceiveItem("5021;6", 9). // 9 Keys (540 Ref)
-		AddGiveItem("5002;6", 549).  // They want 549 Ref
+		AddReceiveItem("item_premium", 9). // 9 premium items (540 value)
+		AddGiveItem("item_currency", 549).  // They want 549 currency units
 		Build()
 
 	verdict, _ = tester.Run(context.Background(), cheaterOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 
-	// Giving 1 Key (60), receiving 55 Refined (55) and 1 Reclaimed (5). Total 60.
-	fmt.Println("\n>>> Scenario 3: Mixed Currency Trade (1 Key for 55 Ref + 1 Rec)")
+	// Giving 1 premium item (60), receiving 55 base currency (55) and 1 sub-currency (5). Total 60.
+	fmt.Println("\n>>> Scenario 3: Mixed Currency Trade (1 Premium Item for 55 Currency + 1 Sub-Currency)")
 
 	mixedOffer := tradingtest.NewOfferBuilder().
-		AddGiveItem("5021;6", 1).     // Give 1 Key (60)
-		AddReceiveItem("5002;6", 55). // Receive 55 Ref (55)
-		AddReceiveItem("263;6", 1).   // Receive 1 Rec (5)
+		AddGiveItem("item_premium", 1).          // Give 1 Premium Item (60)
+		AddReceiveItem("item_currency", 55).     // Receive 55 base currency units (55)
+		AddReceiveItem("item_sub_currency", 1).   // Receive 1 sub-currency unit (5)
 		Build()
 
 	verdict, _ = tester.Run(context.Background(), mixedOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 
-	tester = tf2trading.NewTF2TradeTester().
+	tester = tradingtest.NewTradeTester().
 		WithPrices(map[string]int{
-			"5021;6": 60, // Key
-			"200;6":  10, // Some Scattergun
+			"item_premium":     60, // Premium item
+			"item_rare_weapon": 10, // A rare game weapon or skin
 		})
 
-	// 1. "Loaner Skin Detector" Middleware
-	// Loaner skins (Origin 24) are extremely rare and valuable to collectors.
+	// 1. "Special Attribute Detector" Middleware
+	// Items with a special origin (Origin 24) are extremely rare and valuable to collectors.
 	// If we detect one in our 'give' side, we should probably STOP and REVIEW.
 	// If we detect one in 'receive' side, we might want to accept it as a huge win!
 	tester.AddMiddleware(func(next engine.Handler) engine.Handler {
@@ -144,8 +143,8 @@ func main() {
 			for _, it := range ctx.Offer.ItemsToGive {
 				for _, attr := range it.Attributes {
 					if attr.Defindex == AttrItemOrigin && attr.Value == "24" {
-						fmt.Printf("[ALARM] We are giving away a LOANER item! AssetID: %d\n", it.AssetID)
-						ctx.Review(reason.TradeReason("LOANER_GIVEAWAY_PROTECTION"))
+						fmt.Printf("[ALARM] We are giving away a SPECIAL item! AssetID: %d\n", it.AssetID)
+						ctx.Review(reason.TradeReason("SPECIAL_GIVEAWAY_PROTECTION"))
 						return nil
 					}
 				}
@@ -154,7 +153,7 @@ func main() {
 			for _, it := range ctx.Offer.ItemsToReceive {
 				for _, attr := range it.Attributes {
 					if attr.Defindex == AttrItemOrigin && attr.Value == "24" {
-						fmt.Printf("[JACKPOT] Receiving a LOANER item! AssetID: %d\n", it.AssetID)
+						fmt.Printf("[JACKPOT] Receiving a SPECIAL item! AssetID: %d\n", it.AssetID)
 						ctx.Set("is_jackpot", true)
 					}
 				}
@@ -179,31 +178,31 @@ func main() {
 		}
 	})
 
-	fmt.Println("\n>>> Scenario 5: Accidental Loaner giveaway")
+	fmt.Println("\n>>> Scenario 4: Accidental Special Item giveaway")
 
 	dangerousOffer := tradingtest.NewOfferBuilder().
 		AddGiveItemFull(&trading.Item{
 			AssetID: 12345678,
-			SKU:     "200;6",
+			SKU:     "item_rare_weapon",
 			Attributes: []trading.Attribute{
-				{Defindex: AttrItemOrigin, Value: "24"}, // LOANER FLAG
+				{Defindex: AttrItemOrigin, Value: "24"}, // SPECIAL FLAG
 			},
 		}).
-		AddReceiveItem("5021;6", 1). // For 1 Key
+		AddReceiveItem("item_premium", 1). // For 1 premium item
 		Build()
 
 	verdict, _ = tester.Run(context.Background(), dangerousOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 
-	fmt.Println("\n>>> Scenario 6: Receiving a Loaner skin")
+	fmt.Println("\n>>> Scenario 5: Receiving a Special Item")
 
 	jackpotOffer := tradingtest.NewOfferBuilder().
-		AddGiveItem("5021;6", 1). // We give 1 Key
+		AddGiveItem("item_premium", 1). // We give 1 premium item
 		AddReceiveItemFull(&trading.Item{
 			AssetID: 87654321,
-			SKU:     "200;6",
+			SKU:     "item_rare_weapon",
 			Attributes: []trading.Attribute{
-				{Defindex: AttrItemOrigin, Value: "24"}, // LOANER FLAG
+				{Defindex: AttrItemOrigin, Value: "24"}, // SPECIAL FLAG
 			},
 		}).
 		Build()
@@ -211,3 +210,4 @@ func main() {
 	verdict, _ = tester.Run(context.Background(), jackpotOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 }
+

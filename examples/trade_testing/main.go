@@ -98,7 +98,8 @@ func main() {
 
 	bulkOffer := tradingtest.NewOfferBuilder().
 		AddReceiveItem("item_premium", 10). // 10 premium items (600 value)
-		AddGiveItem("item_currency", 610).   // We give 610 currency units (normally we'd decline, but bonus makes it 610)
+		AddGiveItem("item_currency", 610).
+		// We give 610 currency units (normally we'd decline, but bonus makes it 610)
 		Build()
 
 	verdict, _ := tester.Run(context.Background(), bulkOffer)
@@ -110,7 +111,7 @@ func main() {
 
 	cheaterOffer := tradingtest.NewOfferBuilder().
 		AddReceiveItem("item_premium", 9). // 9 premium items (540 value)
-		AddGiveItem("item_currency", 549).  // They want 549 currency units
+		AddGiveItem("item_currency", 549). // They want 549 currency units
 		Build()
 
 	verdict, _ = tester.Run(context.Background(), cheaterOffer)
@@ -120,9 +121,9 @@ func main() {
 	fmt.Println("\n>>> Scenario 3: Mixed Currency Trade (1 Premium Item for 55 Currency + 1 Sub-Currency)")
 
 	mixedOffer := tradingtest.NewOfferBuilder().
-		AddGiveItem("item_premium", 1).          // Give 1 Premium Item (60)
-		AddReceiveItem("item_currency", 55).     // Receive 55 base currency units (55)
-		AddReceiveItem("item_sub_currency", 1).   // Receive 1 sub-currency unit (5)
+		AddGiveItem("item_premium", 1).         // Give 1 Premium Item (60)
+		AddReceiveItem("item_currency", 55).    // Receive 55 base currency units (55)
+		AddReceiveItem("item_sub_currency", 1). // Receive 1 sub-currency unit (5)
 		Build()
 
 	verdict, _ = tester.Run(context.Background(), mixedOffer)
@@ -210,4 +211,3 @@ func main() {
 	verdict, _ = tester.Run(context.Background(), jackpotOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 }
-

@@ -6,75 +6,54 @@
 Package steam provides the high-level, unified orchestrator (Client) for interacting
 with all aspects of the Steam ecosystem.
 
-It acts as the "brain" of the library, seamlessly integrating three distinct worlds:
-  - Persistent CM Connections: Low-latency communication via cmSocket (TCP/WebSockets).
-  - WebAPI Services: Standardized RPC calls over HTTP (Unified and Legacy services).
-  - Steam Community: Scraping and interacting with the steamcommunity.com website.
+# Key Components
 
-# Core Concepts
+  - [Client]: The central coordinator that manages socket connections, session lifecycles, and module registration.
+  - [SocketProvider]: Defines the minimal socket operations required to maintain a connection to Steam CMs.
+  - [Config]: Aggregates configurations for all underlying systems (Socket, Storage, HTTP).
+  - [State]: Represents the current lifecycle stage of the high-level client.
 
-The central piece of this package is the Client. Unlike lower-level packages, the
-Client manages the full lifecycle of a Steam session, from initial handshake to
-automatic WebAPI key registration.
+# Architecture
 
-1. Smart Routing:
-The Client implements the service.Doer interface. When a request is made, the Client
-automatically decides whether to send it via an active cmSocket connection (if the
-message is compatible) or fallback to a standard HTTP WebAPI call. This ensures
-maximum performance without manual transport management.
+The [Client] acts as an orchestrator, connecting the low-level socket, auth manager,
+web session, and individual domain modules. It implements [service.Doer],
+dynamically routing requests over TCP/WebSockets or HTTP depending on connection state.
 
-2. Automated Authentication:
-The login process is fully orchestrated. Calling ConnectAndLogin performs a
-multi-step sequence:
-  - Establishes a connection to a Steam Connection Manager (CM).
-  - Performs a secure LogOn (handling 2FA if required).
-  - Automatically exchanges Refresh Tokens for modern Access Tokens.
-  - Establishes a Web Session (cookies) for the Community site.
-  - Automatically fetches or registers a WebAPI Key if one is missing.
+# Basic Usage Example
 
-3. Extensible Module System:
-The library is designed to be extended through Modules. Modules can hook into
-the Client's lifecycle (Init, Start, Close) and react to authentication events
-(ModuleAuth). This allows for clean separation of logic like trading, chat, or
-market management.
+Here is a simple, self-contained example demonstrating how to initialize and run a client:
 
-4. Event-Driven Architecture:
-Built on a central Event Bus, the Client broadcasts state changes, network errors,
-and incoming Steam packets, allowing decoupled components to react to global events.
+	package main
 
-# Basic Usage
+	import (
+		"context"
+		"fmt"
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/steam"
+		"github.com/lemon4ksan/g-man/pkg/storage/memory"
+	)
 
-	cfg := steam.DefaultConfig()
-	client := steam.NewClient(cfg)
+	func main() {
+		ctx := context.Background()
+		logger := log.New(log.DefaultConfig(log.LevelInfo))
 
-	// Run the module system and cm refresh
-	if err := client.Run(); err != nil {
-		log.Fatal(err)
+		// Build the standard configuration
+		cfg := steam.DefaultConfig()
+		cfg.Storage = memory.New()
+
+		// Create a new Steam client
+		client, err := steam.NewClient(cfg, steam.WithLogger(logger))
+		if err != nil {
+			fmt.Println("Failed to create client:", err)
+			return
+		}
+		defer client.Close()
+
+		// Run the client's internal background systems
+		if err := client.Run(); err != nil {
+			fmt.Println("Failed to run client:", err)
+			return
+		}
 	}
-
-	// Perform a full login (cmSocket + Web)
-	details := &auth.LogOnDetails{
-		Username: "steam_user",
-		Password: "steam_password",
-	}
-
-	err := client.ConnectAndLogin(ctx, cmServer, details)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	go func() {
-		// Handle guard events...
-	}()
-
-	// Use the Smart Proxy to call a service
-	req := &pb.CPlayer_GetNickname_Request{Steamid: proto.Uint64(7656119...)}
-	res, err := service.Unified[pb.CPlayer_GetNickname_Response](ctx, client.Service(), req)
-
-# Concurrency and Thread Safety
-
-The Client is designed to be fully thread-safe. All state transitions use atomic
-operations, and internal maps are protected by RWMutexes. It is safe to use a
-single Client instance across multiple goroutines.
 */
 package steam

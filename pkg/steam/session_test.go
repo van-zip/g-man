@@ -10,11 +10,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
@@ -232,4 +234,104 @@ func TestSessionManager_CustomFactories(t *testing.T) {
 
 	assert.True(t, webCalled, "custom WebFactory should be invoked")
 	assert.True(t, commCalled, "custom CommunityFactory should be invoked")
+}
+
+func TestSessionManager_Refresh_SingleFlight(t *testing.T) {
+	c, m := setupTestClient(t)
+	ctx := context.Background()
+
+	m.web.On("Verify", mock.Anything).Return(false, nil).Once()
+	m.web.On("Verify", mock.Anything).Return(true, nil)
+
+	msess := new(mockSession)
+	msess.On("RefreshToken").Return("refresh_token_sf")
+	msess.On("SteamID").Return(uint64(12345))
+	msess.On("SetAccessToken", "new_token_sf").Return()
+	msess.On("AccessToken").Return("new_token_sf")
+	m.sock.On("Session").Return(msess)
+
+	tokenPb, _ := proto.Marshal(&pb.CAuthentication_AccessToken_GenerateForApp_Response{
+		AccessToken: proto.String("new_token_sf"),
+	})
+
+	m.http.On("Do", mock.Anything).Return(&http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"x-eresult": {"1"}},
+		Body:       io.NopCloser(bytes.NewBuffer(tokenPb)),
+	}, nil).Once()
+
+	m.web.On("Authenticate", mock.Anything, mock.Anything, "refresh_token_sf", "new_token_sf").Return(nil).Once()
+
+	var wg sync.WaitGroup
+
+	concurrentCount := 10
+	wg.Add(concurrentCount)
+
+	for range concurrentCount {
+		go func() {
+			defer wg.Done()
+
+			err := c.session.Refresh(ctx)
+			assert.NoError(t, err)
+		}()
+	}
+
+	wg.Wait()
+
+	m.http.AssertExpectations(t)
+	m.web.AssertExpectations(t)
+}
+
+func TestClient_DisableSocket(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableSocket = true
+
+	c, err := NewClient(cfg)
+	require.NoError(t, err)
+
+	defer c.Close()
+
+	assert.False(t, c.socket.IsConnected())
+
+	err = c.ConnectAndLogin(context.Background(), socket.CMServer{}, &auth.LogOnDetails{})
+	assert.ErrorContains(t, err, "socket transport is disabled")
+}
+
+type testDepModule struct {
+	module.Base
+}
+
+func TestModuleManager_TopologicalSort(t *testing.T) {
+	t.Run("Valid Dependencies Order", func(t *testing.T) {
+		m := &ModuleManager{
+			modules: make(map[string]module.Module),
+		}
+
+		m1 := &testDepModule{Base: module.New("module1").WithDeps("module2")}
+		m2 := &testDepModule{Base: module.New("module2")}
+
+		m.Add(m1)
+		m.Add(m2)
+
+		sorted, err := topologicalSort(m.modules)
+		require.NoError(t, err)
+		require.Len(t, sorted, 2)
+		assert.Equal(t, "module2", sorted[0].Name())
+		assert.Equal(t, "module1", sorted[1].Name())
+	})
+
+	t.Run("Circular Dependency Error", func(t *testing.T) {
+		m := &ModuleManager{
+			modules: make(map[string]module.Module),
+		}
+
+		m1 := &testDepModule{Base: module.New("module1").WithDeps("module2")}
+		m2 := &testDepModule{Base: module.New("module2").WithDeps("module2")}
+
+		m.Add(m1)
+		m.Add(m2)
+
+		_, err := topologicalSort(m.modules)
+		assert.ErrorContains(t, err, "circular dependency detected")
+	})
 }

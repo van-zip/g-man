@@ -14,6 +14,13 @@ The system is built around the "Base" pattern. Instead of implementing every met
 of the [Module] interface manually, developers should embed [Base] into their structs.
 This provides default implementations for lifecycle management, logging, and concurrency.
 
+# Dependencies
+
+Modules can declare explicit, declarative dependencies on other modules using the
+[Base.WithDeps] builder method. The client orchestrator uses these dependency lists
+to perform topological sorting during the initialization and startup phases,
+preventing race conditions and ensuring that dependent services are active.
+
 # Lifecycle
 
 A module goes through several strictly defined phases:
@@ -31,26 +38,47 @@ A module goes through several strictly defined phases:
 
 All modules share the same event bus and network socket. The [Base.Go] method
 ensures that goroutines are tracked and properly waited upon during shutdown,
-preventing "leaky" goroutines and race conditions during client restarts.
+preventing leaked goroutines and race conditions during client restarts.
 
 # Example: Creating a Simple Module
+
+Here is a complete, self-contained example of a custom module that declares
+dependencies and handles all errors during lifecycle hooks:
+
+	package main
+
+	import (
+		"context"
+		"time"
+
+		"github.com/lemon4ksan/g-man/pkg/log"
+		"github.com/lemon4ksan/g-man/pkg/steam/module"
+		"github.com/lemon4ksan/g-man/pkg/steam/protocol"
+		"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
+	)
 
 	type MyModule struct {
 		module.Base
 	}
 
 	func NewMyModule() *MyModule {
-		return &MyModule{Base: module.New("my_module")}
+		return &MyModule{
+			Base: module.New("my_module").WithDeps("chat"),
+		}
 	}
 
 	func (m *MyModule) Init(ctx module.InitContext) error {
-		m.Base.Init(ctx) // Always call Base.Init first
+		if err := m.Base.Init(ctx); err != nil {
+			return err
+		}
 		ctx.RegisterPacketHandler(enums.EMsg_ClientPersonaState, m.onPersonaState)
 		return nil
 	}
 
 	func (m *MyModule) Start(ctx context.Context) error {
-		m.Base.Start(ctx)
+		if err := m.Base.Start(ctx); err != nil {
+			return err
+		}
 		m.Go(m.myBackgroundLoop)
 		return nil
 	}
@@ -61,6 +89,8 @@ preventing "leaky" goroutines and race conditions during client restarts.
 
 	func (m *MyModule) myBackgroundLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:

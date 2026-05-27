@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -87,40 +88,42 @@ func (m *ModuleManager) Register(ctx context.Context, mod module.Module) error {
 	return nil
 }
 
-// InitAll initializes all registered modules.
+// InitAll initializes all registered modules in topological dependency order.
 func (m *ModuleManager) InitAll(ctx module.InitContext) error {
 	m.mu.RLock()
-
-	current := make([]module.Module, 0, len(m.modules))
-	for _, mod := range m.modules {
-		current = append(current, mod)
-	}
-
+	modules := make(map[string]module.Module, len(m.modules))
+	maps.Copy(modules, m.modules)
 	m.mu.RUnlock()
 
+	sorted, err := topologicalSort(modules)
+	if err != nil {
+		return fmt.Errorf("module dependencies: %w", err)
+	}
+
 	var errs []error
-	for _, mod := range current {
+	for _, mod := range sorted {
 		if err := mod.Init(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("failed to init module \"%s\": %w", mod.Name(), err))
+			errs = append(errs, fmt.Errorf("failed to init module %q: %w", mod.Name(), err))
 		}
 	}
 
 	return errors.Join(errs...)
 }
 
-// StartAll starts all registered modules.
+// StartAll starts all registered modules in topological dependency order.
 func (m *ModuleManager) StartAll(ctx context.Context) error {
 	m.mu.RLock()
-
-	currentModules := make([]module.Module, 0, len(m.modules))
-	for _, mod := range m.modules {
-		currentModules = append(currentModules, mod)
-	}
-
+	modules := make(map[string]module.Module, len(m.modules))
+	maps.Copy(modules, m.modules)
 	m.mu.RUnlock()
 
+	sorted, err := topologicalSort(modules)
+	if err != nil {
+		return fmt.Errorf("module dependencies: %w", err)
+	}
+
 	var errs []error
-	for _, mod := range currentModules {
+	for _, mod := range sorted {
 		if err := mod.Start(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("failed to start module %q: %w", mod.Name(), err))
 		}
@@ -129,19 +132,20 @@ func (m *ModuleManager) StartAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// StartAuthedAll starts all registered modules that implement the Auth interface.
+// StartAuthedAll starts all registered modules that implement the Auth interface in topological dependency order.
 func (m *ModuleManager) StartAuthedAll(ctx context.Context, actx module.AuthContext) error {
 	m.mu.RLock()
-
-	mods := make([]module.Module, 0, len(m.modules))
-	for _, mod := range m.modules {
-		mods = append(mods, mod)
-	}
-
+	modules := make(map[string]module.Module, len(m.modules))
+	maps.Copy(modules, m.modules)
 	m.mu.RUnlock()
 
+	sorted, err := topologicalSort(modules)
+	if err != nil {
+		return fmt.Errorf("module dependencies: %w", err)
+	}
+
 	var errs []error
-	for _, mod := range mods {
+	for _, mod := range sorted {
 		if authedMod, ok := mod.(module.Auth); ok {
 			if err := authedMod.StartAuthed(ctx, actx); err != nil {
 				errs = append(errs, fmt.Errorf("module %q failed StartAuthed: %w", mod.Name(), err))
@@ -150,4 +154,53 @@ func (m *ModuleManager) StartAuthedAll(ctx context.Context, actx module.AuthCont
 	}
 
 	return errors.Join(errs...)
+}
+
+func topologicalSort(modules map[string]module.Module) ([]module.Module, error) {
+	order := make([]module.Module, 0, len(modules))
+	visited := make(map[string]int) // 0 = unvisited, 1 = visiting, 2 = visited
+
+	var visit func(name string) error
+
+	visit = func(name string) error {
+		state := visited[name]
+		if state == 1 {
+			return fmt.Errorf("circular dependency detected involving module %q", name)
+		}
+
+		if state == 2 {
+			return nil
+		}
+
+		visited[name] = 1
+
+		mod, ok := modules[name]
+		if ok {
+			if depMod, ok := mod.(module.Dependent); ok {
+				for _, dep := range depMod.Dependencies() {
+					if err := visit(dep); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		visited[name] = 2
+
+		if ok {
+			order = append(order, mod)
+		}
+
+		return nil
+	}
+
+	for name := range modules {
+		if visited[name] == 0 {
+			if err := visit(name); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return order, nil
 }

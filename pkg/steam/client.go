@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
@@ -33,6 +35,9 @@ import (
 
 // NewReadyClient creates a client, configures a default logger (if none provided),
 // connects to the optimal CM server and performs the logon flow in one step.
+//
+// It returns an error if CM server discovery fails, if the connection to the
+// CM server fails, or if the login sequence is rejected by Steam.
 func NewReadyClient(ctx context.Context, cfg Config, details *auth.LogOnDetails, opts ...Option) (*Client, error) {
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 	opts = append([]Option{WithLogger(logger)}, opts...)
@@ -88,16 +93,28 @@ type SocketProvider interface {
 
 // Config aggregates configurations for all core subsystems and standard modules.
 type Config struct {
-	Socket           socket.Config
-	Storage          storage.Provider
-	HTTP             rest.HTTPDoer // Optional custom HTTP client
-	REST             *rest.Client  // Optional custom REST client (overrides HTTP if provided)
-	Device           *auth.DeviceConfig
-	Registry         *api.UnmarshalRegistry
-	Bus              *bus.Bus
-	ProxyURL         string // Global proxy URL (affects both HTTP and Socket)
-	WebFactory       WebSessionFactory
+	// Socket holds the socket connection parameters.
+	Socket socket.Config
+	// Storage defines the persistent storage provider for credentials.
+	Storage storage.Provider
+	// HTTP defines an optional, custom raw HTTP client.
+	HTTP rest.HTTPDoer
+	// REST defines an optional custom REST client.
+	REST *rest.Client
+	// Device specifies device details used during credential verification.
+	Device *auth.DeviceConfig
+	// Registry defines the unmarshaling registry for WebAPI and socket decoding.
+	Registry *api.UnmarshalRegistry
+	// Bus is the central event bus.
+	Bus *bus.Bus
+	// ProxyURL defines a global proxy URL affecting all traffic.
+	ProxyURL string
+	// WebFactory constructs a webSession instance.
+	WebFactory WebSessionFactory
+	// CommunityFactory constructs a communityClient instance.
 	CommunityFactory CommunityClientFactory
+	// DisableSocket disables the socket transport layer, forcing WebAPI-only mode.
+	DisableSocket bool
 }
 
 // DefaultConfig returns the baseline configuration for core systems.
@@ -151,6 +168,12 @@ func WithModule(m module.Module) Option {
 }
 
 // Client acts as the central hub connecting the cmSocket, Auth, WebSession, and Modules.
+//
+// It orchestrates low-level communication via [SocketProvider] and HTTP transport,
+// manages authentication state using [SessionManager], and select-routes requests
+// using [ServiceRouter].
+//
+// Create new instances of Client using [NewClient] or [NewReadyClient].
 type Client struct {
 	cfg    Config
 	logger log.Logger
@@ -214,7 +237,12 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		cfg.Socket.Connector.ProxyURL = cfg.ProxyURL
 	}
 
-	c.socket = socket.NewSocket(cfg.Socket, c.logger)
+	if cfg.DisableSocket {
+		c.socket = noopSocketProvider{}
+	} else {
+		c.socket = socket.NewSocket(cfg.Socket, c.logger)
+	}
+
 	c.session = NewSessionManager(cfg, c.bus, c.logger, c.socket)
 	c.router = NewServiceRouter(c.session, c.socket)
 
@@ -320,7 +348,10 @@ func (c *Client) SteamID() id.ID {
 }
 
 // Do implements the [service.Doer] interface.
-// It automatically selects between SocketProvider and HTTP transport and handles silent token refresh.
+// It automatically selects between [SocketProvider] and HTTP transport and handles silent token refresh.
+//
+// It returns [ErrNotRunning] if the client's background systems have not been started
+// using the [Client.Run] method.
 func (c *Client) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	if c.State() != StateRunning {
 		return nil, ErrNotRunning
@@ -330,9 +361,16 @@ func (c *Client) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) 
 }
 
 // ConnectAndLogin connects to the CM and performs the login sequence.
+//
+// It returns an error if the client is already closed, if socket is disabled, if connection or handshake
+// fails, if login credentials are rejected, or if any authorized modules fail to start.
 func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, details *auth.LogOnDetails) error {
 	if c.State() == StateClosed {
 		return module.ErrClosed
+	}
+
+	if c.cfg.DisableSocket {
+		return errors.New("socket transport is disabled")
 	}
 
 	if err := c.session.LogOn(ctx, server, details); err != nil {
@@ -372,3 +410,52 @@ func (c *Client) Close() error {
 func (c *Client) Wait() {
 	<-c.closed
 }
+
+type noopSocketProvider struct{}
+
+func (noopSocketProvider) IsConnected() bool       { return false }
+func (noopSocketProvider) Session() socket.Session { return nil }
+func (noopSocketProvider) Connect(ctx context.Context, server socket.CMServer) error {
+	return errors.New("socket transport disabled")
+}
+
+func (noopSocketProvider) LogOn(ctx context.Context, payload []byte) error {
+	return errors.New("socket transport disabled")
+}
+func (noopSocketProvider) SetEncryptionKey(key []byte) bool { return false }
+func (noopSocketProvider) Send(ctx context.Context, build socket.PayloadBuilder, opts ...socket.SendOption) error {
+	return errors.New("socket transport disabled")
+}
+
+func (noopSocketProvider) SendSync(
+	ctx context.Context,
+	build socket.PayloadBuilder,
+	opts ...socket.SendOption,
+) (*protocol.Packet, error) {
+	return nil, errors.New("socket transport disabled")
+}
+
+func (noopSocketProvider) SendProto(
+	ctx context.Context,
+	eMsg enums.EMsg,
+	req proto.Message,
+	opts ...socket.SendOption,
+) error {
+	return errors.New("socket transport disabled")
+}
+
+func (noopSocketProvider) SendRaw(
+	ctx context.Context,
+	eMsg enums.EMsg,
+	payload []byte,
+	opts ...socket.SendOption,
+) error {
+	return errors.New("socket transport disabled")
+}
+func (noopSocketProvider) RegisterMsgHandler(eMsg enums.EMsg, handler socket.Handler)   {}
+func (noopSocketProvider) RegisterServiceHandler(method string, handler socket.Handler) {}
+func (noopSocketProvider) StartHeartbeat(time.Duration) error {
+	return errors.New("socket transport disabled")
+}
+func (noopSocketProvider) Disconnect() error { return nil }
+func (noopSocketProvider) Close() error      { return nil }

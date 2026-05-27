@@ -54,6 +54,9 @@ type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer rest.HTTP
 type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient
 
 // SessionManager manages the session state of the client.
+//
+// It handles OAuth2 token refreshing, session validation, and OIDC synchronization
+// for web domains. Use [NewSessionManager] to create new instances of the manager.
 type SessionManager struct {
 	mu sync.RWMutex
 
@@ -76,6 +79,10 @@ type SessionManager struct {
 
 	verifyTicker *time.Ticker
 	closed       atomic.Bool
+
+	refreshMu   sync.Mutex
+	refreshing  bool
+	refreshCond *sync.Cond
 }
 
 // NewSessionManager creates a new session manager.
@@ -96,6 +103,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 		registry:     cfg.Registry,
 		http:         cfg.HTTP,
 	}
+	c.refreshCond = sync.NewCond(&c.refreshMu)
 
 	if c.storage == nil {
 		c.storage = memory.New()
@@ -197,11 +205,37 @@ func (c *SessionManager) LogOn(
 }
 
 // Refresh is the central method for refreshing all tokens (Access and Web tokens).
+// It is protected by single-flight double-checked locking to avoid Thundering Herd.
 func (c *SessionManager) Refresh(ctx context.Context) error {
 	if c.closed.Load() {
 		return module.ErrClosed
 	}
 
+	c.refreshMu.Lock()
+	if c.refreshing {
+		for c.refreshing {
+			c.refreshCond.Wait()
+		}
+
+		c.refreshMu.Unlock()
+
+		return nil
+	}
+
+	c.refreshing = true
+	c.refreshMu.Unlock()
+
+	err := c.doRefresh(ctx)
+
+	c.refreshMu.Lock()
+	c.refreshing = false
+	c.refreshCond.Broadcast()
+	c.refreshMu.Unlock()
+
+	return err
+}
+
+func (c *SessionManager) doRefresh(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

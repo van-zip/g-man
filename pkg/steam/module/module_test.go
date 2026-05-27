@@ -157,3 +157,12 @@ func TestBase_State(t *testing.T) {
 		t.Error("state was not updated")
 	}
 }
+
+func TestBase_WithDeps(t *testing.T) {
+	base := New("test").WithDeps("dep1", "dep2")
+
+	deps := base.Dependencies()
+	if len(deps) != 2 || deps[0] != "dep1" || deps[1] != "dep2" {
+		t.Errorf("unexpected dependencies: %v", deps)
+	}
+}

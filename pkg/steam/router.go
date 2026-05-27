@@ -33,6 +33,9 @@ const (
 type RouteMatcher func(req *tr.Request, socketConnected bool) TransportType
 
 // ServiceRouter encapsulates transport selection and automatic retries logic.
+//
+// It routes requests over TCP/WebSockets or HTTP based on connectivity state.
+// Use [NewServiceRouter] to create new instances of the router.
 type ServiceRouter struct {
 	session sessionRefresher
 	socket  SocketProvider

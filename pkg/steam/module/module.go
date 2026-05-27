@@ -30,7 +30,7 @@ var (
 )
 
 // InitContext provides the module with access to the necessary client resources
-// during the initialization phase, without exposing lifecycle management methods (Close, Connect).
+// during the initialization phase, without exposing lifecycle management methods.
 type InitContext interface {
 	// Storage returns the configured storage provider.
 	Storage() storage.Provider
@@ -75,7 +75,7 @@ type AuthContext interface {
 	SteamID() id.ID
 }
 
-// Module defines the contract for pluggable extensions (e.g., Trade, Chat, GC).
+// Module defines the contract for pluggable extensions.
 // All modules must implement this interface to be loaded by the Steam client.
 type Module interface {
 	// Name returns a unique identifier for the module.
@@ -90,8 +90,14 @@ type Module interface {
 	Start(ctx context.Context) error
 }
 
+// Dependent is an optional interface modules can implement to declare their dependencies.
+type Dependent interface {
+	Module
+	Dependencies() []string
+}
+
 // Auth defines the contract for pluggable extensions that require authorized clients
-// and depend on a valid user session (cookies, steamID).
+// and depend on a valid user session.
 type Auth interface {
 	Module
 
@@ -101,13 +107,13 @@ type Auth interface {
 }
 
 // Base provides a standard implementation of the module lifecycle.
-// It handles boilerplate like logging setup, event bus storage, and background
-// task synchronization. Other modules should embed it:
 //
-//	type YourModule struct {
-//		module.Base
-//		... specific fields
-//	}
+// It handles boilerplate like logging setup, event bus storage, and background
+// task synchronization. The [Base.State] and [Base.Wg] fields are pointer-based,
+// which prevents Go's non-copiable synchronization structures (like [sync.WaitGroup])
+// from being copied by value.
+//
+// Create new instances of Base using the [New] constructor.
 type Base struct {
 	// NameStr is the unique name of the module used for logging.
 	NameStr string
@@ -118,26 +124,47 @@ type Base struct {
 	Bus *bus.Bus
 
 	// State is an atomic status indicator for the module.
-	State atomic.Int32
+	State *atomic.Int32
 
 	// Ctx is the module's internal context, cancelled when the module stops.
 	Ctx context.Context
 	// Cancel stops all background tasks associated with this module.
 	Cancel context.CancelFunc
 	// Wg tracks background goroutines to ensure graceful shutdown.
-	Wg sync.WaitGroup
+	Wg *sync.WaitGroup
+
+	// Deps is a list of names of other modules that this module depends on.
+	Deps []string
 }
 
 // New creates a new Base module with the given name.
+// Configure dependencies on the returned module using [Base.WithDeps].
 func New(name string) Base {
 	return Base{
 		NameStr: name,
 		Logger:  log.Discard,
+		State:   new(atomic.Int32),
+		Wg:      new(sync.WaitGroup),
 	}
 }
 
 // Name returns the module identifier.
 func (b *Base) Name() string { return b.NameStr }
+
+// Dependencies returns the list of module names that this module depends on.
+func (b *Base) Dependencies() []string {
+	return b.Deps
+}
+
+// WithDeps sets the dependencies for the module and returns the base module.
+//
+// If no arguments are passed, the dependencies slice is initialized as empty.
+// Since the base module uses pointer-based synchronization fields, this builder
+// is safe to call and copy by value.
+func (b Base) WithDeps(deps ...string) Base {
+	b.Deps = deps
+	return b
+}
 
 // Start initializes the module's lifecycle context.
 func (b *Base) Start(ctx context.Context) error {
@@ -146,9 +173,20 @@ func (b *Base) Start(ctx context.Context) error {
 }
 
 // Init sets up common dependencies like Logger and Bus.
+//
+// The init argument must not be nil. If nil is passed, this method will panic
+// during initialization of the Logger and Bus.
 func (b *Base) Init(ctx InitContext) error {
 	b.Logger = ctx.Logger().With(log.Module(b.NameStr))
 	b.Bus = ctx.Bus()
+
+	if b.State == nil {
+		b.State = new(atomic.Int32)
+	}
+
+	if b.Wg == nil {
+		b.Wg = new(sync.WaitGroup)
+	}
 
 	if b.Ctx == nil || b.Ctx.Err() != nil {
 		// For tests where Start might not be called explicitly
@@ -161,20 +199,29 @@ func (b *Base) Init(ctx InitContext) error {
 }
 
 // Close gracefully shuts down the module by cancelling its context and waiting
-// for all spawned goroutines (via Go() method) to finish.
+// for all spawned goroutines to finish.
 func (b *Base) Close() error {
 	if b.Cancel != nil {
 		b.Cancel()
 	}
 
-	b.Wg.Wait()
+	if b.Wg != nil {
+		b.Wg.Wait()
+	}
 
 	return nil
 }
 
 // Go spawns a background goroutine that is tracked by the module's WaitGroup.
-// The provided function should respect the module's context (b.Ctx) for cancellation.
+//
+// The provided function fn must not be nil. If nil is passed, Go panics
+// inside the spawned goroutine.
+// The function should respect the module's context for cancellation.
 func (b *Base) Go(fn func(ctx context.Context)) {
+	if b.Wg == nil {
+		b.Wg = new(sync.WaitGroup)
+	}
+
 	b.Wg.Go(func() {
 		fn(b.Ctx)
 	})

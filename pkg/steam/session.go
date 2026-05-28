@@ -136,7 +136,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 		auth.NewAuthenticationService(c.unified, device),
 		bus,
 		auth.WithLogger(c.logger),
-		auth.WithStorage(c.storage.Auth()),
+		auth.WithStorage(auth.NewKVStore(c.storage.KV("auth"))),
 	)
 
 	socketTransport := tr.NewSocketTransport(sock)

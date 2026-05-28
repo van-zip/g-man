@@ -13,14 +13,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 )
 
 type dataLayout struct {
-	Auth     map[string]string            `json:"auth"`
-	Machines map[string][]byte            `json:"machines"`
-	KV       map[string]map[string][]byte `json:"kv"`
+	KV map[string]map[string][]byte `json:"kv"`
 }
 
 // Provider implements [storage.Provider], persisting all data in a single JSON file.
@@ -42,8 +39,7 @@ func New(path string) (*Provider, error) {
 	p := &Provider{
 		path: path,
 		data: dataLayout{
-			Auth: make(map[string]string),
-			KV:   make(map[string]map[string][]byte),
+			KV: make(map[string]map[string][]byte),
 		},
 	}
 
@@ -52,11 +48,6 @@ func New(path string) (*Provider, error) {
 	}
 
 	return p, nil
-}
-
-// Auth returns an [auth.Store] dedicated to authentication data.
-func (p *Provider) Auth() auth.Store {
-	return &authStore{p}
 }
 
 // KV returns a generic key-value store for the given namespace.
@@ -98,67 +89,6 @@ func (p *Provider) save() error {
 	}
 
 	return os.Rename(tmpPath, p.path)
-}
-
-type authStore struct{ p *Provider }
-
-func (s *authStore) SaveRefreshToken(ctx context.Context, accountName, token string) error {
-	s.p.mu.Lock()
-	defer s.p.mu.Unlock()
-
-	s.p.data.Auth[accountName] = token
-
-	return s.p.save()
-}
-
-func (s *authStore) GetRefreshToken(ctx context.Context, accountName string) (string, error) {
-	s.p.mu.RLock()
-	defer s.p.mu.RUnlock()
-
-	token, ok := s.p.data.Auth[accountName]
-	if !ok {
-		return "", storage.ErrNotFound
-	}
-
-	return token, nil
-}
-
-func (s *authStore) SaveMachineID(ctx context.Context, accountName string, machineID []byte) error {
-	s.p.mu.Lock()
-	defer s.p.mu.Unlock()
-
-	if s.p.data.Machines == nil {
-		s.p.data.Machines = make(map[string][]byte)
-	}
-
-	s.p.data.Machines[accountName] = append([]byte(nil), machineID...)
-
-	return s.p.save()
-}
-
-func (s *authStore) GetMachineID(ctx context.Context, accountName string) ([]byte, error) {
-	s.p.mu.RLock()
-	defer s.p.mu.RUnlock()
-
-	if s.p.data.Machines == nil {
-		return nil, storage.ErrNotFound
-	}
-
-	machineID, ok := s.p.data.Machines[accountName]
-	if !ok {
-		return nil, storage.ErrNotFound
-	}
-
-	return append([]byte(nil), machineID...), nil
-}
-
-func (s *authStore) Clear(ctx context.Context, accountName string) error {
-	s.p.mu.Lock()
-	defer s.p.mu.Unlock()
-
-	delete(s.p.data.Auth, accountName)
-
-	return s.p.save()
 }
 
 type kvStore struct {

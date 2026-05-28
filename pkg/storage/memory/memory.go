@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 )
 
@@ -22,27 +21,17 @@ import (
 // permanently when the application shuts down.
 // Create new instances of Provider using the [New] constructor.
 type Provider struct {
-	authStore *authStore
-	kvStores  map[string]*kvStore
-	ttl       *TTLCache
-	mu        sync.Mutex
+	kvStores map[string]*kvStore
+	ttl      *TTLCache
+	mu       sync.Mutex
 }
 
 // New creates a new in-memory storage provider.
 func New() *Provider {
 	return &Provider{
-		authStore: &authStore{
-			tokens:   make(map[string]string),
-			machines: make(map[string][]byte),
-		},
 		kvStores: make(map[string]*kvStore),
 		ttl:      NewTTLCache(),
 	}
-}
-
-// Auth returns the authentication store.
-func (p *Provider) Auth() auth.Store {
-	return p.authStore
 }
 
 // KV returns the key-value store for the given namespace.
@@ -67,66 +56,6 @@ func (p *Provider) TTLCache() *TTLCache {
 
 // Close closes the provider.
 func (p *Provider) Close() error {
-	return nil
-}
-
-// --- Auth Store Implementation ---
-
-type authStore struct {
-	mu       sync.RWMutex
-	tokens   map[string]string
-	machines map[string][]byte
-}
-
-// SaveRefreshToken saves the refresh token for the given account name.
-func (s *authStore) SaveRefreshToken(ctx context.Context, accountName, token string) error {
-	s.mu.Lock()
-	s.tokens[accountName] = token
-	s.mu.Unlock()
-
-	return nil
-}
-
-// GetRefreshToken retrieves the refresh token for the given account name.
-func (s *authStore) GetRefreshToken(ctx context.Context, accountName string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if token, ok := s.tokens[accountName]; ok {
-		return token, nil
-	}
-
-	return "", storage.ErrNotFound
-}
-
-// SaveMachineID saves the machine ID for the given account name.
-func (s *authStore) SaveMachineID(ctx context.Context, accountName string, machineID []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.machines[accountName] = append([]byte(nil), machineID...)
-
-	return nil
-}
-
-// GetMachineID retrieves the machine ID for the given account name.
-func (s *authStore) GetMachineID(ctx context.Context, accountName string) ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if machineID, ok := s.machines[accountName]; ok {
-		return machineID, nil
-	}
-
-	return nil, storage.ErrNotFound
-}
-
-// Clear removes all stored credentials for the given account name.
-func (s *authStore) Clear(ctx context.Context, accountName string) error {
-	s.mu.Lock()
-	delete(s.tokens, accountName)
-	s.mu.Unlock()
-
 	return nil
 }
 

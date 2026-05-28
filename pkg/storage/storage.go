@@ -7,8 +7,6 @@ package storage
 import (
 	"context"
 	"errors"
-
-	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 )
 
 // ErrNotFound is returned when a requested key does not exist in the storage.
@@ -16,12 +14,9 @@ var ErrNotFound = errors.New("storage: key not found")
 
 // Provider is the master interface that a storage backend must implement.
 //
-// It acts as a factory for domain-specific stores such as [auth.Store] and [KV].
+// It acts as a factory for generic [KV] stores.
 // Built-in implementations include [jsonfile.Provider] and [memory.Provider].
 type Provider interface {
-	// Auth returns a store dedicated to authentication data (tokens, machine IDs).
-	Auth() auth.Store
-
 	// KV returns a generic key-value store for arbitrary data, isolated by the namespace.
 	KV(namespace string) KV
 

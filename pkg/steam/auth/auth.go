@@ -27,6 +27,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/dispatcher"
+	"github.com/lemon4ksan/g-man/pkg/storage"
 )
 
 // ProtocolVersion is the current version of the Steam client protocol used for logon.
@@ -108,6 +109,46 @@ type Store interface {
 	SaveMachineID(ctx context.Context, accountName string, machineID []byte) error
 	GetMachineID(ctx context.Context, accountName string) ([]byte, error)
 	Clear(ctx context.Context, accountName string) error
+}
+
+// KVStore wraps a KV store to satisfy the Store interface.
+type KVStore struct {
+	kv storage.KV
+}
+
+// NewKVStore creates a new Store backed by a generic KV store.
+func NewKVStore(kv storage.KV) Store {
+	return &KVStore{kv: kv}
+}
+
+// SaveRefreshToken saves the refresh token for the given account.
+func (s *KVStore) SaveRefreshToken(ctx context.Context, accountName, token string) error {
+	return s.kv.Set(ctx, "refresh_token:"+accountName, []byte(token))
+}
+
+// GetRefreshToken retrieves the refresh token for the given account.
+func (s *KVStore) GetRefreshToken(ctx context.Context, accountName string) (string, error) {
+	b, err := s.kv.Get(ctx, "refresh_token:"+accountName)
+	if err != nil {
+		return "", err
+	}
+
+	return string(b), nil
+}
+
+// SaveMachineID saves the machine ID for the given account.
+func (s *KVStore) SaveMachineID(ctx context.Context, accountName string, machineID []byte) error {
+	return s.kv.Set(ctx, "machine_id:"+accountName, machineID)
+}
+
+// GetMachineID retrieves the machine ID for the given account.
+func (s *KVStore) GetMachineID(ctx context.Context, accountName string) ([]byte, error) {
+	return s.kv.Get(ctx, "machine_id:"+accountName)
+}
+
+// Clear removes all stored credentials for the given account.
+func (s *KVStore) Clear(ctx context.Context, accountName string) error {
+	return s.kv.Delete(ctx, "refresh_token:"+accountName)
 }
 
 // Option defines a functional configuration option for Authenticator.

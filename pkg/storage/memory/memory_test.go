@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 	"github.com/lemon4ksan/g-man/pkg/storage/memory"
 )
@@ -20,7 +21,7 @@ import (
 func TestAuthStore(t *testing.T) {
 	ctx := context.Background()
 	p := memory.New()
-	store := p.Auth()
+	store := auth.NewKVStore(p.KV("auth"))
 
 	t.Run("Token Operations", func(t *testing.T) {
 		account := "user1"

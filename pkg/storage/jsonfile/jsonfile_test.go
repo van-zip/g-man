@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 	"github.com/lemon4ksan/g-man/pkg/storage/jsonfile"
 )
@@ -28,7 +29,7 @@ func TestProvider_Persistence(t *testing.T) {
 	account := "test_user"
 	token := "v1_refresh_token_xyz"
 
-	err = p1.Auth().SaveRefreshToken(ctx, account, token)
+	err = auth.NewKVStore(p1.KV("auth")).SaveRefreshToken(ctx, account, token)
 	require.NoError(t, err, "failed to save token")
 
 	err = p1.Close()
@@ -38,7 +39,7 @@ func TestProvider_Persistence(t *testing.T) {
 	p2, err := jsonfile.New(dbPath)
 	require.NoError(t, err, "failed to reload provider")
 
-	got, err := p2.Auth().GetRefreshToken(ctx, account)
+	got, err := auth.NewKVStore(p2.KV("auth")).GetRefreshToken(ctx, account)
 	assert.NoError(t, err, "failed to get token after reload")
 	assert.Equal(t, token, got)
 }
@@ -51,7 +52,7 @@ func TestAuthStore_MachineID(t *testing.T) {
 	p, err := jsonfile.New(dbPath)
 	require.NoError(t, err)
 
-	store := p.Auth()
+	store := auth.NewKVStore(p.KV("auth"))
 
 	account := "bot_01"
 	machineID := []byte{0xDE, 0xAD, 0xBE, 0xEF}

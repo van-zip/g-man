@@ -17,6 +17,49 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/guard"
 )
 
+var (
+	// WithModule returns a Steam client option that registers the guard module with the client.
+	WithModule = guard.WithModule
+	// From returns the guardian module from the client.
+	From = guard.From
+)
+
+// ConfirmationType is the type of confirmation to accept.
+type ConfirmationType = guard.ConfirmationType
+
+const (
+	// ConfTypeGeneric is a catch-all for unknown confirmation types.
+	// Rarely used in practice.
+	ConfTypeGeneric = guard.ConfTypeGeneric
+
+	// ConfTypeTrade represents a trade offer confirmation.
+	// Generated when someone sends you a trade offer, or you send one.
+	// These are the most common confirmations for trading bots.
+	ConfTypeTrade = guard.ConfTypeTrade
+
+	// ConfTypeMarket represents a Steam Community Market listing confirmation.
+	// Generated when listing or buying items on the market.
+	ConfTypeMarket = guard.ConfTypeMarket
+
+	// ConfTypeLogin represents a login from a new device confirmation.
+	// Generated when someone tries to log in from an unrecognized device.
+	ConfTypeLogin = guard.ConfTypeLogin
+
+	// ConfTypeAccountChange represents account settings changes.
+	// Generated for sensitive actions like password changes, email changes, etc.
+	ConfTypeAccountChange = guard.ConfTypeAccountChange
+)
+
+// DefaultGuardConfig returns a default guard configuration with the given shared secret, identity secret, and device ID.
+func DefaultGuardConfig(sharedSecret, identitySecret, deviceID string) guard.Config {
+	guardCfg := guard.DefaultConfig()
+	guardCfg.SharedSecret = sharedSecret
+	guardCfg.IdentitySecret = identitySecret
+	guardCfg.DeviceID = deviceID
+
+	return guardCfg
+}
+
 // BehaviorName is the unique name of the guard behavior.
 const BehaviorName = "guard_manager"
 

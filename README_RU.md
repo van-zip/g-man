@@ -150,14 +150,17 @@ func main() {
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 
 	// 2. Инициализируем оркестратор с базовыми модулями
-	client, _ := steam.NewClient(steam.Config{Storage: store},
+	config := steam.DefaultConfig()
+	config.Store = store
+
+	client, _ := steam.NewClient(config,
 		steam.WithLogger(logger),
-		webtrading.WithModule(webtrading.Config{}),
+		webtrading.WithModule(webtrading.DefaultConfig()),
 	)
 	defer client.Close()
 
 	// 3. Подключаем торговый менеджер сделок
-	webTradeManager := client.Module("trading").(*webtrading.Manager)
+	webTradeManager := webtrading.From(client)
 	
 	// Настройте ваш движок и обработчик здесь...
 	// Для торговли в TF2 вы можете подключить пакет g-man-tf2 прямо на этом этапе!

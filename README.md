@@ -150,14 +150,17 @@ func main() {
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 
 	// 2. Instantiate the orchestrator with core modules
-	client, _ := steam.NewClient(steam.Config{Storage: store},
+	config := steam.DefaultConfig()
+	config.Store = store
+
+	client, _ := steam.NewClient(config,
 		steam.WithLogger(logger),
-		webtrading.WithModule(webtrading.Config{}),
+		webtrading.WithModule(webtrading.DefaultConfig()),
 	)
 	defer client.Close()
 
 	// 3. Connect the Engine to the Trade Manager
-	webTradeManager := client.Module("trading").(*webtrading.Manager)
+	webTradeManager := webtrading.From(client)
 	
 	// Set up your trading engine and handler...
 	// For TF2 features, you would plug in the g-man-tf2 suite here!

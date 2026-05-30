@@ -265,18 +265,20 @@ func (a *Authenticator) LogOn(ctx context.Context, details *LogOnDetails, server
 
 	// Enrich the authenticator's logger with details.AccountName and SteamID if available
 	var logFields []log.Field
-	if details.AccountName != "" && enrichedAccount == "" {
-		logFields = append(logFields, log.String("account", details.AccountName))
-		enrichedAccount = details.AccountName
-	}
+	if details != nil {
+		if details.AccountName != "" && enrichedAccount == "" {
+			logFields = append(logFields, log.String("account", details.AccountName))
+			enrichedAccount = details.AccountName
+		}
 
-	if details.SteamID != 0 && enrichedSteamID == 0 {
-		logFields = append(logFields, log.SteamID(details.SteamID.Uint64()))
-		enrichedSteamID = details.SteamID
-	}
+		if details.SteamID != 0 && enrichedSteamID == 0 {
+			logFields = append(logFields, log.SteamID(details.SteamID.Uint64()))
+			enrichedSteamID = details.SteamID
+		}
 
-	if len(logFields) > 0 {
-		a.logger = a.logger.With(logFields...)
+		if len(logFields) > 0 {
+			a.logger = a.logger.With(logFields...)
+		}
 	}
 
 	if err := a.validate(details); err != nil {

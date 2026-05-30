@@ -385,7 +385,7 @@ func TestConnector_MonitorConnection_Channels(t *testing.T) {
 
 	select {
 	case msg := <-c.C():
-		assert.Equal(t, []byte("payload"), msg)
+		assert.Equal(t, []byte("payload"), msg.Data)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timeout waiting for message")
 	}

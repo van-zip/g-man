@@ -228,7 +228,7 @@ func (m *Manager) Close() error {
 // SetOfferHandler injects the business logic for processing trade offers.
 func (m *Manager) SetOfferHandler(ctx context.Context, handler processor.OfferHandler, bp processor.BackpackProvider) {
 	m.mu.Lock()
-	m.processor = processor.NewProcessor(m, bp, handler, processor.WithLogger(m.Logger))
+	m.processor = processor.New(m, bp, handler, processor.WithLogger(m.Logger))
 	m.mu.Unlock()
 
 	// If the module has already started, start the processor immediately.

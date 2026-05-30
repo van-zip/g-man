@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/notifications"
@@ -107,6 +108,8 @@ func (p *Processor) handleOffer(ctx context.Context, offer *trading.TradeOffer) 
 
 	p.lockItems(offer)
 	defer p.unlockItems(offer)
+
+	ctx = protocol.WithTransportType(ctx, protocol.TransportWebAPI)
 
 	verdict, err := p.engine.Process(ctx, offer)
 	if err != nil {

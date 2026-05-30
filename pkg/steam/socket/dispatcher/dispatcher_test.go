@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -294,4 +295,46 @@ func TestDispatcher_Close(t *testing.T) {
 	d, _, _ := setup(t)
 	err := d.Close()
 	assert.NoError(t, err)
+}
+
+func TestDispatcher_Multi_ReceivedAtPropagation(t *testing.T) {
+	d, _, _ := setup(t)
+
+	// Create nested packet bytes
+	subPkt := &protocol.Packet{
+		EMsg:    enums.EMsg_ClientHeartBeat,
+		IsProto: false,
+		Header:  &protocol.MsgHdrExtended{EMsg: enums.EMsg_ClientHeartBeat},
+		Payload: []byte("heartbeat"),
+	}
+	subBuf := new(bytes.Buffer)
+	err := subPkt.SerializeTo(subBuf)
+	assert.NoError(t, err)
+
+	// Wrap inside CMsgMulti message body
+	bodyBuf := new(bytes.Buffer)
+	err = binary.Write(bodyBuf, binary.LittleEndian, uint32(subBuf.Len()))
+	assert.NoError(t, err)
+	bodyBuf.Write(subBuf.Bytes())
+
+	multiBytes, err := proto.Marshal(&pb.CMsgMulti{
+		MessageBody: bodyBuf.Bytes(),
+	})
+	assert.NoError(t, err)
+
+	now := time.Now()
+	multiPkt := &protocol.Packet{
+		EMsg:       enums.EMsg_Multi,
+		Payload:    multiBytes,
+		ReceivedAt: now,
+	}
+
+	var called atomic.Bool
+	d.RegisterMsgHandler(enums.EMsg_ClientHeartBeat, func(p *protocol.Packet) {
+		assert.Equal(t, now, p.ReceivedAt)
+		called.Store(true)
+	})
+
+	d.Dispatch(multiPkt)
+	assert.True(t, called.Load())
 }

@@ -230,3 +230,16 @@ func TestPacket_SerializeTo_HeaderError(t *testing.T) {
 	err := p.SerializeTo(&faultyIO{})
 	assert.Error(t, err)
 }
+
+func TestTransportMappingRegistry(t *testing.T) {
+	// 1. Check default mappings
+	assert.Equal(t, protocol.TransportTCP, protocol.MapConnectionToTransport("TCP"))
+	assert.Equal(t, protocol.TransportWS, protocol.MapConnectionToTransport("WS"))
+
+	// 2. Check fallback for unregistered transport
+	assert.Equal(t, protocol.TransportType("CUSTOM"), protocol.MapConnectionToTransport("CUSTOM"))
+
+	// 3. Register custom mapping and verify OCP
+	protocol.RegisterTransportMapping("CUSTOM", protocol.TransportType("WEB"))
+	assert.Equal(t, protocol.TransportType("WEB"), protocol.MapConnectionToTransport("CUSTOM"))
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/network"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 )
 
 type reconnectKeyType struct{}
@@ -145,7 +146,7 @@ type Connector struct {
 	closed atomic.Bool
 
 	logger   log.Logger
-	incoming chan []byte
+	incoming chan *protocol.InboundMessage
 
 	conn            network.Connection
 	isConnecting    atomic.Bool
@@ -162,7 +163,7 @@ func New(cfg Config, logger log.Logger) *Connector {
 		cfg:      cfg,
 		ctx:      ctx,
 		cancel:   cancel,
-		incoming: make(chan []byte, 100),
+		incoming: make(chan *protocol.InboundMessage, 100),
 		logger:   logger.With(log.Component("connector")),
 		servers:  make([]CMServer, 0),
 	}
@@ -184,7 +185,7 @@ func (c *Connector) Done() <-chan struct{} {
 }
 
 // C returns a channel for incoming network data.
-func (c *Connector) C() <-chan []byte {
+func (c *Connector) C() <-chan *protocol.InboundMessage {
 	return c.incoming
 }
 
@@ -320,8 +321,14 @@ func (c *Connector) monitorConnection(conn network.Connection) {
 				return
 			}
 
+			inbound := &protocol.InboundMessage{
+				Data:       msg,
+				ReceivedAt: time.Now(),
+				Transport:  protocol.MapConnectionToTransport(conn.Name()),
+			}
+
 			select {
-			case c.incoming <- msg:
+			case c.incoming <- inbound:
 			case <-c.ctx.Done():
 				return
 			}

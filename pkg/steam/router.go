@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/api"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
@@ -90,15 +91,18 @@ func (r *ServiceRouter) perform(ctx context.Context, req *tr.Request) (*tr.Respo
 	uClient, sClient := r.session.Clients()
 
 	var selected service.Doer
-	switch r.matcher(req, r.socket.IsConnected()) {
+
+	transport := r.matcher(req, r.socket.IsConnected())
+	switch transport {
 	case TransportSocket:
 		selected = sClient
 	case TransportWebAPI:
 		selected = uClient
+		ctx = protocol.WithTransportType(ctx, protocol.TransportWebAPI)
 	}
 
 	if selected == nil {
-		return nil, errors.New("router: no available transport")
+		return nil, errors.New("router: no active client for target transport")
 	}
 
 	return selected.Do(ctx, req)

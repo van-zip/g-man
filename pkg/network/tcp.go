@@ -21,6 +21,9 @@ import (
 )
 
 const (
+	// ConnTypeTCP is the connection type for TCP connections.
+	ConnTypeTCP = "TCP"
+
 	// ReadTimeout is the maximum duration to wait for incoming data
 	// before the connection is timed out and closed.
 	ReadTimeout = 60 * time.Second
@@ -78,7 +81,7 @@ func NewTCP(
 	framer Framer,
 ) (*TCP, error) {
 	if framer == nil {
-		return nil, NewError(OpFramer, "TCP", errors.New("framer cannot be nil"))
+		return nil, NewError(OpFramer, ConnTypeTCP, errors.New("framer cannot be nil"))
 	}
 
 	var (
@@ -93,13 +96,13 @@ func NewTCP(
 	}
 
 	if err != nil {
-		return nil, NewError(OpDial, "TCP", err)
+		return nil, NewError(OpDial, ConnTypeTCP, err)
 	}
 
 	t := &TCP{
-		BaseConnection: NewBaseConnection("TCP"),
+		BaseConnection: NewBaseConnection(ConnTypeTCP),
 		conn:           conn,
-		logger:         logger.With(log.String("transport", "TCP"), log.String("endpoint", endpoint)),
+		logger:         logger.With(log.String("transport", ConnTypeTCP), log.String("endpoint", endpoint)),
 		framer:         framer,
 		msgChan:        make(chan NetMessage, 100),
 		errChan:        make(chan error, 10),
@@ -111,8 +114,8 @@ func NewTCP(
 	return t, nil
 }
 
-// Name returns the protocol name "TCP".
-func (t *TCP) Name() string { return "TCP" }
+// Name returns the protocol name [ConnTypeTCP].
+func (t *TCP) Name() string { return ConnTypeTCP }
 
 // Messages returns a channel that receives framed messages from the TCP connection.
 // The channel is closed when the connection is terminated.
@@ -148,7 +151,7 @@ func (t *TCP) SetCipher(c Cipher) bool {
 // writing fails. This method is safe for concurrent use.
 func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {
-		return NewError(OpSend, "TCP", err)
+		return NewError(OpSend, ConnTypeTCP, err)
 	}
 
 	t.keyMu.RLock()
@@ -159,7 +162,7 @@ func (t *TCP) Send(ctx context.Context, data []byte) error {
 	if cipher != nil {
 		data, err = cipher.Encrypt(data)
 		if err != nil {
-			return NewError(OpEncrypt, "TCP", err)
+			return NewError(OpEncrypt, ConnTypeTCP, err)
 		}
 	}
 
@@ -172,11 +175,11 @@ func (t *TCP) Send(ctx context.Context, data []byte) error {
 	}
 
 	if err := t.conn.SetWriteDeadline(deadline); err != nil {
-		return NewError(OpDeadline, "TCP", err)
+		return NewError(OpDeadline, ConnTypeTCP, err)
 	}
 
 	if err := t.framer.WriteFrame(t.conn, data); err != nil {
-		return NewError(OpFramer, "TCP", err)
+		return NewError(OpFramer, ConnTypeTCP, err)
 	}
 
 	return nil
@@ -215,7 +218,7 @@ func (t *TCP) readLoop() {
 	for {
 		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
 			if !isIgnorableError(err) {
-				sendErr(NewError(OpDeadline, "TCP", err))
+				sendErr(NewError(OpDeadline, ConnTypeTCP, err))
 			}
 
 			return
@@ -224,7 +227,7 @@ func (t *TCP) readLoop() {
 		payload, err := t.framer.ReadFrame(reader)
 		if err != nil {
 			if !isIgnorableError(err) {
-				sendErr(NewError(OpFramer, "TCP", err))
+				sendErr(NewError(OpFramer, ConnTypeTCP, err))
 			}
 
 			return
@@ -237,7 +240,7 @@ func (t *TCP) readLoop() {
 		if cipher != nil {
 			payload, err = cipher.Decrypt(payload)
 			if err != nil {
-				sendErr(NewError(OpDecrypt, "TCP", err))
+				sendErr(NewError(OpDecrypt, ConnTypeTCP, err))
 
 				// Don't return, as this might be a single corrupt packet.
 				// Depending on the protocol, you might want to continue or disconnect.
@@ -257,12 +260,12 @@ func (t *TCP) readLoop() {
 func newProxyConn(ctx context.Context, proxyURL, endpoint string) (conn net.Conn, err error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
-		return nil, NewError(OpProxy, "TCP", err)
+		return nil, NewError(OpProxy, ConnTypeTCP, err)
 	}
 
 	dialer, err := proxy.FromURL(u, proxy.Direct)
 	if err != nil {
-		return nil, NewError(OpProxy, "TCP", err)
+		return nil, NewError(OpProxy, ConnTypeTCP, err)
 	}
 
 	if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
@@ -273,7 +276,7 @@ func newProxyConn(ctx context.Context, proxyURL, endpoint string) (conn net.Conn
 	}
 
 	if err != nil {
-		return nil, NewError(OpDial, "TCP", err)
+		return nil, NewError(OpDial, ConnTypeTCP, err)
 	}
 
 	return conn, err

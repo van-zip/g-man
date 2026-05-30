@@ -11,9 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lemon4ksan/g-man/pkg/network"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
@@ -50,6 +53,75 @@ type EHeader interface {
 	GetEResult() enums.EResult
 }
 
+// TransportType represents the protocol transport type.
+type TransportType string
+
+// Transport types supported by G-MAN.
+const (
+	TransportTCP    TransportType = "TCP"
+	TransportWS     TransportType = "WebSocket"
+	TransportWebAPI TransportType = "WebAPI"
+)
+
+var (
+	transportMappingsMu sync.RWMutex
+	transportMappings   = map[string]TransportType{
+		network.ConnTypeTCP: TransportTCP,
+		network.ConnTypeWS:  TransportWS,
+	}
+)
+
+// RegisterTransportMapping registers a mapping between a raw connection name
+// (e.g. from network.Connection.Name()) and a business-level [TransportType].
+// This is thread-safe and allows G-MAN to support new transport protocols.
+func RegisterTransportMapping(connName string, t TransportType) {
+	transportMappingsMu.Lock()
+	defer transportMappingsMu.Unlock()
+
+	transportMappings[connName] = t
+}
+
+// MapConnectionToTransport maps a raw connection protocol name to a [TransportType].
+// If no mapping is registered, it defaults to treating the connection name itself
+// as the TransportType.
+func MapConnectionToTransport(connName string) TransportType {
+	transportMappingsMu.RLock()
+	defer transportMappingsMu.RUnlock()
+
+	if t, ok := transportMappings[connName]; ok {
+		return t
+	}
+
+	return TransportType(connName)
+}
+
+type contextKey string
+
+const (
+	transportTypeKey contextKey = "transport_type"
+	callerInfoKey    contextKey = "caller_info"
+)
+
+// WithTransportType returns a new context with the given transport type.
+func WithTransportType(ctx context.Context, t TransportType) context.Context {
+	return context.WithValue(ctx, transportTypeKey, t)
+}
+
+// GetTransportType retrieves the transport type from the context.
+func GetTransportType(ctx context.Context) (TransportType, bool) {
+	t, ok := ctx.Value(transportTypeKey).(TransportType)
+	return t, ok
+}
+
+// InboundMessage represents a raw network message packaged with its exact
+// arrival time and transport type context. This is passed through internal G-MAN
+// channels to eliminate metadata registry allocations.
+type InboundMessage struct {
+	Data       []byte
+	ReceivedAt time.Time
+	Transport  TransportType
+}
+
 // Packet represents a parsed message received from or sent to a Steam Connection Manager.
 // It serves as a unified interface regardless of the underlying header format.
 //
@@ -66,6 +138,8 @@ type Packet struct {
 	Payload []byte
 	// Ctx represents the request context associated with the packet execution.
 	Ctx context.Context
+	// ReceivedAt represents the exact time the packet was received by the transport layer.
+	ReceivedAt time.Time
 }
 
 // Context returns the packet's execution context, defaulting to context.Background() if nil.

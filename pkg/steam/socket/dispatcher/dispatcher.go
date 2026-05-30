@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -267,6 +268,10 @@ func (d *Dispatcher) Dispatch(packet *protocol.Packet) {
 		log.JobID(packet.GetTargetJobID()),
 	)
 
+	if !packet.ReceivedAt.IsZero() {
+		l = l.With(log.Int64("queue_delay_ms", time.Since(packet.ReceivedAt).Milliseconds()))
+	}
+
 	// Check if this packet is a response to a previously registered Job
 	if d.handleJobResponse(packet) {
 		l.DebugContext(packet.Context(), "Packet routed to job callback")
@@ -317,10 +322,21 @@ func (d *Dispatcher) handleService(packet *protocol.Packet) {
 	handler, ok := d.serviceHandlers[methodName]
 	d.mu.RUnlock()
 
+	l := d.getLogger().With(
+		log.EMsg(packet.EMsg),
+		log.JobID(packet.GetTargetJobID()),
+		log.String("method", methodName),
+	)
+
+	if !packet.ReceivedAt.IsZero() {
+		l = l.With(log.Int64("queue_delay_ms", time.Since(packet.ReceivedAt).Milliseconds()))
+	}
+
 	if ok {
+		l.DebugContext(packet.Context(), "Service method routed to handler")
 		d.invokeHandler(handler, packet)
 	} else {
-		d.getLogger().DebugContext(packet.Context(), "Unhandled ServiceMethod", log.String("method", methodName))
+		l.DebugContext(packet.Context(), "Unhandled ServiceMethod")
 	}
 }
 
@@ -370,8 +386,9 @@ func (d *Dispatcher) handleMulti(packet *protocol.Packet) {
 			continue
 		}
 
-		// Propagate parent packet's context (and correlation ID) to sub-packets
+		// Propagate parent packet's context (and correlation ID) and arrival time to sub-packets
 		subPkt.Ctx = packet.Context()
+		subPkt.ReceivedAt = packet.ReceivedAt
 
 		// Recursively dispatch nested packets
 		d.Dispatch(subPkt)

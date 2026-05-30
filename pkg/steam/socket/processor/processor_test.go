@@ -58,14 +58,16 @@ func TestProcessor_Lifecycle(t *testing.T) {
 		WorkerCount: 2,
 	}
 
-	input := make(chan []byte, 10)
+	input := make(chan *protocol.InboundMessage, 10)
 	p := processor.New(cfg, input, md, log.Discard)
 
 	// Idempotent Start
 	p.Start()
 	p.Start()
 
-	input <- packRaw(enums.EMsg_ClientLogon, 0, []byte("Hello World"))
+	input <- &protocol.InboundMessage{
+		Data: packRaw(enums.EMsg_ClientLogon, 0, []byte("Hello World")),
+	}
 
 	select {
 	case pkt := <-md.packets:
@@ -78,7 +80,9 @@ func TestProcessor_Lifecycle(t *testing.T) {
 	p.Stop()
 	p.Stop() // Idempotent Stop
 
-	input <- packRaw(enums.EMsg_ClientHeartBeat, 0, nil)
+	input <- &protocol.InboundMessage{
+		Data: packRaw(enums.EMsg_ClientHeartBeat, 0, nil),
+	}
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), md.count.Load(), "Dispatcher should not have received more packets after stop")
@@ -94,7 +98,9 @@ func TestProcessor_WorkerPool(t *testing.T) {
 
 	const packetCount = 50
 	for i := range packetCount {
-		p.Process(packRaw(enums.EMsg(i+1000), 0, nil))
+		p.Process(&protocol.InboundMessage{
+			Data: packRaw(enums.EMsg(i+1000), 0, nil),
+		})
 	}
 
 	assert.Eventually(t, func() bool {
@@ -112,7 +118,9 @@ func TestProcessor_ParseFailure(t *testing.T) {
 	defer p.Stop()
 
 	// Send garbage that fails protocol.ParsePacket
-	p.Process([]byte{0x00}) // Too short for any EMsg
+	p.Process(&protocol.InboundMessage{
+		Data: []byte{0x00},
+	}) // Too short for any EMsg
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(0), md.count.Load(), "Malformed packets should be dropped before dispatch")
@@ -137,7 +145,9 @@ func TestProcessor_ConcurrencySafety(t *testing.T) {
 			defer wg.Done()
 
 			for j := range 100 {
-				p.Process(packRaw(enums.EMsg(id+1000), uint64(id*j), nil))
+				p.Process(&protocol.InboundMessage{
+					Data: packRaw(enums.EMsg(id+1000), uint64(id*j), nil),
+				})
 			}
 		}(i)
 	}
@@ -146,4 +156,68 @@ func TestProcessor_ConcurrencySafety(t *testing.T) {
 	p.Stop()
 
 	assert.Equal(t, int32(1000), md.count.Load())
+}
+
+func TestProcessor_MetadataPropagation(t *testing.T) {
+	md := newMockDispatcher()
+	cfg := processor.Config{
+		WorkerCount: 1,
+	}
+	p := processor.New(cfg, nil, md, log.Discard)
+
+	p.Start()
+	defer p.Stop()
+
+	data := packRaw(enums.EMsg_ClientHeartBeat, 0, nil)
+	p.Process(&protocol.InboundMessage{
+		Data:       data,
+		ReceivedAt: time.Now(),
+		Transport:  protocol.TransportTCP,
+	})
+
+	var pkt *protocol.Packet
+	select {
+	case pkt = <-md.packets:
+		assert.Equal(t, enums.EMsg_ClientHeartBeat, pkt.EMsg)
+		assert.False(t, pkt.ReceivedAt.IsZero())
+		assert.WithinDuration(t, time.Now(), pkt.ReceivedAt, time.Second)
+
+		tr, ok := protocol.GetTransportType(pkt.Context())
+		assert.True(t, ok)
+		assert.Equal(t, protocol.TransportTCP, tr)
+
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for packet")
+	}
+
+	protoPkt := &protocol.Packet{
+		EMsg:    enums.EMsg_ClientLogon,
+		IsProto: true,
+		Header:  protocol.NewMsgHdrProtoBuf(enums.EMsg_ClientLogon, 987654321, 42),
+		Payload: []byte("payload"),
+	}
+	buf := new(bytes.Buffer)
+	err := protoPkt.SerializeTo(buf)
+	assert.NoError(t, err)
+
+	protoData := buf.Bytes()
+	p.Process(&protocol.InboundMessage{
+		Data:       protoData,
+		ReceivedAt: time.Now(),
+		Transport:  protocol.TransportWS,
+	})
+
+	select {
+	case pkt = <-md.packets:
+		assert.Equal(t, enums.EMsg_ClientLogon, pkt.EMsg)
+		assert.False(t, pkt.ReceivedAt.IsZero())
+		assert.WithinDuration(t, time.Now(), pkt.ReceivedAt, time.Second)
+
+		tr, ok := protocol.GetTransportType(pkt.Context())
+		assert.True(t, ok)
+		assert.Equal(t, protocol.TransportWS, tr)
+
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for protobuf packet")
+	}
 }

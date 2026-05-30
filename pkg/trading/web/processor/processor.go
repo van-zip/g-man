@@ -15,6 +15,7 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
@@ -93,8 +94,8 @@ type Processor struct {
 	processing sync.Map
 }
 
-// NewProcessor creates a new sequential offer processor.
-func NewProcessor(
+// New creates a new sequential offer processor.
+func New(
 	manager ManagerProvider,
 	backpack BackpackProvider,
 	handler OfferHandler,
@@ -189,6 +190,8 @@ func (p *Processor) processSingleOffer(ctx context.Context, off *trading.TradeOf
 		p.backpack.LockItems(ourItemIDs)
 		l.Debug("Locked our items for processing")
 	}
+
+	ctx = protocol.WithTransportType(ctx, protocol.TransportWebAPI)
 
 	decision, err := p.handler.ProcessOffer(ctx, off)
 	if err != nil {

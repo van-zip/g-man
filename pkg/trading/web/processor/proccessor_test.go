@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
@@ -103,6 +104,7 @@ type mockOfferHandler struct {
 	decision      trading.ActionDecision
 	failedCalled  bool
 	sleepDuration time.Duration
+	lastCtx       context.Context
 }
 
 func (h *mockOfferHandler) ProcessOffer(ctx context.Context, off *trading.TradeOffer) (trading.ActionDecision, error) {
@@ -110,6 +112,7 @@ func (h *mockOfferHandler) ProcessOffer(ctx context.Context, off *trading.TradeO
 	h.processCalls++
 	decision := h.decision
 	sleep := h.sleepDuration
+	h.lastCtx = ctx
 	h.mu.Unlock()
 
 	if sleep > 0 {
@@ -151,7 +154,7 @@ func TestProcessor_DuplicatePrevention(t *testing.T) {
 	mockHdl := &mockOfferHandler{sleepDuration: 50 * time.Millisecond}
 	mockBp := newBackpackMock()
 
-	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
+	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
 	off := &trading.TradeOffer{ID: 111}
@@ -178,7 +181,7 @@ func TestProcessor_SequentialProcessing(t *testing.T) {
 	}
 	mockBp := newBackpackMock()
 
-	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
+	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
 	p.Enqueue(&trading.TradeOffer{ID: 1})
@@ -213,7 +216,7 @@ func TestProcessor_LockUnlockLifecycle(t *testing.T) {
 			mockHdl := &mockOfferHandler{decision: trading.ActionDecision{Action: tt.action}}
 			mockBp := newBackpackMock()
 
-			p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
+			p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 			p.Start(context.Background())
 
 			off := &trading.TradeOffer{
@@ -263,7 +266,7 @@ func TestProcessor_CounterAction(t *testing.T) {
 		},
 	}
 
-	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
+	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
 	p.Enqueue(&trading.TradeOffer{ID: 555, OtherSteamID: 12345})
@@ -288,7 +291,7 @@ func TestProcessor_RetryAndFailure(t *testing.T) {
 	mockHdl := &mockOfferHandler{decision: trading.ActionDecision{Action: trading.ActionAccept}}
 	mockBp := newBackpackMock()
 
-	p := NewProcessor(mockMgr, mockBp, mockHdl, WithLogger(nil))
+	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -305,6 +308,38 @@ func TestProcessor_RetryAndFailure(t *testing.T) {
 
 	if !mockHdl.failedCalled {
 		t.Error("expected OnActionFailed to be called after manager error")
+	}
+}
+
+func TestProcessor_TransportTypePropagation(t *testing.T) {
+	mockMgr := &mockManager{}
+	mockHdl := &mockOfferHandler{}
+	mockBp := newBackpackMock()
+
+	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
+	p.Start(context.Background())
+
+	p.Enqueue(&trading.TradeOffer{ID: 12345})
+
+	waitForCondition(func() bool {
+		return mockHdl.GetProcessCalls() > 0
+	}, 1*time.Second)
+
+	mockHdl.mu.Lock()
+	ctx := mockHdl.lastCtx
+	mockHdl.mu.Unlock()
+
+	if ctx == nil {
+		t.Fatal("expected non-nil context")
+	}
+
+	transport, ok := protocol.GetTransportType(ctx)
+	if !ok {
+		t.Fatal("expected transport type to be present in context")
+	}
+
+	if transport != protocol.TransportWebAPI {
+		t.Errorf("expected transport to be %s, got %s", protocol.TransportWebAPI, transport)
 	}
 }
 

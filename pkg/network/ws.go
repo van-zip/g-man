@@ -18,6 +18,9 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 )
 
+// ConnTypeWS is the connection type for WebSocket connections.
+const ConnTypeWS = "WS"
+
 var _ Connection = (*WS)(nil)
 
 // WS implements the [Connection] interface using the WebSocket protocol.
@@ -65,7 +68,7 @@ func NewWS(
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, NewError(OpDial, "WS", err)
+		return nil, NewError(OpDial, ConnTypeWS, err)
 	}
 
 	switch u.Scheme {
@@ -83,7 +86,7 @@ func NewWS(
 	if proxyURL != "" {
 		pu, err := url.Parse(proxyURL)
 		if err != nil {
-			return nil, NewError(OpProxy, "WS", err)
+			return nil, NewError(OpProxy, ConnTypeWS, err)
 		}
 
 		dialer.Proxy = http.ProxyURL(pu)
@@ -95,13 +98,13 @@ func NewWS(
 	}
 
 	if err != nil {
-		return nil, NewError(OpDial, "WS", err)
+		return nil, NewError(OpDial, ConnTypeWS, err)
 	}
 
 	w := &WS{
-		BaseConnection: NewBaseConnection("WS"),
+		BaseConnection: NewBaseConnection(ConnTypeWS),
 		conn:           conn,
-		logger:         logger.With(log.String("transport", "WS"), log.String("endpoint", endpoint)),
+		logger:         logger.With(log.String("transport", ConnTypeWS), log.String("endpoint", endpoint)),
 		msgChan:        make(chan NetMessage, 100),
 		errChan:        make(chan error, 10),
 		closedChan:     make(chan struct{}),
@@ -112,8 +115,8 @@ func NewWS(
 	return w, nil
 }
 
-// Name returns the protocol name "WS".
-func (w *WS) Name() string { return "WS" }
+// Name returns the protocol name [ConnTypeWS].
+func (w *WS) Name() string { return ConnTypeWS }
 
 // Messages returns a channel that receives incoming binary messages from the WebSocket.
 // The channel is closed when the connection is terminated.
@@ -137,7 +140,7 @@ func (w *WS) Send(ctx context.Context, data []byte) error {
 	defer w.writeMu.Unlock()
 
 	if w.conn == nil {
-		return NewError(OpSend, "WS", errors.New("connection closed"))
+		return NewError(OpSend, ConnTypeWS, errors.New("connection closed"))
 	}
 
 	var err error
@@ -148,11 +151,11 @@ func (w *WS) Send(ctx context.Context, data []byte) error {
 	}
 
 	if err != nil {
-		return NewError(OpDeadline, "WS", err)
+		return NewError(OpDeadline, ConnTypeWS, err)
 	}
 
 	if err := w.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
-		return NewError(OpSend, "WS", err)
+		return NewError(OpSend, ConnTypeWS, err)
 	}
 
 	return nil
@@ -178,7 +181,7 @@ func (w *WS) Close() error {
 	})
 
 	if err != nil {
-		return NewError(OpClose, "WS", err)
+		return NewError(OpClose, ConnTypeWS, err)
 	}
 
 	return nil
@@ -199,7 +202,7 @@ func (w *WS) readLoop() {
 			// Filter out expected close errors to avoid noisy logs.
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				select {
-				case w.errChan <- NewError(OpRead, "WS", err):
+				case w.errChan <- NewError(OpRead, ConnTypeWS, err):
 				default:
 				}
 			}

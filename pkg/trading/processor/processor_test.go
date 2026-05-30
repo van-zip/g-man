@@ -15,6 +15,7 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
+	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/trading"
 	"github.com/lemon4ksan/g-man/pkg/trading/engine"
 	"github.com/lemon4ksan/g-man/pkg/trading/notifications"
@@ -430,4 +431,44 @@ func TestProcessor_EngineErrorHandling(t *testing.T) {
 	assert.Empty(t, executor.acceptedIDs)
 	assert.Empty(t, executor.declinedIDs)
 	executor.mu.Unlock()
+}
+
+func TestProcessor_TransportTypePropagation(t *testing.T) {
+	logger := log.New(log.DefaultConfig(log.LevelError))
+	executor := &mockExecutor{}
+
+	reviewChat := &mockReviewChat{}
+	notifChat := &mockNotifChat{reviewChat: reviewChat}
+	cfg := &mockConfigProvider{}
+	notifMgr := notifications.NewManager(notifChat, cfg, logger)
+	schema := &mockSchemaProvider{}
+	reviewer := review.New(schema, reviewChat, logger)
+
+	var capturedCtx context.Context
+
+	eng := engine.New()
+	eng.Use(func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			capturedCtx = ctx.Context
+			ctx.Accept(reason.AcceptCorrectValue)
+			return nil
+		}
+	})
+
+	proc := New(executor, eng, notifMgr, reviewer, logger)
+
+	offer := &trading.TradeOffer{
+		ID:           777,
+		OtherSteamID: id.ID(76561198000000777),
+	}
+
+	proc.handleOffer(context.Background(), offer)
+
+	if capturedCtx == nil {
+		t.Fatal("expected non-nil context in middleware")
+	}
+
+	transport, ok := protocol.GetTransportType(capturedCtx)
+	assert.True(t, ok)
+	assert.Equal(t, protocol.TransportWebAPI, transport)
 }

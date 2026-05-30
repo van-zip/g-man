@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/network"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 )
 
@@ -42,7 +41,7 @@ type Processor struct {
 	logger log.Logger
 	dist   Dispatcher
 
-	input <-chan []byte
+	input <-chan *protocol.InboundMessage
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -53,11 +52,11 @@ type Processor struct {
 }
 
 // New initializes a new Processor with the given configuration and dispatcher.
-func New(cfg Config, input <-chan []byte, dist Dispatcher, logger log.Logger) *Processor {
+func New(cfg Config, input <-chan *protocol.InboundMessage, dist Dispatcher, logger log.Logger) *Processor {
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118
 
 	if input == nil {
-		input = make(chan []byte, 1024)
+		input = make(chan *protocol.InboundMessage, 1024)
 	}
 
 	return &Processor{
@@ -101,12 +100,12 @@ func (p *Processor) Stop() {
 
 // Process takes raw decrypted data from the network and parses it into a packet.
 // The packet is then queued for asynchronous dispatching.
-func (p *Processor) Process(data network.NetMessage) {
+func (p *Processor) Process(inbound *protocol.InboundMessage) {
 	if p.ctx.Err() != nil {
 		return
 	}
 
-	reader := bytes.NewReader(data)
+	reader := bytes.NewReader(inbound.Data)
 
 	packet, err := protocol.ParsePacket(reader)
 	if err != nil {
@@ -114,9 +113,15 @@ func (p *Processor) Process(data network.NetMessage) {
 		return
 	}
 
+	packet.ReceivedAt = inbound.ReceivedAt
+
 	// Initialize the packet context deriving it from connection context with a unique Correlation ID
 	id := "pkt-" + log.GenerateCorrelationID()
 	packet.Ctx = log.WithCorrelationID(p.ctx, id)
+
+	if inbound.Transport != "" {
+		packet.Ctx = protocol.WithTransportType(packet.Ctx, inbound.Transport)
+	}
 
 	p.dist.Dispatch(packet)
 }
@@ -128,7 +133,7 @@ func (p *Processor) worker() {
 		case <-p.ctx.Done():
 			return
 
-		case data, ok := <-p.input:
+		case inbound, ok := <-p.input:
 			if !ok {
 				return
 			}
@@ -136,7 +141,7 @@ func (p *Processor) worker() {
 			func() {
 				defer p.recoverPanic()
 
-				p.Process(data)
+				p.Process(inbound)
 			}()
 		}
 	}

@@ -7,6 +7,7 @@ package module
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +29,24 @@ var (
 	// ErrNotAuthenticated is returned when a module requires an active session but the client is not logged in.
 	ErrNotAuthenticated = errors.New("steam: not authenticated")
 )
+
+// Get is a generic helper to retrieve a typed module from the client initialization context,
+// avoiding verbose manual type assertions and custom error handling.
+func Get[T any](init InitContext, name string) (T, error) {
+	var zero T
+
+	mod := init.Module(name)
+	if mod == nil {
+		return zero, fmt.Errorf("module %q not registered", name)
+	}
+
+	typed, ok := mod.(T)
+	if !ok {
+		return zero, fmt.Errorf("module %q has invalid type %T (expected %T)", name, mod, zero)
+	}
+
+	return typed, nil
+}
 
 // InitContext provides the module with access to the necessary client resources
 // during the initialization phase, without exposing lifecycle management methods.
@@ -135,6 +154,8 @@ type Base struct {
 
 	// Deps is a list of names of other modules that this module depends on.
 	Deps []string
+
+	mu *sync.RWMutex
 }
 
 // New creates a new Base module with the given name.
@@ -145,6 +166,7 @@ func New(name string) Base {
 		Logger:  log.Discard,
 		State:   new(atomic.Int32),
 		Wg:      new(sync.WaitGroup),
+		mu:      new(sync.RWMutex),
 	}
 }
 
@@ -166,12 +188,6 @@ func (b Base) WithDeps(deps ...string) Base {
 	return b
 }
 
-// Start initializes the module's lifecycle context.
-func (b *Base) Start(ctx context.Context) error {
-	b.Ctx, b.Cancel = context.WithCancel(ctx)
-	return nil
-}
-
 // Init sets up common dependencies like Logger and Bus.
 //
 // The init argument must not be nil. If nil is passed, this method will panic
@@ -188,12 +204,29 @@ func (b *Base) Init(ctx InitContext) error {
 		b.Wg = new(sync.WaitGroup)
 	}
 
+	if b.mu == nil {
+		b.mu = new(sync.RWMutex)
+	}
+
+	b.mu.Lock()
+
 	if b.Ctx == nil || b.Ctx.Err() != nil {
 		// For tests where Start might not be called explicitly
 		b.Ctx, b.Cancel = context.WithCancel(context.Background())
 	}
 
+	b.mu.Unlock()
+
 	b.State.Store(0)
+
+	return nil
+}
+
+// Start initializes the module's lifecycle context.
+func (b *Base) Start(ctx context.Context) error {
+	b.mu.Lock()
+	b.Ctx, b.Cancel = context.WithCancel(ctx)
+	b.mu.Unlock()
 
 	return nil
 }
@@ -201,8 +234,12 @@ func (b *Base) Init(ctx InitContext) error {
 // Close gracefully shuts down the module by cancelling its context and waiting
 // for all spawned goroutines to finish.
 func (b *Base) Close() error {
-	if b.Cancel != nil {
-		b.Cancel()
+	b.mu.Lock()
+	cancel := b.Cancel
+	b.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 
 	if b.Wg != nil {
@@ -222,7 +259,15 @@ func (b *Base) Go(fn func(ctx context.Context)) {
 		b.Wg = new(sync.WaitGroup)
 	}
 
+	if b.mu == nil {
+		b.mu = new(sync.RWMutex)
+	}
+
+	b.mu.RLock()
+	mCtx := b.Ctx
+	b.mu.RUnlock()
+
 	b.Wg.Go(func() {
-		fn(b.Ctx)
+		fn(mCtx)
 	})
 }

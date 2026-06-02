@@ -24,7 +24,7 @@ func main() {
 	fmt.Println("--------------------------------------------")
 
 	// 1. Initialize the generic Trade Tester with a base price feed.
-	tester := tradingtest.NewTradeTester().
+	tester := tradingtest.NewTradeTester[int]().
 		WithPrices(map[string]int{
 			"item_premium":      60, // Premium item, e.g., 60 currency units
 			"item_currency":     1,  // Base currency item, e.g., 1 unit
@@ -129,7 +129,7 @@ func main() {
 	verdict, _ = tester.Run(context.Background(), mixedOffer)
 	fmt.Printf("Result: %s (Reason: %s)\n", verdict.Action, verdict.Reason)
 
-	tester = tradingtest.NewTradeTester().
+	tester = tradingtest.NewTradeTester[int]().
 		WithPrices(map[string]int{
 			"item_premium":     60, // Premium item
 			"item_rare_weapon": 10, // A rare game weapon or skin

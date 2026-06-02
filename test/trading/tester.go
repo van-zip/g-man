@@ -12,46 +12,54 @@ import (
 )
 
 // TradeTester is a helper for testing trading engines and middlewares.
-type TradeTester struct {
+// It uses a completely decoupled interface to allow injection of arbitrary,
+// game-specific pricing structures without hard-dependency on non-core packages.
+type TradeTester[T any] struct {
 	prices      map[string]int
+	priceModels T // Holds arbitrary game-specific price maps
 	middlewares []engine.Middleware
 }
 
 // NewTradeTester creates a new TradeTester.
-func NewTradeTester() *TradeTester {
-	return &TradeTester{
+func NewTradeTester[T any]() *TradeTester[T] {
+	return &TradeTester[T]{
 		prices:      make(map[string]int),
 		middlewares: make([]engine.Middleware, 0),
 	}
 }
 
-// WithPrices sets the base pricing data for the tester.
-func (t *TradeTester) WithPrices(prices map[string]int) *TradeTester {
+// WithPrices sets the base flat pricing data for legacy middlewares.
+func (t *TradeTester[T]) WithPrices(prices map[string]int) *TradeTester[T] {
 	t.prices = prices
 	return t
 }
 
+// WithPriceModels sets the game-specific price models for the tester.
+func (t *TradeTester[T]) WithPriceModels(models T) *TradeTester[T] {
+	t.priceModels = models
+	return t
+}
+
 // AddMiddleware registers a middleware to be executed during the trade process.
-func (t *TradeTester) AddMiddleware(mw engine.Middleware) *TradeTester {
+func (t *TradeTester[T]) AddMiddleware(mw engine.Middleware) *TradeTester[T] {
 	t.middlewares = append(t.middlewares, mw)
 	return t
 }
 
 // Run executes the trade offer through the middleware chain under a mocked pricing feed.
-func (t *TradeTester) Run(ctx context.Context, offer *trading.TradeOffer) (*engine.Verdict, error) {
+func (t *TradeTester[T]) Run(ctx context.Context, offer *trading.TradeOffer) (*engine.Verdict, error) {
 	eng := engine.New()
 
-	// Inject standard price feed middleware
 	eng.Use(func(next engine.Handler) engine.Handler {
 		return func(c *engine.TradeContext) error {
 			for sku, price := range t.prices {
 				c.Set("price_"+sku, price)
 			}
+			c.Set("prices", t.priceModels)
 			return next(c)
 		}
 	})
 
-	// Add all registered middlewares
 	eng.Use(t.middlewares...)
 
 	return eng.Process(ctx, offer)

@@ -10,12 +10,12 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading"
 )
 
-// OfferBuilder is a fluent builder for creating test TradeOffer objects.
+// OfferBuilder is a fluent builder for creating mock TradeOffer objects during tests.
 type OfferBuilder struct {
 	offer *trading.TradeOffer
 }
 
-// NewOfferBuilder creates a new OfferBuilder with an empty TradeOffer.
+// NewOfferBuilder instantiates a new OfferBuilder with pre-initialized items slices.
 func NewOfferBuilder() *OfferBuilder {
 	return &OfferBuilder{
 		offer: &trading.TradeOffer{
@@ -25,13 +25,13 @@ func NewOfferBuilder() *OfferBuilder {
 	}
 }
 
-// WithPartner sets the partner ID for the trade offer.
+// WithPartner configures the other Steam trade partner's ID.
 func (b *OfferBuilder) WithPartner(partnerID id.ID) *OfferBuilder {
 	b.offer.OtherSteamID = partnerID
 	return b
 }
 
-// AddGiveItem adds items to the 'ItemsToGive' slice by SKU.
+// AddGiveItem appends a specific number of identical mock items to the outgoing trade side by SKU.
 func (b *OfferBuilder) AddGiveItem(sku string, amount int) *OfferBuilder {
 	for range amount {
 		b.offer.ItemsToGive = append(b.offer.ItemsToGive, &trading.Item{SKU: sku})
@@ -39,13 +39,13 @@ func (b *OfferBuilder) AddGiveItem(sku string, amount int) *OfferBuilder {
 	return b
 }
 
-// AddGiveItemFull adds a pre-configured item to the 'ItemsToGive' slice.
+// AddGiveItemFull appends a pre-configured, complete trading.Item structure to the outgoing trade side.
 func (b *OfferBuilder) AddGiveItemFull(item *trading.Item) *OfferBuilder {
 	b.offer.ItemsToGive = append(b.offer.ItemsToGive, item)
 	return b
 }
 
-// AddReceiveItem adds items to the 'ItemsToReceive' slice by SKU.
+// AddReceiveItem appends a specific number of identical mock items to the incoming trade side by SKU.
 func (b *OfferBuilder) AddReceiveItem(sku string, amount int) *OfferBuilder {
 	for range amount {
 		b.offer.ItemsToReceive = append(b.offer.ItemsToReceive, &trading.Item{SKU: sku})
@@ -53,13 +53,13 @@ func (b *OfferBuilder) AddReceiveItem(sku string, amount int) *OfferBuilder {
 	return b
 }
 
-// AddReceiveItemFull adds a pre-configured item to the 'ItemsToReceive' slice.
+// AddReceiveItemFull appends a pre-configured, complete trading.Item structure to the incoming trade side.
 func (b *OfferBuilder) AddReceiveItemFull(item *trading.Item) *OfferBuilder {
 	b.offer.ItemsToReceive = append(b.offer.ItemsToReceive, item)
 	return b
 }
 
-// Build returns the constructed TradeOffer.
+// Build finalizes and returns the constructed TradeOffer instance.
 func (b *OfferBuilder) Build() *trading.TradeOffer {
 	return b.offer
 }

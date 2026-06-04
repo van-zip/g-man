@@ -23,7 +23,7 @@ var (
 	// RxTheir matches the their escrow duration regex.
 	RxTheir = regexp.MustCompile(`(?i)g_DaysTheirEscrow\s*=\s*(\d+);`)
 	// RxMy matches the my escrow duration regex.
-	RxMy = regexp.MustCompile(`(?i)g_DaysMyEscrow\s*=\s*(\\d+);`)
+	RxMy = regexp.MustCompile(`(?i)g_DaysMyEscrow\s*=\s*(\d+);`)
 
 	// ErrMaxRetriesReached is returned when the maximum number of retries is reached.
 	ErrMaxRetriesReached = errors.New("max retries reached")

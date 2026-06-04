@@ -176,16 +176,22 @@ func TestManager_GetEscrowDuration(t *testing.T) {
 
 			details, err := m.GetEscrowDuration(context.Background(), tt.offerID)
 
-			if err != nil && tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("got error %v, want %v", err, tt.wantErr)
-			}
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Fatalf("expected error %v, got nil", tt.wantErr)
+				}
 
-			if err == nil && tt.wantErr != nil {
-				t.Fatal("expected error, got nil")
-			}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("got error %v, want %v", err, tt.wantErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
 
-			if err == nil && !reflect.DeepEqual(details, tt.want) {
-				t.Errorf("got details %+v, want %+v", details, tt.want)
+				if !reflect.DeepEqual(details, tt.want) {
+					t.Errorf("got details %+v, want %+v", details, tt.want)
+				}
 			}
 		})
 	}

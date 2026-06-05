@@ -401,7 +401,7 @@ func (c *Client) SteamID() id.ID {
 // It returns [ErrNotRunning] if the client's background systems have not been started
 // using the [Client.Run] method.
 func (c *Client) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
-	if c.State() != StateRunning {
+	if c.State() != StateRunning && c.State() != StateAuthorized {
 		return nil, ErrNotRunning
 	}
 

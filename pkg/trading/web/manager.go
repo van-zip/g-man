@@ -571,6 +571,30 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 		instanceID, _ := strconv.ParseUint(it.Asset.InstanceID, 10, 64)
 		amount, _ := strconv.ParseInt(it.Asset.Amount, 10, 64)
 
+		var descs []trading.Description
+		if len(it.Description.Descriptions) > 0 {
+			descs = make([]trading.Description, len(it.Description.Descriptions))
+			for idx, d := range it.Description.Descriptions {
+				descs[idx] = trading.Description{
+					Value: d.Value,
+					Color: d.Color,
+				}
+			}
+		}
+
+		var tags []trading.Tag
+		if len(it.Description.Tags) > 0 {
+			tags = make([]trading.Tag, len(it.Description.Tags))
+			for idx, t := range it.Description.Tags {
+				tags[idx] = trading.Tag{
+					Category:      t.Category,
+					InternalName:  t.InternalName,
+					Localized:     t.LocalizedCategoryName,
+					LocalizedName: t.LocalizedTagName,
+				}
+			}
+		}
+
 		result[i] = &trading.Item{
 			AppID:          440,
 			ContextID:      2,
@@ -581,6 +605,8 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 			Name:           it.Description.Name,
 			MarketHashName: it.Description.MarketHashName,
 			Tradable:       it.Description.Tradable == 1,
+			Descriptions:   descs,
+			Tags:           tags,
 		}
 	}
 

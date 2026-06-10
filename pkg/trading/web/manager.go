@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -542,6 +543,7 @@ func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*trading.TradeO
 	}
 
 	mapDescriptionsToOffer(resp.Offer, resp.Descriptions)
+	_ = m.enrichOfferDescriptions(ctx, resp.Offer)
 
 	return resp.Offer, nil
 }
@@ -741,12 +743,14 @@ func (m *Manager) doPoll(ctx context.Context) {
 	for _, o := range resp.Sent {
 		if o != nil {
 			mapDescriptionsToOffer(o, resp.Descriptions)
+			_ = m.enrichOfferDescriptions(ctx, o)
 		}
 	}
 
 	for _, o := range resp.Received {
 		if o != nil {
 			mapDescriptionsToOffer(o, resp.Descriptions)
+			_ = m.enrichOfferDescriptions(ctx, o)
 		}
 	}
 
@@ -975,6 +979,7 @@ func (m *Manager) GetActiveSentOffers(ctx context.Context) ([]trading.TradeOffer
 	for _, o := range resp.Sent {
 		if o != nil {
 			mapDescriptionsToOffer(o, resp.Descriptions)
+			_ = m.enrichOfferDescriptions(ctx, o)
 			offers = append(offers, *o)
 		}
 	}
@@ -1038,4 +1043,275 @@ func mapDescriptionsToOffer(offer *trading.TradeOffer, rawDescs []rawDescription
 
 	mapItems(offer.ItemsToGive)
 	mapItems(offer.ItemsToReceive)
+}
+
+type assetClassTag struct {
+	Category              string `json:"category"`
+	InternalName          string `json:"internal_name"`
+	LocalizedCategoryName string `json:"localized_category_name"`
+	LocalizedTagName      string `json:"localized_tag_name"`
+	Name                  string `json:"name"`
+}
+
+type flexibleDescriptions []trading.Description
+
+func (fd *flexibleDescriptions) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err == nil {
+			*fd = nil
+			return nil
+		}
+	}
+
+	if data[0] == '[' {
+		var arr []trading.Description
+		if err := json.Unmarshal(data, &arr); err == nil {
+			*fd = arr
+			return nil
+		}
+	}
+
+	if data[0] == '{' {
+		var m map[string]trading.Description
+		if err := json.Unmarshal(data, &m); err == nil {
+			type item struct {
+				idx int
+				val trading.Description
+			}
+
+			var items []item
+			for k, v := range m {
+				idx, _ := strconv.Atoi(k)
+				items = append(items, item{idx: idx, val: v})
+			}
+
+			slices.SortFunc(items, func(a, b item) int {
+				return a.idx - b.idx
+			})
+
+			res := make([]trading.Description, len(items))
+			for idx, item := range items {
+				res[idx] = item.val
+			}
+
+			*fd = res
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to unmarshal descriptions: %s", string(data))
+}
+
+type flexibleTags []assetClassTag
+
+func (ft *flexibleTags) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err == nil {
+			*ft = nil
+			return nil
+		}
+	}
+
+	if data[0] == '[' {
+		var arr []assetClassTag
+		if err := json.Unmarshal(data, &arr); err == nil {
+			*ft = arr
+			return nil
+		}
+	}
+
+	if data[0] == '{' {
+		var m map[string]assetClassTag
+		if err := json.Unmarshal(data, &m); err == nil {
+			type item struct {
+				idx int
+				val assetClassTag
+			}
+
+			var items []item
+			for k, v := range m {
+				idx, _ := strconv.Atoi(k)
+				items = append(items, item{idx: idx, val: v})
+			}
+
+			slices.SortFunc(items, func(a, b item) int {
+				return a.idx - b.idx
+			})
+
+			res := make([]assetClassTag, len(items))
+			for idx, item := range items {
+				res[idx] = item.val
+			}
+
+			*ft = res
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to unmarshal tags: %s", string(data))
+}
+
+type rawAssetClassDescription struct {
+	ClassID        string               `json:"classid"`
+	InstanceID     string               `json:"instanceid"`
+	Name           string               `json:"name"`
+	MarketName     string               `json:"market_name"`
+	Type           string               `json:"type"`
+	MarketHashName string               `json:"market_hash_name"`
+	IconURL        string               `json:"icon_url"`
+	Descriptions   flexibleDescriptions `json:"descriptions"`
+	Tags           flexibleTags         `json:"tags"`
+	Tradable       rest.BoolInt         `json:"tradable"`
+	Marketable     rest.BoolInt         `json:"marketable"`
+}
+
+func (m *Manager) enrichOfferDescriptions(ctx context.Context, offer *trading.TradeOffer) error {
+	if offer == nil {
+		return nil
+	}
+
+	type descKey struct {
+		ClassID    uint64
+		InstanceID uint64
+	}
+
+	var missingKeys []descKey
+
+	seenKeys := make(map[descKey]bool)
+
+	collectMissing := func(items []*trading.Item) {
+		for _, it := range items {
+			if it.MarketHashName == "" {
+				k := descKey{ClassID: it.ClassID, InstanceID: it.InstanceID}
+				if !seenKeys[k] {
+					seenKeys[k] = true
+					missingKeys = append(missingKeys, k)
+				}
+			}
+		}
+	}
+
+	collectMissing(offer.ItemsToGive)
+	collectMissing(offer.ItemsToReceive)
+
+	if len(missingKeys) == 0 {
+		return nil
+	}
+
+	type GetAssetClassInfoResponse struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+
+	resolvedDescs := make(map[descKey]rawAssetClassDescription)
+
+	chunkSize := 50
+	for i := 0; i < len(missingKeys); i += chunkSize {
+		end := min(i+chunkSize, len(missingKeys))
+		chunk := missingKeys[i:end]
+
+		params := make(url.Values)
+		params.Set("appid", strconv.FormatUint(uint64(m.config.AppID), 10))
+		params.Set("language", m.config.Language)
+		params.Set("class_count", strconv.Itoa(len(chunk)))
+
+		for idx, k := range chunk {
+			params.Set(fmt.Sprintf("classid%d", idx), strconv.FormatUint(k.ClassID, 10))
+
+			if k.InstanceID != 0 {
+				params.Set(fmt.Sprintf("instanceid%d", idx), strconv.FormatUint(k.InstanceID, 10))
+			}
+		}
+
+		apiResp, err := service.WebAPI[GetAssetClassInfoResponse](
+			ctx,
+			m.web,
+			"GET",
+			"ISteamEconomy",
+			"GetAssetClassInfo",
+			1,
+			params,
+		)
+		if err != nil {
+			return err
+		}
+
+		if apiResp != nil && apiResp.Result != nil {
+			for key, rawVal := range apiResp.Result {
+				if key == "success" {
+					continue
+				}
+
+				var desc rawAssetClassDescription
+				if err := json.Unmarshal(rawVal, &desc); err == nil {
+					var cID uint64
+					if desc.ClassID != "" {
+						cID, _ = strconv.ParseUint(desc.ClassID, 10, 64)
+					} else {
+						cID, _ = strconv.ParseUint(key, 10, 64)
+					}
+
+					instID, _ := strconv.ParseUint(desc.InstanceID, 10, 64)
+					resolvedDescs[descKey{ClassID: cID, InstanceID: instID}] = desc
+				}
+			}
+		}
+	}
+
+	updateItems := func(items []*trading.Item) {
+		for _, it := range items {
+			if it.MarketHashName == "" {
+				k := descKey{ClassID: it.ClassID, InstanceID: it.InstanceID}
+
+				var desc rawAssetClassDescription
+
+				found := false
+				if desc, found = resolvedDescs[k]; !found {
+					desc, found = resolvedDescs[descKey{ClassID: it.ClassID, InstanceID: 0}]
+				}
+
+				if found {
+					it.Name = desc.Name
+					it.MarketName = desc.MarketName
+					it.MarketHashName = desc.MarketHashName
+					it.Type = desc.Type
+					it.IconURL = desc.IconURL
+					it.Descriptions = desc.Descriptions
+					it.Tradable = bool(desc.Tradable)
+					it.Marketable = bool(desc.Marketable)
+
+					it.Tags = make([]trading.Tag, len(desc.Tags))
+					for idx, t := range desc.Tags {
+						locName := t.LocalizedTagName
+						if locName == "" {
+							locName = t.Name
+						}
+
+						it.Tags[idx] = trading.Tag{
+							Category:      t.Category,
+							InternalName:  t.InternalName,
+							Localized:     t.LocalizedCategoryName,
+							LocalizedName: locName,
+						}
+					}
+				}
+			}
+		}
+	}
+
+	updateItems(offer.ItemsToGive)
+	updateItems(offer.ItemsToReceive)
+
+	return nil
 }

@@ -4,7 +4,11 @@
 
 package trading
 
-import "github.com/lemon4ksan/g-man/pkg/steam/id"
+import (
+	"encoding/json"
+
+	"github.com/lemon4ksan/g-man/pkg/steam/id"
+)
 
 // OfferState represents the transactional lifecycle state of a trade offer.
 type OfferState int32
@@ -71,6 +75,35 @@ type Description struct {
 		// Defindex is the attribute definition index.
 		Defindex int `json:"def_index,string"`
 	} `json:"app_data,omitempty"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling to handle inconsistent types for app_data (string vs object).
+func (d *Description) UnmarshalJSON(data []byte) error {
+	type alias Description
+
+	var a struct {
+		alias
+		AppData json.RawMessage `json:"app_data,omitempty"`
+	}
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+
+	d.Value = a.Value
+
+	d.Color = a.Color
+	if len(a.AppData) > 0 && a.AppData[0] == '{' {
+		var appData struct {
+			Defindex int `json:"def_index,string"`
+		}
+		if err := json.Unmarshal(a.AppData, &appData); err == nil {
+			d.AppData = &struct {
+				Defindex int `json:"def_index,string"`
+			}{Defindex: appData.Defindex}
+		}
+	}
+
+	return nil
 }
 
 // Tag represents classification metadata attached to an item (such as rarity or type).

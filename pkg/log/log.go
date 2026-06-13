@@ -174,11 +174,11 @@ type AsyncLogger struct {
 	wg    *sync.WaitGroup
 
 	// Synchronization for safe shutdown
-	mu     sync.RWMutex
-	closed atomic.Bool
+	mu     *sync.RWMutex
+	closed *atomic.Bool
 
 	// dropped tracks the number of messages discarded due to a full queue.
-	dropped atomic.Uint64
+	dropped *atomic.Uint64
 }
 
 // New creates and starts a background goroutine to process logs based on the provided Config.
@@ -192,9 +192,12 @@ func New(cfg Config) Logger {
 	}
 
 	l := &AsyncLogger{
-		cfg:   cfg,
-		queue: make(chan *bytes.Buffer, cfg.AsyncSize),
-		wg:    &sync.WaitGroup{},
+		cfg:     cfg,
+		queue:   make(chan *bytes.Buffer, cfg.AsyncSize),
+		wg:      &sync.WaitGroup{},
+		mu:      &sync.RWMutex{},
+		closed:  &atomic.Bool{},
+		dropped: &atomic.Uint64{},
 	}
 	l.wg.Go(l.writerLoop)
 
@@ -223,6 +226,9 @@ func (l *AsyncLogger) With(fields ...Field) Logger {
 		cfg:     l.cfg,
 		queue:   l.queue,
 		wg:      l.wg,
+		mu:      l.mu,
+		closed:  l.closed,
+		dropped: l.dropped,
 		path:    make([]string, len(l.path)),
 		context: make([]Field, len(l.context), len(l.context)+len(fields)),
 	}

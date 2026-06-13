@@ -6,6 +6,7 @@ package auth
 
 import (
 	"errors"
+	"os"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
@@ -80,8 +81,8 @@ type LogOnDetails struct {
 	// MachineID is the unique machine identifier for the client.
 	MachineID []byte
 
-	// CellID is the client region identifier.
-	CellID uint32
+	// MachineName is the name of the machine the client is running on (os.Hostname()).
+	MachineName string
 
 	// ClientOSType identifies the client operating system.
 	// Defaults to Windows 10 if not specified.
@@ -124,10 +125,18 @@ func (l *LogOnDetails) Validate() error {
 
 // NewLogOnDetails creates a new structure with default fields.
 func NewLogOnDetails(account, password string) *LogOnDetails {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "g-man"
+	} else {
+		hostname += " (g-man)"
+	}
+
 	return &LogOnDetails{
 		AccountName:     account,
 		Password:        password,
 		ClientOSType:    uint32(enums.EOSType_Windows10),
+		MachineName:     hostname,
 		ProtocolVersion: ProtocolVersion,
 		ClientLanguage:  "english",
 	}

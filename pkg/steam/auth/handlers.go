@@ -196,7 +196,7 @@ func (a *Authenticator) sendLogOn(ctx context.Context, details *LogOnDetails) {
 		ClientOsType:              proto.Uint32(details.ClientOSType),
 		ClientLanguage:            proto.String(details.ClientLanguage),
 		MachineId:                 details.MachineID,
-		MachineName:               proto.String("g-man"),
+		MachineName:               proto.String(details.MachineName),
 		SupportsRateLimitResponse: proto.Bool(true),
 		ObfuscatedPrivateIp: &pb.CMsgIPAddress{
 			Ip: &pb.CMsgIPAddress_V4{V4: uint32(time.Now().Unix()) ^ 0xbaadf00d},

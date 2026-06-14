@@ -157,6 +157,84 @@ func TestClient_PostJSON(t *testing.T) {
 	}
 }
 
+func TestClient_PutJSON(t *testing.T) {
+	input := testPayload{Message: "sending-put", Status: 1}
+	response := testPayload{Message: "received-put", Status: 2}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("expected PUT, got %s", r.Method)
+		}
+
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Error("expected application/json content type")
+		}
+
+		var body testPayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+
+		if body.Message != input.Message {
+			t.Errorf("request body mismatch: got %s, want %s", body.Message, input.Message)
+		}
+
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewClient(nil).WithBaseURL(server.URL)
+
+	result, err := PutJSON[testPayload, testPayload](context.Background(), client, "/put", input, nil)
+	if err != nil {
+		t.Fatalf("PutJSON failed: %v", err)
+	}
+
+	if result.Message != response.Message {
+		t.Errorf("response mismatch: got %s, want %s", result.Message, response.Message)
+	}
+}
+
+func TestClient_PatchJSON(t *testing.T) {
+	input := testPayload{Message: "sending-patch", Status: 1}
+	response := testPayload{Message: "received-patch", Status: 2}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Error("expected application/json content type")
+		}
+
+		var body testPayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+
+		if body.Message != input.Message {
+			t.Errorf("request body mismatch: got %s, want %s", body.Message, input.Message)
+		}
+
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewClient(nil).WithBaseURL(server.URL)
+
+	result, err := PatchJSON[testPayload, testPayload](context.Background(), client, "/patch", input, nil)
+	if err != nil {
+		t.Fatalf("PatchJSON failed: %v", err)
+	}
+
+	if result.Message != response.Message {
+		t.Errorf("response mismatch: got %s, want %s", result.Message, response.Message)
+	}
+}
+
 func TestClient_ErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -494,6 +572,48 @@ func TestClient_DX_Helpers(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "basic", raw.Header.Get("X-Auth"))
 		assert.Equal(t, "ok", raw.Header.Get("X-UA"))
+	})
+
+	t.Run("Global Put", func(t *testing.T) {
+		var raw *http.Response
+
+		_, err := Put[testPayload, testPayload](
+			context.Background(),
+			"/put",
+			testPayload{Message: "put-body"},
+			nil,
+			CaptureResponse(&raw),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, http.MethodPut, raw.Request.Method)
+	})
+
+	t.Run("Global Patch", func(t *testing.T) {
+		var raw *http.Response
+
+		_, err := Patch[testPayload, testPayload](
+			context.Background(),
+			"/patch",
+			testPayload{Message: "patch-body"},
+			nil,
+			CaptureResponse(&raw),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, http.MethodPatch, raw.Request.Method)
+	})
+
+	t.Run("Global Delete", func(t *testing.T) {
+		var raw *http.Response
+
+		_, err := Delete[testPayload, testPayload](
+			context.Background(),
+			"/delete",
+			testPayload{Message: "delete-body"},
+			nil,
+			CaptureResponse(&raw),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, http.MethodDelete, raw.Request.Method)
 	})
 
 	t.Run("Debug Mode (manual verification)", func(t *testing.T) {

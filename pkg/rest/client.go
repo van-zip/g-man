@@ -44,6 +44,39 @@ func Post[Req, Resp any](
 	return PostJSON[Req, Resp](ctx, DefaultClient, path, payload, query, mods...)
 }
 
+// Put performs a global PUT request and decodes the JSON response body.
+func Put[Req, Resp any](
+	ctx context.Context,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	return PutJSON[Req, Resp](ctx, DefaultClient, path, payload, query, mods...)
+}
+
+// Patch performs a global PATCH request and decodes the JSON response body.
+func Patch[Req, Resp any](
+	ctx context.Context,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	return PatchJSON[Req, Resp](ctx, DefaultClient, path, payload, query, mods...)
+}
+
+// Delete performs a global DELETE request and decodes the JSON response body.
+func Delete[Req, Resp any](
+	ctx context.Context,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	return DeleteJSON[Req, Resp](ctx, DefaultClient, path, payload, query, mods...)
+}
+
 // HTTPDoer is an interface for objects that can execute an [http.Request].
 // It is satisfied by [http.Client].
 type HTTPDoer interface {
@@ -689,6 +722,46 @@ func PostJSON[Req, Resp any](
 	mods = append([]RequestModifier{jsonMod}, mods...)
 
 	resp, err := c.Request(ctx, http.MethodPost, path, bodyBytes, query, mods...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := new(Resp)
+	if err := handleResponse(resp, result, c); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// PutJSON marshals the payload to JSON, performs a PUT request, and decodes the
+// response body into a new instance of Resp.
+// It automatically sets the Content-Type and Accept headers to application/json.
+func PutJSON[Req, Resp any](
+	ctx context.Context,
+	c Requester,
+	path string,
+	payload Req,
+	query any,
+	mods ...RequestModifier,
+) (*Resp, error) {
+	if err := Validate(payload); err != nil {
+		return nil, err
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("rest: failed to marshal payload: %w", err)
+	}
+
+	jsonMod := func(req *http.Request) {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+	}
+	// Prepend JSON headers so they can be overridden by user mods if needed
+	mods = append([]RequestModifier{jsonMod}, mods...)
+
+	resp, err := c.Request(ctx, http.MethodPut, path, bodyBytes, query, mods...)
 	if err != nil {
 		return nil, err
 	}

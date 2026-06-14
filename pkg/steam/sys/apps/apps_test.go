@@ -270,3 +270,64 @@ func TestApps_Errors(t *testing.T) {
 		assert.Contains(t, err.Error(), "socket timeout")
 	})
 }
+
+func TestApps_HandleLicenseList(t *testing.T) {
+	a, ictx := setup(t)
+
+	sub := ictx.Bus().Subscribe(&LicensesEvent{})
+
+	ictx.EmitPacket(t, enums.EMsg_ClientLicenseList, &pb.CMsgClientLicenseList{
+		Eresult: proto.Int32(int32(enums.EResult_OK)),
+		Licenses: []*pb.CMsgClientLicenseList_License{
+			{
+				PackageId:   proto.Uint32(1001),
+				TimeCreated: proto.Uint32(123456),
+			},
+		},
+	})
+
+	licenses := a.GetLicenses()
+	require.Len(t, licenses, 1)
+	assert.Equal(t, uint32(1001), licenses[0].GetPackageId())
+
+	select {
+	case ev := <-sub.C():
+		e := ev.(*LicensesEvent)
+		require.Len(t, e.Licenses, 1)
+		assert.Equal(t, uint32(1001), e.Licenses[0].GetPackageId())
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Event not received")
+	}
+}
+
+func TestApps_HandleGameConnectTokens(t *testing.T) {
+	a, ictx := setup(t)
+
+	sub := ictx.Bus().Subscribe(&GameConnectTokensEvent{})
+
+	ictx.EmitPacket(t, enums.EMsg_ClientGameConnectTokens, &pb.CMsgClientGameConnectTokens{
+		MaxTokensToKeep: proto.Uint32(2),
+		Tokens: [][]byte{
+			[]byte("token1"),
+			[]byte("token2"),
+			[]byte("token3"),
+		},
+	})
+
+	tokens := a.GetConnectTokens()
+	assert.Len(t, tokens, 2)
+	assert.Equal(t, []byte("token2"), tokens[0])
+	assert.Equal(t, []byte("token3"), tokens[1])
+
+	assert.Equal(t, []byte("token2"), a.PopConnectToken())
+	assert.Equal(t, []byte("token3"), a.PopConnectToken())
+	assert.Nil(t, a.PopConnectToken())
+
+	select {
+	case ev := <-sub.C():
+		e := ev.(*GameConnectTokensEvent)
+		assert.Len(t, e.Tokens, 3)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Event not received")
+	}
+}

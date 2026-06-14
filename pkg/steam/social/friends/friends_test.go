@@ -745,3 +745,134 @@ func TestManager_FriendInviteTokens(t *testing.T) {
 		assert.Equal(t, "TOKEN_VIEW", req.Params().Get("invite_token"))
 	})
 }
+
+func TestManager_HandleFriendsGroupsList(t *testing.T) {
+	m, ictx := setupFriends(t)
+
+	sub := ictx.Bus().Subscribe(&GroupListEvent{})
+
+	ictx.EmitPacket(t, enums.EMsg_ClientFriendsGroupsList, &pb.CMsgClientFriendsGroupsList{
+		Bremoval:     proto.Bool(false),
+		Bincremental: proto.Bool(false),
+		FriendGroups: []*pb.CMsgClientFriendsGroupsList_FriendGroup{
+			{
+				NGroupID:     proto.Int32(1),
+				StrGroupName: proto.String("Co-workers"),
+			},
+		},
+		Memberships: []*pb.CMsgClientFriendsGroupsList_FriendGroupsMembership{
+			{
+				UlSteamID: proto.Uint64(uint64(FriendID1)),
+				NGroupID:  proto.Int32(1),
+			},
+		},
+	})
+
+	groups := m.GetFriendGroups()
+	assert.Len(t, groups, 1)
+	assert.Equal(t, "Co-workers", groups[1].Name)
+	assert.Contains(t, groups[1].Members, FriendID1)
+
+	select {
+	case ev := <-sub.C():
+		e := ev.(*GroupListEvent)
+		assert.Len(t, e.Groups, 1)
+		assert.Equal(t, "Co-workers", e.Groups[1].Name)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Event not received")
+	}
+}
+
+func TestManager_HandlePlayerNicknameList(t *testing.T) {
+	m, ictx := setupFriends(t)
+
+	sub := ictx.Bus().Subscribe(&NicknameListEvent{})
+
+	ictx.EmitPacket(t, enums.EMsg_ClientPlayerNicknameList, &pb.CMsgClientPlayerNicknameList{
+		Removal:     proto.Bool(false),
+		Incremental: proto.Bool(false),
+		Nicknames: []*pb.CMsgClientPlayerNicknameList_PlayerNickname{
+			{
+				Steamid:  proto.Uint64(uint64(FriendID1)),
+				Nickname: proto.String("Bob"),
+			},
+		},
+	})
+
+	assert.Equal(t, "Bob", m.GetNickname(FriendID1))
+	assert.Len(t, m.GetNicknames(), 1)
+
+	select {
+	case ev := <-sub.C():
+		e := ev.(*NicknameListEvent)
+		assert.Equal(t, "Bob", e.Nicknames[FriendID1])
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Event not received")
+	}
+}
+
+func TestManager_HandleNotifyFriendNicknameChanged(t *testing.T) {
+	m, ictx := setupFriends(t)
+	m.relationships[FriendID1] = enums.EFriendRelationship_Friend
+
+	sub := ictx.Bus().Subscribe(&NicknameChangedEvent{})
+
+	handler, ok := ictx.GetServiceHandler("PlayerClient.NotifyFriendNicknameChanged#1")
+	require.True(t, ok)
+
+	payload, err := proto.Marshal(&pb.CPlayer_FriendNicknameChanged_Notification{
+		Accountid: proto.Uint32(FriendID1.AccountID()),
+		Nickname:  proto.String("Alice"),
+	})
+	require.NoError(t, err)
+
+	handler(&protocol.Packet{
+		Payload: payload,
+	})
+
+	assert.Equal(t, "Alice", m.GetNickname(FriendID1))
+
+	select {
+	case ev := <-sub.C():
+		e := ev.(*NicknameChangedEvent)
+		assert.Equal(t, FriendID1, e.SteamID)
+		assert.Equal(t, "Alice", e.Nickname)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Event not received")
+	}
+}
+
+func TestManager_SetFriendNickname(t *testing.T) {
+	m, ictx := setupFriends(t)
+	ctx := context.Background()
+
+	t.Run("SetFriendNickname Success", func(t *testing.T) {
+		ictx.MockService().SetLegacyResponse(
+			enums.EMsg_AMClientSetPlayerNickname,
+			&pb.CMsgClientSetPlayerNicknameResponse{
+				Eresult: proto.Uint32(uint32(enums.EResult_OK)),
+			},
+		)
+
+		err := m.SetFriendNickname(ctx, uint64(FriendID1), "Best Friend")
+		assert.NoError(t, err)
+
+		req := &pb.CMsgClientSetPlayerNickname{}
+		ictx.MockService().GetLastCall(req)
+		assert.Equal(t, uint64(FriendID1), req.GetSteamid())
+		assert.Equal(t, "Best Friend", req.GetNickname())
+	})
+
+	t.Run("SetFriendNickname Steam Error", func(t *testing.T) {
+		ictx.MockService().SetLegacyResponse(
+			enums.EMsg_AMClientSetPlayerNickname,
+			&pb.CMsgClientSetPlayerNicknameResponse{
+				Eresult: proto.Uint32(uint32(enums.EResult_Fail)),
+			},
+		)
+
+		err := m.SetFriendNickname(ctx, uint64(FriendID1), "Best Friend")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "steam error EResult 2")
+	})
+}

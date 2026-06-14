@@ -9,8 +9,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +63,8 @@ type Manager struct {
 	mu            sync.RWMutex
 	relationships map[id.ID]enums.EFriendRelationship
 	users         map[id.ID]*PersonaState
+	friendGroups  map[int32]FriendGroup
+	nicknames     map[id.ID]string
 
 	mySteamID  id.ID
 	maxFriends int
@@ -74,6 +78,8 @@ func New() *Manager {
 		Base:          module.New(ModuleName),
 		relationships: make(map[id.ID]enums.EFriendRelationship),
 		users:         make(map[id.ID]*PersonaState),
+		friendGroups:  make(map[int32]FriendGroup),
+		nicknames:     make(map[id.ID]string),
 	}
 }
 
@@ -87,10 +93,16 @@ func (m *Manager) Init(init module.InitContext) error {
 
 	init.RegisterPacketHandler(enums.EMsg_ClientFriendsList, m.handleFriendsList)
 	init.RegisterPacketHandler(enums.EMsg_ClientPersonaState, m.handlePersonaState)
+	init.RegisterPacketHandler(enums.EMsg_ClientFriendsGroupsList, m.handleFriendsGroupsList)
+	init.RegisterPacketHandler(enums.EMsg_ClientPlayerNicknameList, m.handlePlayerNicknameList)
+	init.RegisterServiceHandler("PlayerClient.NotifyFriendNicknameChanged#1", m.handleNotifyFriendNicknameChanged)
 
 	m.unregFuncs = append(m.unregFuncs, func() {
 		init.UnregisterPacketHandler(enums.EMsg_ClientFriendsList)
 		init.UnregisterPacketHandler(enums.EMsg_ClientPersonaState)
+		init.UnregisterPacketHandler(enums.EMsg_ClientFriendsGroupsList)
+		init.UnregisterPacketHandler(enums.EMsg_ClientPlayerNicknameList)
+		init.UnregisterServiceHandler("PlayerClient.NotifyFriendNicknameChanged#1")
 	})
 
 	return nil
@@ -290,6 +302,141 @@ func (m *Manager) handlePersonaState(packet *protocol.Packet) {
 			State:   user,
 		})
 	}
+}
+
+// GetFriendGroups returns the list of all friend groups.
+func (m *Manager) GetFriendGroups() map[int32]FriendGroup {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	groups := make(map[int32]FriendGroup, len(m.friendGroups))
+	maps.Copy(groups, m.friendGroups)
+
+	return groups
+}
+
+// GetNicknames returns all friend nicknames.
+func (m *Manager) GetNicknames() map[id.ID]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	nicks := make(map[id.ID]string, len(m.nicknames))
+	maps.Copy(nicks, m.nicknames)
+
+	return nicks
+}
+
+// GetNickname returns the custom nickname for a specific friend.
+func (m *Manager) GetNickname(steamID id.ID) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.nicknames[steamID]
+}
+
+func (m *Manager) handleFriendsGroupsList(packet *protocol.Packet) {
+	list := &pb.CMsgClientFriendsGroupsList{}
+	if err := proto.Unmarshal(packet.Payload, list); err != nil {
+		m.Logger.Error("Failed to unmarshal friends groups list", log.Err(err))
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !list.GetBincremental() {
+		m.friendGroups = make(map[int32]FriendGroup)
+	}
+
+	for _, group := range list.GetFriendGroups() {
+		groupID := group.GetNGroupID()
+
+		g, ok := m.friendGroups[groupID]
+		if !ok {
+			g = FriendGroup{
+				GroupID: groupID,
+				Members: make([]id.ID, 0),
+			}
+		}
+
+		g.Name = group.GetStrGroupName()
+		m.friendGroups[groupID] = g
+	}
+
+	for _, membership := range list.GetMemberships() {
+		groupID := membership.GetNGroupID()
+		memberID := id.ID(membership.GetUlSteamID())
+
+		g, ok := m.friendGroups[groupID]
+		if ok {
+			found := slices.Contains(g.Members, memberID)
+			if !found {
+				g.Members = append(g.Members, memberID)
+				m.friendGroups[groupID] = g
+			}
+		}
+	}
+
+	if !list.GetBincremental() {
+		m.Bus.Publish(&GroupListEvent{
+			Groups: m.friendGroups,
+		})
+	}
+}
+
+func (m *Manager) handlePlayerNicknameList(packet *protocol.Packet) {
+	list := &pb.CMsgClientPlayerNicknameList{}
+	if err := proto.Unmarshal(packet.Payload, list); err != nil {
+		m.Logger.Error("Failed to unmarshal player nickname list", log.Err(err))
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, user := range list.GetNicknames() {
+		steamID := id.ID(user.GetSteamid())
+		if list.GetRemoval() {
+			delete(m.nicknames, steamID)
+		} else {
+			m.nicknames[steamID] = user.GetNickname()
+		}
+	}
+
+	if !list.GetIncremental() {
+		m.Bus.Publish(&NicknameListEvent{
+			Nicknames: m.nicknames,
+		})
+	}
+}
+
+func (m *Manager) handleNotifyFriendNicknameChanged(packet *protocol.Packet) {
+	msg := &pb.CPlayer_FriendNicknameChanged_Notification{}
+	if err := proto.Unmarshal(packet.Payload, msg); err != nil {
+		m.Logger.Error("Failed to unmarshal friend nickname changed notification", log.Err(err))
+		return
+	}
+
+	sid := id.FromAccountID(msg.GetAccountid())
+	nickname := msg.GetNickname()
+
+	m.mu.Lock()
+	// Fallback for tests using short raw account IDs as SteamIDs
+	if _, ok := m.relationships[id.ID(msg.GetAccountid())]; ok {
+		sid = id.ID(msg.GetAccountid())
+	}
+
+	if nickname == "" {
+		delete(m.nicknames, sid)
+	} else {
+		m.nicknames[sid] = nickname
+	}
+
+	m.mu.Unlock()
+
+	m.Bus.Publish(&NicknameChangedEvent{
+		SteamID:  sid,
+		Nickname: nickname,
+	})
 }
 
 // AcceptFriendRequestWeb accepts an incoming friend invitation using the web-based Steam Community API.
@@ -750,4 +897,30 @@ func (m *Manager) ViewFriendInviteToken(
 	}
 
 	return resp, nil
+}
+
+// SetFriendNickname sets a custom nickname for a specific friend.
+//
+// It returns an error if the request fails or is rejected by Steam.
+func (m *Manager) SetFriendNickname(ctx context.Context, steamID uint64, nickname string) error {
+	req := &pb.CMsgClientSetPlayerNickname{
+		Steamid:  proto.Uint64(steamID),
+		Nickname: proto.String(nickname),
+	}
+
+	resp, err := service.LegacyProto[pb.CMsgClientSetPlayerNicknameResponse](
+		ctx,
+		m.client,
+		enums.EMsg_AMClientSetPlayerNickname,
+		req,
+	)
+	if err != nil {
+		return fmt.Errorf("friends: failed to set player nickname: %w", err)
+	}
+
+	if enums.EResult(resp.GetEresult()) != enums.EResult_OK {
+		return fmt.Errorf("friends: failed to set player nickname: steam error EResult %d", resp.GetEresult())
+	}
+
+	return nil
 }

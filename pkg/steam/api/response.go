@@ -132,6 +132,36 @@ func UnmarshalBinaryKV(data []byte, target any) error {
 	return nil
 }
 
+// UnmarshalBinaryKVOffset parses a byte array in Binary KeyValues format starting from a specific offset and updates the offset.
+func UnmarshalBinaryKVOffset(data []byte, offset *int, target any) error {
+	p := &bvdfParser{data: data, offset: *offset}
+
+	res, err := p.parse()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrFormat, err)
+	}
+
+	*offset = p.offset
+
+	parsed, ok := res.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%w: root of binary vdf is not an object", ErrFormat)
+	}
+
+	config := &mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           target,
+		Squash:           true,
+	}
+
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+
+	return decoder.Decode(parsed)
+}
+
 // rest.Decoder implementations
 
 // SteamJSONDecoder wraps rest.JSONDecoder to automatically unwrap the "response" field

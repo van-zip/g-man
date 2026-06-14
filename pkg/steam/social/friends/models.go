@@ -76,3 +76,29 @@ type Comment struct {
 	// Text is the plain-text content of the comment.
 	Text string `json:"text"`
 }
+
+// FriendGroup represents a group of friends.
+type FriendGroup struct {
+	GroupID int32
+	Name    string
+	Members []id.ID
+}
+
+// GroupListEvent is emitted when our entire friends group list is loaded.
+type GroupListEvent struct {
+	bus.BaseEvent
+	Groups map[int32]FriendGroup
+}
+
+// NicknameListEvent is emitted when our entire friends nickname list is loaded.
+type NicknameListEvent struct {
+	bus.BaseEvent
+	Nicknames map[id.ID]string
+}
+
+// NicknameChangedEvent is emitted when a friend's nickname is changed.
+type NicknameChangedEvent struct {
+	bus.BaseEvent
+	SteamID  id.ID
+	Nickname string // empty if removed
+}

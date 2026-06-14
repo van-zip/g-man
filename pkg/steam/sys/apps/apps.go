@@ -54,6 +54,8 @@ type Apps struct {
 	mu             sync.RWMutex
 	playingAppIDs  []uint32
 	playingBlocked bool
+	licenses       []*pb.CMsgClientLicenseList_License
+	connectTokens  [][]byte
 
 	unregFuncs []func()
 }
@@ -63,6 +65,7 @@ func New() *Apps {
 	return &Apps{
 		Base:          module.New(ModuleName),
 		playingAppIDs: make([]uint32, 0),
+		connectTokens: make([][]byte, 0),
 	}
 }
 
@@ -75,9 +78,13 @@ func (a *Apps) Init(init module.InitContext) error {
 	a.client = init.Service()
 
 	init.RegisterPacketHandler(enums.EMsg_ClientPlayingSessionState, a.handlePlayingSessionState)
+	init.RegisterPacketHandler(enums.EMsg_ClientLicenseList, a.handleLicenseList)
+	init.RegisterPacketHandler(enums.EMsg_ClientGameConnectTokens, a.handleGameConnectTokens)
 
 	a.unregFuncs = append(a.unregFuncs, func() {
 		init.UnregisterPacketHandler(enums.EMsg_ClientPlayingSessionState)
+		init.UnregisterPacketHandler(enums.EMsg_ClientLicenseList)
+		init.UnregisterPacketHandler(enums.EMsg_ClientGameConnectTokens)
 	})
 
 	return nil
@@ -243,5 +250,77 @@ func (a *Apps) handlePlayingSessionState(packet *protocol.Packet) {
 	a.Bus.Publish(&PlayingStateEvent{
 		Blocked:    blocked,
 		PlayingApp: playingApp,
+	})
+}
+
+// GetLicenses returns the cached list of user licenses.
+func (a *Apps) GetLicenses() []*pb.CMsgClientLicenseList_License {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.licenses
+}
+
+// GetConnectTokens returns all cached game connect tokens.
+func (a *Apps) GetConnectTokens() [][]byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	tokens := make([][]byte, len(a.connectTokens))
+	copy(tokens, a.connectTokens)
+
+	return tokens
+}
+
+// PopConnectToken retrieves and removes the first available game connect token.
+// Returns nil if no tokens are available.
+func (a *Apps) PopConnectToken() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(a.connectTokens) == 0 {
+		return nil
+	}
+
+	token := a.connectTokens[0]
+	a.connectTokens = a.connectTokens[1:]
+
+	return token
+}
+
+func (a *Apps) handleLicenseList(packet *protocol.Packet) {
+	msg := &pb.CMsgClientLicenseList{}
+	if err := proto.Unmarshal(packet.Payload, msg); err != nil {
+		a.Logger.Error("Failed to unmarshal license list", log.Err(err))
+		return
+	}
+
+	a.mu.Lock()
+	a.licenses = msg.GetLicenses()
+	a.mu.Unlock()
+
+	a.Bus.Publish(&LicensesEvent{
+		Licenses: msg.GetLicenses(),
+	})
+}
+
+func (a *Apps) handleGameConnectTokens(packet *protocol.Packet) {
+	msg := &pb.CMsgClientGameConnectTokens{}
+	if err := proto.Unmarshal(packet.Payload, msg); err != nil {
+		a.Logger.Error("Failed to unmarshal game connect tokens", log.Err(err))
+		return
+	}
+
+	a.mu.Lock()
+	a.connectTokens = append(a.connectTokens, msg.GetTokens()...)
+
+	maxKeep := int(msg.GetMaxTokensToKeep())
+	if maxKeep > 0 && len(a.connectTokens) > maxKeep {
+		a.connectTokens = a.connectTokens[len(a.connectTokens)-maxKeep:]
+	}
+
+	a.mu.Unlock()
+
+	a.Bus.Publish(&GameConnectTokensEvent{
+		Tokens: msg.GetTokens(),
 	})
 }

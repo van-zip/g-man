@@ -4,7 +4,10 @@
 
 package apps
 
-import "github.com/lemon4ksan/g-man/pkg/bus"
+import (
+	"github.com/lemon4ksan/g-man/pkg/bus"
+	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
+)
 
 // AppLaunchedEvent is emitted when the client reports playing a new game.
 type AppLaunchedEvent struct {
@@ -28,4 +31,16 @@ type PlayingStateEvent struct {
 	Blocked bool
 	// PlayingApp is the Steam AppID currently being played by the conflicting session.
 	PlayingApp uint32
+}
+
+// LicensesEvent is emitted when Steam sends us the current license list.
+type LicensesEvent struct {
+	bus.BaseEvent
+	Licenses []*pb.CMsgClientLicenseList_License
+}
+
+// GameConnectTokensEvent is emitted when Steam sends us new game connect tokens.
+type GameConnectTokensEvent struct {
+	bus.BaseEvent
+	Tokens [][]byte
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam"
@@ -38,12 +39,11 @@ func NewChatBot(client *steam.Client, logger log.Logger) *ChatBot {
 
 // RegisterCommands declares the syntax and validation rules for chat commands
 func (bot *ChatBot) RegisterCommands() {
-	// 1. Simple informational command
-	bot.cmdManager.Register("status", bot.handleStatus,
-		commands.WithDescription("Shows the current status and uptime of the bot"),
-	)
+	// Register built-in commands (!status, !steamid, !profile)
+	friendsMgr := friends.From(bot.client)
+	commands.RegisterBuiltinCommands(bot.cmdManager, friendsMgr, time.Now())
 
-	// 2. Command with typed arguments and validation (Withdrawal)
+	// Command with typed arguments and validation (Withdrawal)
 	bot.cmdManager.Register("withdraw", bot.handleWithdraw,
 		commands.WithDescription("Requests a transfer of a specific amount of funds to the specified SteamID"),
 		commands.WithArgsSchema(
@@ -53,7 +53,7 @@ func (bot *ChatBot) RegisterCommands() {
 		commands.WithAdmin(), // Command is available to administrators only
 	)
 
-	// 3. Command for manual trade confirmation
+	// Command for manual trade confirmation
 	bot.cmdManager.Register("approve", bot.handleApprove,
 		commands.WithDescription("Forcibly confirms an incoming trade by its ID"),
 		commands.WithArgsSchema(
@@ -111,11 +111,6 @@ func (bot *ChatBot) handleFriendRequest(ctx context.Context, e *friends.Relation
 			"Hello! I am a trading bot. Type !help for a list of commands.",
 		)
 	}
-}
-
-// Handler for the !status command
-func (bot *ChatBot) handleStatus(ctx context.Context, senderID uint64, args []string) (string, error) {
-	return "🤖 The bot is operating normally. All services are active.", nil
 }
 
 // Handler for the !withdraw command with type validation (SteamID and float64)

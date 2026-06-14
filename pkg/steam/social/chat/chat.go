@@ -702,13 +702,42 @@ func (m *Chat) handleGroupReaction(packet *protocol.Packet) {
 }
 
 func (m *Chat) synchronizeOfflineMessages(ctx context.Context) {
-	sessionsResp, err := service.Unified[pb.CFriendsMessages_GetActiveMessageSessions_Response](
-		ctx,
-		m.service,
-		&pb.CFriendsMessages_GetActiveMessageSessions_Request{},
+	req := &pb.CFriendsMessages_GetActiveMessageSessions_Request{
+		OnlySessionsWithMessages: proto.Bool(true),
+	}
+
+	var (
+		sessionsResp *pb.CFriendsMessages_GetActiveMessageSessions_Response
+		err          error
 	)
+
+	for attempt := range 3 {
+		sessionsResp, err = service.Unified[pb.CFriendsMessages_GetActiveMessageSessions_Response](
+			ctx,
+			m.service,
+			req,
+		)
+		if err == nil {
+			break
+		}
+
+		if attempt < 2 {
+			m.Logger.WarnContext(ctx, "Failed to get active message sessions, retrying",
+				log.Err(err),
+				log.Int("attempt", attempt+1),
+			)
+
+			backoff := time.Duration(1<<(attempt+1)) * time.Second
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+		}
+	}
+
 	if err != nil {
-		m.Logger.Error("Failed to get active message sessions", log.Err(err))
+		m.Logger.WarnContext(ctx, "Failed to get active message sessions after retries", log.Err(err))
 		return
 	}
 
@@ -718,25 +747,24 @@ func (m *Chat) synchronizeOfflineMessages(ctx context.Context) {
 
 	for _, session := range sessionsResp.GetMessageSessions() {
 		if session.GetLastMessage() > session.GetLastView() {
-			friendID := session.GetAccountidFriend()
-			m.Logger.Debug("Found unread messages", log.Uint32("from", friendID))
+			friendID := id.FromAccountID(session.GetAccountidFriend())
+			m.Logger.Debug("Found unread messages", log.SteamID(friendID.Uint64()))
 
-			history, err := m.GetRecentMessages(ctx, uint64(friendID), 50)
+			history, err := m.GetRecentMessages(ctx, friendID.Uint64(), 50)
 			if err != nil {
-				m.Logger.Error("Failed to fetch history for sync", log.Uint32("friend", friendID), log.Err(err))
+				m.Logger.Error("Failed to fetch history for sync", log.SteamID(friendID.Uint64()), log.Err(err))
 				continue
 			}
 
 			var lastTimestamp uint32
 			for _, msg := range history {
-				// Use Accountid to filter out bot's own messages in history
 				if msg.GetAccountid() == botAccID {
 					continue
 				}
 
 				if msg.GetTimestamp() > session.GetLastView() {
 					m.Bus.Publish(&MessageEvent{
-						SenderID:  uint64(friendID),
+						SenderID:  friendID.Uint64(),
 						Message:   msg.GetMessage(),
 						Timestamp: time.Unix(int64(msg.GetTimestamp()), 0),
 						Ordinal:   msg.GetOrdinal(),
@@ -749,7 +777,7 @@ func (m *Chat) synchronizeOfflineMessages(ctx context.Context) {
 			}
 
 			if lastTimestamp > 0 {
-				_ = m.AckFriendMessage(ctx, uint64(friendID), lastTimestamp)
+				_ = m.AckFriendMessage(ctx, friendID.Uint64(), lastTimestamp)
 			}
 		}
 	}

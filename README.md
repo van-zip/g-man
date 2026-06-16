@@ -84,50 +84,15 @@ flowchart LR
 
 ## ⚡ Key Features
 
-### 🔄 Self-Healing Sessions (Silent Re-auth)
-Downtime is lost revenue. G-man monitors the health of Web sessions and access tokens in the background. If a web cookie expires mid-request, the orchestrator automatically pauses active requests, performs an atomic OAuth2 refresh, updates the token storage, and resumes the operation transparently. Your business logic never sees a `401 Unauthorized` or standard session drop.
-
-### 🌐 Dual-Stack Transport Engine
-Stop choosing between WebAPI and Connection Manager (CM) Sockets. G-man's protocol-agnostic routing layer dynamically selects the optimal path: **TCP/WebSocket CM channels** for low-latency state synchronization, or **HTTPS WebAPI** for high-volume transactions and rate-limit mitigation. It seamlessly falls back to HTTP if a socket connection is interrupted.
-
-### 🧅 "Onion" Trade Middleware Pipeline
-Build complex trading logic as decoupled middleware layers. Process incoming trade offers through an extensible chain: `Deduplicator` $\rightarrow$ `SecurityEscrowCheck` $\rightarrow$ `BlacklistFilter` $\rightarrow$ `PriceValidator` $\rightarrow$ `Verdict`. If any middleware sets a verdict (Accept/Decline/Counter), execution halts safely, preventing race conditions.
-
-### 🌡️ Defensive Web Scraping
-Steam often throws "Soft Errors" – HTML pages returning a `200 OK` status code but displaying warning messages (e.g., "Rate Limit Exceeded", "Family View Active", or login prompts). G-man's `community` scraper scans raw response bodies, converts ambiguous HTML blocks into strictly-typed Go errors, and triggers safety handlers.
-
-### 🛠️ Robust Dependency Management
-Modules embed `module.Base` and are topologically sorted using a 3-color Depth-First Search (DFS) algorithm during boot. This ensures that modules are initialized and started in their correct topological order, detecting and failing fast on circular dependencies.
-
-## 📂 Project Directory Structure
-
-```text
-pkg/
-├── steam/            # Core Steam Protocols & Lifecycle Management
-│   ├── auth/         # OAuth2 flows, persistent storage, and background token refresh
-│   ├── socket/       # Stateful CM (Connection Manager) TCP/WebSocket client
-│   ├── protocol/     # Steam wire-format, compiled protobufs & language specs
-│   ├── transport/    # Dual-stack transport bridge (Socket/HTTP router)
-│   ├── social/       # Real-time chat, persona states, and friends tracking
-│   ├── community/    # Defensive scrapers (Inventories, Market, Steam Guard)
-│   └── sys/          # Core subsystems (Game Coordinator dispatcher, directory)
-├── behavior/         # Generic Bot Behaviors & Human Mimicry
-│   └── achievements/ # Achievement simulator imitating legitimate gameplay
-├── trading/          # Unified Trade Offers Engine
-│   └── engine/       # Onion middleware engine with TradeContext propagation
-├── bus/              # Decoupled thread-safe event bus
-├── rest/             # Type-sanitizing HTTP & REST API client
-├── command/          # Thread-safe command routing and processing
-├── jobs/             # Asynchronous execution units and cron workers
-├── crypto/           # Crypto helpers (Symmetric/Asymmetric encryption, Steam TOTP)
-└── storage/          # Standard key-value storage adapters (Memory, Local JSON File)
-```
+* **Self-Healing Sessions (Silent Re-auth):** Monitors Web sessions and access tokens in the background. If a web cookie expires, the orchestrator pauses active requests, performs an OAuth2 refresh, updates storage, and resumes operations transparently.
+* **Dual-Stack Transport Engine:** Dynamically selects the optimal path: TCP/WebSocket CM channels for low-latency state synchronization, or HTTPS WebAPI for high-volume transactions, falling back to HTTP if a socket connection is interrupted.
+* **"Onion" Trade Middleware Pipeline:** Encourages decoupled trading logic. Process incoming trade offers through an extensible chain: `Deduplicator` $\rightarrow$ `SecurityEscrowCheck` $\rightarrow$ `BlacklistFilter` $\rightarrow$ `PriceValidator` $\rightarrow$ `Verdict`.
+* **Defensive Web Scraping:** Parses standard HTML pages returning `200 OK` status codes for hidden "Soft Errors" (e.g., rate-limit messages, Family View locks, login prompts) and converts them into strictly typed Go errors.
+* **Robust Dependency Management:** Uses a Depth-First Search (DFS) algorithm during boot to topologically sort and initialize modules, failing fast on circular dependencies.
 
 ## 🚀 Quick Start
 
 ### 1. Initialize the Core Client
-
-Connect to the Steam network, authenticate, and register your automation modules in just a few lines:
 
 ```go
 package main
@@ -145,34 +110,28 @@ import (
 )
 
 func main() {
-	// 1. Set up a persistent JSON file storage for session tokens
+	// 1. Initialize persistent JSON storage for sessions
 	store, _ := jsonfile.New("storage.json")
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 
-	// 2. Instantiate the orchestrator with core modules
 	config := steam.DefaultConfig()
 	config.Store = store
 
+	// 2. Instantiate the orchestrator with required modules
 	client, _ := steam.NewClient(config,
 		steam.WithLogger(logger),
 		webtrading.WithModule(webtrading.DefaultConfig()),
 	)
 	defer client.Close()
 
-	// 3. Connect the Engine to the Trade Manager
-	webTradeManager := webtrading.From(client)
-	
-	// Set up your trading engine and handler...
-	// For TF2 features, you would plug in the g-man-tf2 suite here!
-
-	// 4. Fetch optimal server and login
-	dir := directory.New(client.Service())
-	server, _ := dir.GetOptimalCMServer(context.Background())
-	login := auth.NewLogOnDetails(os.Getenv("STEAM_USER"), os.Getenv("STEAM_PASS"))
-
 	if err := client.Run(); err != nil {
 		panic(err)
 	}
+
+	// 3. Resolve CM server and login
+	dir := directory.New(client.Service())
+	server, _ := dir.GetOptimalCMServer(context.Background())
+	login := auth.NewLogOnDetails(os.Getenv("STEAM_USER"), os.Getenv("STEAM_PASS"))
 
 	if err := client.ConnectAndLogin(context.Background(), server, login); err != nil {
 		panic(err)
@@ -182,9 +141,7 @@ func main() {
 }
 ```
 
-### 2. Configure custom Onion Trading Middlewares
-
-You can implement complex trade routing policies by building clean, decoupled middleware. Here is a custom middleware that validates the price of trade items:
+### 2. Configure Custom Onion Middlewares
 
 ```go
 package main
@@ -194,22 +151,19 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/trading/reason"
 )
 
-// PriceValidationMiddleware enforces strict price matches
 func PriceValidationMiddleware(priceLimit int) engine.Middleware {
 	return func(next engine.Handler) engine.Handler {
 		return func(ctx *engine.TradeContext) error {
 			totalGiveValue := 0
 			for _, item := range ctx.Offer.ItemsToGive {
-				// Access custom price metadata previously set in context by a pricer middleware
 				if price, ok := ctx.Get("price_" + item.SKU); ok {
 					totalGiveValue += price.(int)
 				}
 			}
 
 			if totalGiveValue > priceLimit {
-				// Total value exceeds our threshold: decline or send to manual review
 				ctx.Review(reason.ReviewEngineError)
-				return nil // Halt chain
+				return nil // Halt chain safely
 			}
 
 			return next(ctx)
@@ -220,34 +174,25 @@ func PriceValidationMiddleware(priceLimit int) engine.Middleware {
 
 ## 🎮 Multi-Game Extensions
 
-G-MAN is designed to support different games through decoupled modules. The primary supported extension is:
+Domain-specific game behaviors are decoupled from the core framework into dedicated repositories:
 
 * **[g-man-tf2](https://github.com/lemon4ksan/g-man-tf2)**: Team Fortress 2 Trading & Economy Suite
-  - **Metal Arithmetic:** Precise calculations with keys, refined, reclaimed, and scrap metals.
-  - **Auto-Smelter:** Combining weapons and smelting metals dynamically to balance change.
-  - **Backpack.tf Sync:** Stateful listing publisher and competitor undercutting manager.
-  - **Schema Parser:** Dynamic O(1)-indexed item normalization.
+  - **Metal Arithmetic:** Calculations with keys, refined, reclaimed, and scrap metals.
+  - **Auto-Smelter:** Automatically handles weapon combining and metal smelting to balance change.
+  - **Backpack.tf Sync:** Listing publisher and competitor undercutting manager.
 
-## 🚀 Memory & Performance Efficiency
+## 🚀 Memory & Performance
 
-G-MAN is architected for maximum resource efficiency, achieving an exceptionally small runtime footprint:
-- **Core Bot Architecture:** Requires only **~4.5 MB** of live heap memory (including the event bus, social modules, and trade managers).
-- **Lightweight Execution:** Highly-optimized networking and strict buffer pooling minimize allocation cycles.
-- **Topological Booting:** Modules are initialized deterministically, avoiding redundant locks or startup races.
+* **Small Heap Footprint:** The core bot architecture requires approximately **~4.5 MB** of live heap memory in idle state (including the event bus, social tracking, and trade managers).
+* **Buffer Pooling:** Network serialization and socket frames use buffer pools to minimize garbage collection cycles during high-throughput tasks.
 
 ## 🏗 Roadmap
 
-### Core Infrastructure
 - [x] **Smart Transport Routing:** Thread-safe dynamic requests via Sockets or HTTP.
 - [x] **WebSession Keep-Alive:** Auto-refresh loops for web-cookies and API keys.
 - [x] **Silent Re-Authentication:** Background recovery of expired JWTs.
-- [x] **Topological Dependency Sorting:** Safe and cycle-free boot ordering of modules.
-- [x] **Global Proxy Tunneling:** Clean SOCKS5/HTTP integration for all modules.
+- [x] **Topological Dependency Sorting:** Safe, cycle-free module boot ordering.
 - [ ] **Steam CDN Downloader:** Dynamic downloading and parsing of app manifests/game assets.
-
-### Trading & Protocols
-- [x] **Onion Trade Middleware:** Decoupled pipelines for extensible offer checking.
-- [x] **Defensive Web Scraper:** Converts soft-error HTMLs to strictly-typed errors.
 - [ ] **CS2 Coordinator:** GC-handshakes, item skin parsing, and match history tracking.
 - [ ] **Dota 2 Coordinator:** SOCache item parsing and custom lobby manager.
 
@@ -256,8 +201,8 @@ G-MAN is architected for maximum resource efficiency, achieving an exceptionally
 We welcome contributions to G-man! If you want to add support for new storage adapters, expand GC structures, or improve defensive scraping algorithms:
 
 1. Review our design philosophy in [CONTRIBUTING.md](CONTRIBUTING.md).
-2. Ensure new network dependencies are minimal and run through the `transport.Doer` interface.
-3. Write matching unit tests and verify concurrency safety using `go test -race ./...`.
+2. Ensure network interactions route through the core `transport.Doer` interface to support mocking.
+3. Verify concurrency safety using `go test -race ./...`.
 
 ## ☕ Support the Development
 

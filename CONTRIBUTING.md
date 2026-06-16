@@ -18,6 +18,7 @@ By contributing to this project, you agree to abide by its terms and follow the 
 * **Scope & Generality:** G-man is designed to be a highly universal, modular foundation suitable for a wide range of trading setups, service platforms, and private bot managers.
   * **Keep it Generic:** We do **not** accept highly specialized business logic, proprietary rules, or overly narrow database schemas that are tailored for a single private trading system.
   * **Build on Top, Not Inside:** Public APIs, structures, and managers must remain customizable and generic. Custom, proprietary trading algorithms or private backend integrations should be built *on top* of G-man modules using our decoupled interfaces rather than being merged directly into the core packages.
+  * **Game-Specific Logic:** Core packages (`pkg/steam`, `pkg/trading/engine`, etc.) must remain completely agnostic to individual game attributes. Game-specific operations belong either in the `pkg/steam/sys/gc` coordinators or in external extension libraries (like `g-man-tf2`).
 
 ### Pull Requests
 
@@ -25,8 +26,6 @@ By contributing to this project, you agree to abide by its terms and follow the 
 * **Atomic Commits:** Keep your commits small and focused.
 * **Tests:** Every new feature or bug fix **must** include corresponding tests.
 * **Documentation:** Update the `README.md` or `doc.go` files if you are changing the public API.
-
----
 
 ## 🛠 Development Standards
 
@@ -43,6 +42,7 @@ G-man is built with a focus on high performance and maintainability. We follow s
 * **No Global State:** Global variables are strictly forbidden. Use structs and pass dependencies through constructors.
 * **Mutexes:** Keep critical sections as small as possible. Prefer `atomic` values for simple counters or state flags.
 * **Contexts:** Always propagate `context.Context` through blocking calls (Network, I/O, Long-running loops).
+* **Event-Driven Patterns:** Avoid blocking downstream services or holding long synchronous locks. Use the thread-safe `pkg/bus` to emit status changes (e.g., a state change should publish an event rather than directly calling a hard-coded handler in another package).
 
 ### 3. Error Handling
 
@@ -58,6 +58,25 @@ G-man is built with a focus on high performance and maintainability. We follow s
 
 * **Structured Only:** Do not use `fmt.Println` or the standard `log` package. Use the `pkg/log` package provided in the SDK.
 * **Contextual Fields:** Always include relevant metadata using fields (e.g., `log.SteamID(id)`).
+
+### 6. Modules & Topological Bootstrapping
+
+* **Embed `module.Base`:** Any new module intended to be managed by the core client must embed `module.Base` (or implement the module lifecycle interface).
+* **Deterministic Initialization:** Avoid complex logic or external network calls in constructors (`New...`). Offload startup logic to the `Start(ctx)` lifecycle method.
+* **Avoid Circular Dependencies:** Because G-man uses a DFS algorithm to topologically sort modules during boot, check your imports. A circular dependency between modules will cause a fast-fail during client startup.
+
+### 7. Network and Transport
+
+* **Use `transport.Doer`:** Never instantiate or use standard `http.DefaultClient` or custom raw HTTP clients directly for Steam interactions. All HTTP and socket traffic must route through the `transport.Doer` interface. This ensures that:
+  * Proxy settings (SOCKS5/HTTP) are respected globally.
+  * WebSession silent re-authentication can intercept and refresh expired cookies.
+  * Requests can be easily mocked in unit tests.
+
+### 8. Defensive Web Scraping (Community Scrapers)
+
+If you are contributing to the `pkg/steam/community` package:
+* **No Blind Status Checks:** Do not assume a `200 OK` HTTP status means the request succeeded. Always scan the raw response body for Steam's warning blocks.
+* **Convert to Strongly-Typed Errors:** If a soft error is detected, convert it into a strictly typed error defined in `pkg/steam/api` (e.g., `ErrRateLimited` or `ErrSessionExpired`), allowing safety handlers and re-auth loops to trigger.
 
 ## 📦 Dependency Policy
 
@@ -83,8 +102,6 @@ We rely heavily on automated testing to ensure the framework remains stable.
 * **Mocking:** Use the `test/` package to mock network requesters and Steam CM responses.
 * **Race Detector:** Always run your tests with the race detector enabled: `go test -race ./...`.
 
----
-
 ## 🔒 Security Vulnerabilities
 
 If you discover a security vulnerability (especially related to Steam Guard or credential handling), please **do not open a public issue**. Instead, please contact the maintainers privately at `arsenii.komolov@yandex.ru` (or via Telegram: `t.me/LemonadeAK`).
@@ -92,8 +109,6 @@ If you discover a security vulnerability (especially related to Steam Guard or c
 ## ⚖️ License
 
 By contributing, you agree that your contributions will be licensed under the project's **BSD-3-Clause License**.
-
----
 
 <div align="center">
   <sub>Happy coding, and see you on the Market!</sub>

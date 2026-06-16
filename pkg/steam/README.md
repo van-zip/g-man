@@ -2,46 +2,23 @@
 
 # ⚙️ Steam Core Orchestrator
 
-### The Brain of G-man: Unified Transport, Auth, and Protocols
+### Main Client Lifecycle, Protocol Routing, and Event Dispatching
 
 #### 🇺🇸 [English](README.md) • 🇷🇺 [Русский](README_RU.md)
 
 </div>
 
-The `steam` package is the foundational orchestrator of the G-man framework. It abstracts away the massive complexity of Valve's backend infrastructure by unifying three distinct environments into a single, thread-safe `steam.Client`:
+The `steam` package acts as the central coordinator of G-man. It unifies low-latency binary CM socket protocols with stateless WebAPI and Steam Community scrapers into a single, thread-safe `steam.Client`.
 
-1. **Persistent CM Connections**: Low-latency binary communication via Connection Manager Sockets (TCP/WebSockets).
-2. **WebAPI Services**: Standardized RPC calls over HTTP (`api.steampowered.com`).
-3. **Steam Community**: Defensive scraping and interaction with `steamcommunity.com`.
+## ⚙️ Core Responsibilities
 
-## ⚡ Core Systems Deep Dive
+* **Unified Protocol Routing:** Exposes a single `Client.Do()` interface. If the client is connected to a CM socket, requests are serialized directly into binary `EMsg` packets. If disconnected or if the destination requires HTTPS, requests route through the WebAPI client.
+* **Token State Management:** Coordinates the authorization cycle (OAuth2 flows, Web Cookie generation, API keys, and Steam Guard handshakes) and automatically handles refreshes to maintain connection continuity.
+* **Event Dispatching:** Integrates directly with the central thread-safe event bus to publish state changes (e.g. connection losses, successful auth events, or incoming raw socket packets) to registered modules.
 
-### 1. 🚦 Dual-Stack Transport Routing
-G-man implements **Protocol Agnosticism**. When you send a request using the `Service()` router, you do not need to specify the transport layer. 
+## 🚀 Usage Example: Authenticating and Executing RPCs
 
-The router dynamically evaluates the request:
-* If the bot is actively connected to the CM Socket and the request is a supported `EMsg`, it transmits via the **socket** for zero-overhead, real-time speed.
-* If the socket drops, or the endpoint requires HTTP (like legacy WebAPIs), it transparently falls back to the **HTTP WebAPI client**.
-
-### 2. 🔄 Self-Healing Authentication (OAuth2)
-Valve uses a complex, layered auth system involving Refresh Tokens, JWT Access Tokens, and legacy Web Cookies.
-The `Client` manages this entirely in the background:
-* **Background Monitoring**: It actively monitors token expiration times.
-* **Atomic Refreshes**: If a `401 Unauthorized` or cookie expiration occurs mid-request, the `Client` pauses the failing request, negotiates a new OAuth2 token, regenerates the cookies, and securely resumes the original request.
-* **Invisible to Devs**: Your high-level code never has to manually retry a login due to a timeout.
-
-### 3. 📡 Event-Driven Integration
-The `steam` package utilizes the lock-free `pkg/bus` to broadcast its internal state. You can hook into the lifecycle events without modifying the core client.
-
-**Available Core Events include:**
-* `LoggedOnEvent` / `DisconnectedEvent`
-* `SessionUpdatedEvent`
-* `IncomingPacketEvent` (Raw `EMsg` interception)
-* `WebAPIKeyRegisteredEvent`
-
-## 🚀 Quickstart Example
-
-Here is how you initialize the orchestrator, log in, and execute a Unified RPC call:
+The example below demonstrates how to initialize the client, connect to the Steam Network, authenticate, and call a Unified Service API using proto-compiled structures:
 
 ```go
 package main
@@ -60,16 +37,14 @@ import (
 
 func main() {
 	ctx := context.Background()
-
-	// 1. Initialize Structured Logging
 	logger := log.New(log.DefaultConfig(log.LevelInfo))
 	defer logger.Close()
 
-	// 2. Initialize the Orchestrator with default settings and logger
+	// 1. Configure and instantiate the Orchestrator
 	cfg := steam.DefaultConfig()
 	client, err := steam.NewClient(cfg, steam.WithLogger(logger))
 	if err != nil {
-		logger.Error("Failed to initialize Steam client", log.Err(err))
+		logger.Error("Orchestrator initialization failed", log.Err(err))
 		return
 	}
 	defer func() {
@@ -77,76 +52,71 @@ func main() {
 		client.Wait()
 	}()
 
+	// Start internal loops
 	if err := client.Run(); err != nil {
 		panic(err)
 	}
 
-	// 3. Prepare Login Details
-	details := &auth.LogOnDetails{
-		AccountName: "your_username",
-		Password:    "your_password",
-		// Optional: TwoFactorCode or AuthCode
-	}
-
-	// 4. Resolve the Optimal Connection Manager (CM) Server via Directory Service
+	// 2. Fetch optimal connection servers from directory
 	dir := directory.New(client.Service())
 	server, err := dir.GetOptimalCMServer(ctx)
 	if err != nil {
-		logger.Error("Failed to resolve optimal CM server", log.Err(err))
+		logger.Error("Server resolution failed", log.Err(err))
 		return
 	}
 
-	// 5. Connect to CM Servers and Authenticate
-	logger.Info("Connecting to Steam CM network...")
+	// 3. Authenticate with credentials
+	details := &auth.LogOnDetails{
+		AccountName: "your_username",
+		Password:    "your_password",
+	}
+
+	logger.Info("Connecting to Steam network...")
 	if err := client.ConnectAndLogin(ctx, server, details); err != nil {
-		logger.Error("Login failed", log.Err(err))
+		logger.Error("Failed to log in", log.Err(err))
 		return
 	}
 	defer func() {
 		_ = client.Disconnect()
 	}()
 
-	// 6. Execute a Unified RPC call using the smart router
+	// 4. Invoke a Unified WebAPI Service via Protocol Router
 	req := &pb.CPlayer_GetNickname_Request{
-		Steamid: proto.Uint64(76561198000000000), // Target SteamID
+		Steamid: proto.Uint64(76561198000000000),
 	}
-	
-	// The Service() router automatically decides optimal transport (Socket vs HTTP)
+
 	res, err := service.Unified[pb.CPlayer_GetNickname_Response](ctx, client.Service(), req)
 	if err != nil {
-		logger.Error("RPC call failed", log.Err(err))
+		logger.Error("Service call failed", log.Err(err))
 		return
 	}
 
-	logger.Info("Target Nickname retrieved successfully", log.String("nickname", res.GetNickname()))
+	logger.Info("Retrieved nickname via Service Router", log.String("nickname", res.GetNickname()))
 }
 ```
 
-### 🔑 Key Implementation Highlights
+## 🛠️ Key Orchestrator Design Patterns
 
-When building a production-grade bot (like the [trading bot example](examples/trading_bot/main.go)), you should leverage the core architecture patterns shown below:
+### 1. Functional Options for Module Registration
+Avoid registering modules imperatively post-initialization. Instead, supply your modules (e.g., TF2 engine, social plugins) during initialization using functional options:
 
-1. **Module Injection (Functional Options)**: Core modules (e.g. TF2, Backpack, Schema) should be passed during client instantiation using functional options instead of manual registration:
-   ```go
-   client, err := steam.NewClient(cfg,
-       steam.WithLogger(logger),
-       tf2.WithModule(),
-       backpack.WithModule(),
-       webtrading.WithModule(webtrading.Config{PollInterval: 30 * time.Second}),
-   )
-   ```
+```go
+client, err := steam.NewClient(cfg,
+    steam.WithLogger(logger),
+    webtrading.WithModule(webtrading.DefaultConfig()),
+)
+```
 
-2. **Decoupled Event Handling**: Avoid synchronous blockers and utilize G-man's central thread-safe event bus to orchestrate flows such as Steam Guard prompts or successful logon confirmations:
-   ```go
-   sub := client.Bus().Subscribe(&auth.LoggedOnEvent{}, &auth.SteamGuardRequiredEvent{})
-   go func() {
-       for event := range sub.C() {
-           switch ev := event.(type) {
-           case *auth.LoggedOnEvent:
-               logger.Info("Login successful!", log.Uint64("steam_id", ev.SteamID))
-           }
-       }
-   }()
-   ```
+### 2. Decoupled Event Subscriptions
+Avoid blocking loops or modifying core code to intercept network lifecycle changes. Subscribe to events using G-man's central event bus:
 
-3. **Production Middleware Integration**: Build cohesive, layered trading pipelines (via onion-style middlewares) by integrating external modules, price indices, and currency managers dynamically.
+```go
+sub := client.Bus().Subscribe(&auth.LoggedOnEvent{})
+go func() {
+    for event := range sub.C() {
+        if ev, ok := event.(*auth.LoggedOnEvent); ok {
+            logger.Info("Established active session", log.Uint64("steam_id", ev.SteamID))
+        }
+    }
+}()
+```

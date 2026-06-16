@@ -8,11 +8,11 @@
 
 </div>
 
-This directory contains the public API surface of the **G-man** framework. These packages form a highly decoupled, modular ecosystem. You can import the entire suite to build a full-featured Steam bot, or cherry-pick individual packages (e.g., `steam/community` for inventory scraping, `trading/engine` for Onion middleware, or `crypto` for mobile TOTP generation) to integrate directly into your existing Go applications.
+This directory houses G-man's modular Go packages. You can import the entire framework or select individual packages (e.g., `steam/community` for scraping, `trading/engine` for onion middleware, or `crypto` for mobile TOTP generation) to integrate into existing projects.
 
 ## 🏗 Package Dependency Hierarchy
 
-To maintain high performance and prevent circular imports (a common Go pitfall), G-man enforces a strict **layered import hierarchy**. Lower layers must never import higher layers:
+To prevent circular imports and maintain separation of concerns, G-man enforces a unidirectional import hierarchy. Lower layers must never import packages in the layers above them:
 
 ```mermaid
 flowchart TD
@@ -79,65 +79,63 @@ flowchart TD
     style L1 fill:#301820,stroke:#f38ba8,stroke-width:2px,stroke-dasharray: 5 5,color:#f38ba8
 ```
 
-## 📦 Package Overview
+## 📦 Package Catalog
 
-### 1. ⚙️ Core Layer (`pkg/steam`)
-The foundation of the framework. It handles network communication, protocol serialization, and API orchestration.
-
-| Package | Description |
-| :--- | :--- |
-| **[steam](steam/)** | The main **Orchestrator**. Connects Socket, Auth, and Modules into a thread-safe, topologically booted `Client`. |
-| **[steam/api](steam/api/)** | Target specifications, Steam error types (`EResult`), and response unmarshalers (VDF, JSON, Proto). |
-| **[steam/auth](steam/auth/)** | Modern OAuth2 flows. Supports JWT, Refresh Tokens, and background re-auth cycles. |
-| **[steam/community](steam/community/)** | Defensive Web Client for scraping `steamcommunity.com` inventories, market, and OpenID. |
-| **[steam/guard](steam/guard/)** | Mobile Authenticator confirmations, 2FA codes, and mobile session state. |
-| **[steam/id](steam/id/)** | Robust `SteamID` parser and formatter (SID2, SID3, and 64-bit formats). |
-| **[steam/socket](steam/socket/)** | Stateful Connection Manager (CM) client. Handles heartbeats, routing, and job tracking. |
-| **[steam/service](steam/service/)** | RPC commander translating Protobuf messages into unified service calls. |
-| **[steam/social](steam/social/)** | Social features: real-time persona states, friend lists, and chat. |
-| **[steam/transport](steam/transport/)** | Dual-stack transport bridge unifying CM Socket and HTTP into a single execution layer. |
-| **[steam/webapi](steam/webapi/)** | Auto-generated wrappers for Steam's Web APIs. |
-
-### 2. 🔌 System & Game Coordinators (`pkg/steam/sys`)
-Gateways to Steam's internal systems and individual game servers.
+### 1. Core Layer (`pkg/steam`)
+The fundamental protocols and lifecycle systems of the client.
 
 | Package | Description |
 | :--- | :--- |
-| **[sys/gc](steam/sys/gc/)** | Base Game Coordinator client. Handles handshakes and multiplexed message routing. |
-| **[sys/directory](steam/sys/directory/)** | ISteamDirectory API client for dynamic retrieval of active Steam CM server IP lists. |
-| **[sys/apps](steam/sys/apps/)** | In-game status manager and socket app notification handler. |
+| **[steam](steam/)** | Main Orchestrator. Coordinates Socket, Auth, and registered modules within a thread-safe client lifecycle. |
+| **[steam/api](steam/api/)** | Unified error definitions (`EResult`) and multi-format unmarshalers (VDF, JSON, Protobuf). |
+| **[steam/auth](steam/auth/)** | OAuth2 state machine tracking JWT lifetimes and background cookie refreshes. |
+| **[steam/community](steam/community/)** | Defensive HTTP client for handling inventory loads, market operations, and OpenID. |
+| **[steam/guard](steam/guard/)** | Steam Guard operations, mobile confirmation retrievals, and TOTP generation. |
+| **[steam/id](steam/id/)** | SteamID parser, formatter, and math utilities supporting SID2, SID3, and 64-bit formats. |
+| **[steam/socket](steam/socket/)** | Connection Manager (CM) state machine handling TCP/WebSocket heartbeats and packet dispatch. |
+| **[steam/service](steam/service/)** | RPC commander translating Protobuf definitions into unified service calls. |
+| **[steam/social](steam/social/)** | Chat commands, friend-state sync, and persona state operations. |
+| **[steam/transport](steam/transport/)** | Low-level execution layer uniting CM Sockets and HTTP under a single interface. |
+| **[steam/webapi](steam/webapi/)** | Auto-generated standard Steam WebAPI endpoint wrappers. |
 
-### 3. 🧠 Trading Logic (`pkg/trading`)
-The high-level request-response engine for automated trading behaviors.
-
-| Package | Description |
-| :--- | :--- |
-| **[trading/engine](trading/engine/)** | The **Onion Middleware Engine**. Chains trade validation steps using context propagation. |
-| **[trading/processor](trading/processor/)** | Core transaction lifecycle manager (*Check $\rightarrow$ Decide $\rightarrow$ Act $\rightarrow$ Notify*). |
-| **[trading/review](trading/review/)** | High-value transaction auditing, trade logging, and administrative reviews. |
-| **[trading/live](trading/live/)** | Support for GC-based real-time "Live Trade" sessions. |
-| **[trading/web](trading/web/)** | Traditional Web-based Trade Offer operations via the Community API. |
-
-### 🛠 4. Infrastructure & Storage
-Utilities and core persistent storage providers used across the SDK.
+### 2. Game Coordinators & Subsystems (`pkg/steam/sys`)
+Gateways to in-game coordination networks and app data.
 
 | Package | Description |
 | :--- | :--- |
-| **[behavior](behavior/)** | Universal autonomous routines, including human-mimicking achievements and stats simulation. |
-| **[bus](bus/)** | High-performance **Event Bus** for decoupled pub/sub modules. |
-| **[crypto](crypto/)** | ECC, RSA cryptography, and TOTP algorithms for security operations. |
-| **[jobs](jobs/)** | Thread-safe asynchronous job execution unit and async worker manager. |
-| **[log](log/)** | Contextual, structured, module-aware logger. |
-| **[rest](rest/)** | HTTP client wrapper featuring automatic retries, exponential backoffs, and parameters serialization. |
-| **[storage](storage/)** | Interface-first storage provider with JSON and in-memory backends. |
-| **[command](command/)** | CLI command routing, registration, and human command executor. |
+| **[sys/gc](steam/sys/gc/)** | Base Game Coordinator client managing GC handshakes and packet demuxing. |
+| **[sys/directory](steam/sys/directory/)** | DNS and API resolution of active Connection Manager (CM) server address pools. |
+| **[sys/apps](steam/sys/apps/)** | Tracking of active app states and socket-level notifications. |
 
-## 🏗 Architecture & Philosophy
+### 3. Trading Engine (`pkg/trading`)
+Transaction lifecycles and business flow engines.
 
-G-man packages are engineered with **Go best practices** in mind:
+| Package | Description |
+| :--- | :--- |
+| **[trading/engine](trading/engine/)** | The **Onion Middleware Engine** facilitating step-by-step trade checks. |
+| **[trading/processor](trading/processor/)** | Core transaction flow controller (*Evaluate $\rightarrow$ Decide $\rightarrow$ Act $\rightarrow$ Dispatch*). |
+| **[trading/review](trading/review/)** | High-value trade validation, escrow holding checks, and administrator review logs. |
+| **[trading/live](trading/live/)** | Support for GC-based real-time "Live Trading" session states. |
+| **[trading/web](trading/web/)** | Legacy web-based Steam Trade Offers processing. |
 
-1. **Protocol Agnosticism**: Applications communicate with Steam via `steam.Client.Do()`. The internal routing engine automatically selects either the active CM Socket (for real-time speed) or HTTP WebAPI (as a fallback) depending on connectivity status.
-2. **Interface-First Design**: Components communicate using tight consumer-defined interfaces. Rather than depending on concrete clients, structures depend on `Requester` or `Doer` contracts, keeping the system fully mockable.
-3. **Concurrency Safety**: Circular states, heartbeats, and packet routing are managed using `sync/atomic` and read-write mutexes. All blocking operations explicitly accept a `context.Context`.
-4. **Defensive Web Scraping**: The `community` client proactively converts hidden HTML errors (e.g., rate limits disguised as standard web views) into strictly typed Go errors like `ErrRateLimited`.
-5. **Decoupled Extensions**: Domain-specific logic (e.g. game schemas, currency, item attributes) is pushed into external packages (like `g-man-tf2`), keeping the core framework lean and fast.
+### 4. Utilities & Support Services
+Infrastructure packages utilized throughout the project.
+
+| Package | Description |
+| :--- | :--- |
+| **[behavior](behavior/)** | Standardized, non-intrusive routines (e.g. human-mimicking achievements simulation). |
+| **[bus](bus/)** | Core memory-safe event bus supporting parallel, decoupled subscription delivery. |
+| **[crypto](crypto/)** | Encryption and decryption helpers (Symmetric/Asymmetric, Steam mobile signatures). |
+| **[jobs](jobs/)** | Thread-safe asynchronous job scheduler and worker pool manager. |
+| **[log](log/)** | Contextual, level-structured logging engine. |
+| **[rest](rest/)** | Retrying HTTP client featuring exponential backoff. |
+| **[storage](storage/)** | Persistent storage interfaces featuring standard JSON and memory adapters. |
+| **[command](command/)** | Thread-safe command line registration and routing system. |
+
+## 📐 Architecture Design Constraints
+
+To maintain modularity and code quality, the library adheres to these core architectural constraints:
+
+1. **Strict Mockability:** Structures depend on highly constrained interfaces (like `transport.Doer` or `storage.Store`) rather than concrete implementations, allowing developers to isolate and mock layers during testing.
+2. **Channel-Based Concurrency:** Core event dispatching routes through the `bus` package to prevent locking bottlenecks. Shared state across routines relies heavily on `sync/atomic` and read-write locks (`sync.RWMutex`).
+3. **Decoupled Extensions:** To prevent bloat, specialized game economies (like item schema processing or weapon smelting) are pushed to external packages like `g-man-tf2`, keeping the core framework code lean.

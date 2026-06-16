@@ -22,7 +22,6 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/community/inventory"
@@ -360,8 +359,8 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 		m.community,
 		"tradeoffer/new/send",
 		payload,
-		api.WithHeader("Referer", referer),
-		api.WithHeader("Origin", "https://steamcommunity.com"),
+		service.WithHeader("Referer", referer),
+		service.WithHeader("Origin", "https://steamcommunity.com"),
 	)
 	if err != nil {
 		return 0, err

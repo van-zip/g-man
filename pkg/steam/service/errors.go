@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package api
+package service
 
 import (
 	"errors"
@@ -16,10 +16,6 @@ var (
 	// ErrSessionExpired signals that the current AccessToken or CM
 	// session is no longer valid. This is the trigger for an update.
 	ErrSessionExpired = errors.New("api: session expired or invalid")
-
-	// ErrFormat is returned when the response doesn't
-	// match the specified format or the target is invalid.
-	ErrFormat = errors.New("api: response format error")
 
 	// ErrRateLimited indicates Steam is blocking requests due to high frequency.
 	ErrRateLimited = errors.New("api: rate limit exceeded")

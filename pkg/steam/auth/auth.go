@@ -22,9 +22,9 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
+	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/dispatcher"
@@ -361,7 +361,7 @@ func (a *Authenticator) LogOn(ctx context.Context, details *LogOnDetails, server
 		return nil
 	}
 
-	var eResErr *api.EResultError
+	var eResErr *service.EResultError
 	if errors.As(resultErr, &eResErr) && eResErr.Result == enums.EResult_InvalidPassword {
 		a.getLogger().Warn("Session rejected by CM (Invalid Password/Token), clearing local storage")
 		_ = a.store.Clear(ctx, details.AccountName)

@@ -22,14 +22,15 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
+	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
 var (
 	// ErrFamilyViewRestricted is returned when the account is under Family View restrictions.
-	ErrFamilyViewRestricted = api.ErrFamilyViewRestricted
+	ErrFamilyViewRestricted = service.ErrFamilyViewRestricted
 	// ErrRateLimited is returned when the account is rate limited.
-	ErrRateLimited = api.ErrRateLimited
+	ErrRateLimited = service.ErrRateLimited
 )
 
 // Requester defines the requirements for making Community requests.
@@ -75,14 +76,14 @@ func WithREST(r rest.Requester) Option {
 }
 
 // WithRegistry sets a custom unmarshal registry for the client.
-func WithRegistry(r *api.UnmarshalRegistry) Option {
+func WithRegistry(r *encoding.UnmarshalRegistry) Option {
 	return func(c *Client) {
 		c.registry = r
 	}
 }
 
 // WithRegistry returns a copy of the client with a custom registry of decoders.
-func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
+func (c *Client) WithRegistry(r *encoding.UnmarshalRegistry) *Client {
 	clone := *c
 	clone.registry = r
 	return &clone
@@ -99,7 +100,7 @@ type Client struct {
 	logger      log.Logger
 
 	// registry holds the decoders used to parse WebAPI and Socket responses.
-	registry *api.UnmarshalRegistry
+	registry *encoding.UnmarshalRegistry
 }
 
 // NewClient creates a new Community Client.
@@ -113,7 +114,7 @@ func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts .
 		restClient:  rc,
 		sessionFunc: sessionFunc,
 		logger:      log.Discard,
-		registry:    api.NewUnmarshalRegistry(),
+		registry:    encoding.NewUnmarshalRegistry(),
 	}
 
 	for _, opt := range opts {
@@ -125,7 +126,7 @@ func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts .
 
 // Registry returns the underlying registry of decoders.
 // Implements [api.RegistryProvider].
-func (c *Client) Registry() *api.UnmarshalRegistry {
+func (c *Client) Registry() *encoding.UnmarshalRegistry {
 	return c.registry
 }
 
@@ -239,7 +240,13 @@ func (c *Client) registerAPIKey(ctx context.Context, domain string) (string, err
 // Get performs a GET request and unmarshals the resulting JSON into the Resp type.
 //
 // If the reqMsg argument is nil, query parameters are omitted.
-func Get[Resp any](ctx context.Context, r Requester, path string, reqMsg any, opts ...api.CallOption) (*Resp, error) {
+func Get[Resp any](
+	ctx context.Context,
+	r Requester,
+	path string,
+	reqMsg any,
+	opts ...service.CallOption,
+) (*Resp, error) {
 	var query url.Values
 
 	if reqMsg != nil {
@@ -251,9 +258,9 @@ func Get[Resp any](ctx context.Context, r Requester, path string, reqMsg any, op
 		}
 	}
 
-	myOpts := append([]api.CallOption{
-		api.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
-		api.WithHeader("X-Requested-With", "XMLHttpRequest"),
+	myOpts := append([]service.CallOption{
+		service.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
+		service.WithHeader("X-Requested-With", "XMLHttpRequest"),
 	}, opts...)
 
 	return execute[Resp](ctx, r, http.MethodGet, path, nil, query, myOpts...)
@@ -262,9 +269,9 @@ func Get[Resp any](ctx context.Context, r Requester, path string, reqMsg any, op
 // GetHTML performs a GET request specifically for raw HTML content.
 //
 // If the reqMsg argument is nil, query parameters are omitted.
-func GetHTML(ctx context.Context, r Requester, path string, opts ...api.CallOption) ([]byte, error) {
-	myOpts := append([]api.CallOption{
-		api.WithHeader(
+func GetHTML(ctx context.Context, r Requester, path string, opts ...service.CallOption) ([]byte, error) {
+	myOpts := append([]service.CallOption{
+		service.WithHeader(
 			"Accept",
 			"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 		),
@@ -288,7 +295,7 @@ func PostForm[Resp any](
 	r Requester,
 	path string,
 	reqMsg any,
-	opts ...api.CallOption,
+	opts ...service.CallOption,
 ) (*Resp, error) {
 	var params url.Values
 
@@ -307,9 +314,9 @@ func PostForm[Resp any](
 		params.Set("sessionid", r.SessionID(BaseURL))
 	}
 
-	myOpts := append([]api.CallOption{
-		api.WithHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"),
-		api.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
+	myOpts := append([]service.CallOption{
+		service.WithHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"),
+		service.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
 	}, opts...)
 
 	return execute[Resp](ctx, r, http.MethodPost, path, []byte(params.Encode()), nil, myOpts...)
@@ -324,7 +331,7 @@ func PostJSON[Resp any](
 	r Requester,
 	path string,
 	reqMsg any,
-	opts ...api.CallOption,
+	opts ...service.CallOption,
 ) (*Resp, error) {
 	var body []byte
 
@@ -342,9 +349,9 @@ func PostJSON[Resp any](
 		query = url.Values{"sessionid": {sid}}
 	}
 
-	myOpts := append([]api.CallOption{
-		api.WithHeader("Content-Type", "application/json; charset=UTF-8"),
-		api.WithHeader("Accept", "application/json"),
+	myOpts := append([]service.CallOption{
+		service.WithHeader("Content-Type", "application/json; charset=UTF-8"),
+		service.WithHeader("Accept", "application/json"),
 	}, opts...)
 
 	return execute[Resp](ctx, r, http.MethodPost, path, body, query, myOpts...)
@@ -356,12 +363,12 @@ func performRequest(
 	method, path string,
 	body []byte,
 	query url.Values,
-	opts ...api.CallOption,
-) (*http.Response, *api.CallConfig, error) {
-	req := api.NewHTTPRequest(method, BaseURL+path, body).WithParams(query)
+	opts ...service.CallOption,
+) (*http.Response, *service.CallConfig, error) {
+	req := service.NewHTTPRequest(method, BaseURL+path, body).WithParams(query)
 
-	cfg := &api.CallConfig{
-		Format:   api.FormatJSON,
+	cfg := &service.CallConfig{
+		Format:   encoding.FormatJSON,
 		Registry: getRegistry(r),
 	}
 	for _, opt := range opts {
@@ -382,7 +389,7 @@ func execute[Resp any](
 	method, path string,
 	body []byte,
 	query url.Values,
-	opts ...api.CallOption,
+	opts ...service.CallOption,
 ) (*Resp, error) {
 	resp, cfg, err := performRequest(ctx, r, method, path, body, query, opts...)
 	if err != nil {
@@ -407,50 +414,50 @@ func execute[Resp any](
 	return result, nil
 }
 
-func getRegistry(r Requester) *api.UnmarshalRegistry {
-	if rp, ok := r.(api.RegistryProvider); ok {
+func getRegistry(r Requester) *encoding.UnmarshalRegistry {
+	if rp, ok := r.(encoding.RegistryProvider); ok {
 		return rp.Registry()
 	}
 
-	return api.NewUnmarshalRegistry()
+	return encoding.NewUnmarshalRegistry()
 }
 
 func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	if statusCode == http.StatusTooManyRequests {
-		return api.NewSteamAPIError("Rate limit exceeded", statusCode, api.ErrRateLimited)
+		return service.NewSteamAPIError("Rate limit exceeded", statusCode, service.ErrRateLimited)
 	}
 
 	if statusCode >= http.StatusInternalServerError {
-		return api.NewSteamAPIError("Steam is down or in maintenance", statusCode, nil)
+		return service.NewSteamAPIError("Steam is down or in maintenance", statusCode, nil)
 	}
 
 	// Auth Redirects (302 to login page)
 	if statusCode == http.StatusFound || statusCode == http.StatusSeeOther {
 		loc := header.Get("Location")
 		if strings.Contains(loc, "steam") && strings.Contains(loc, "/login") {
-			return api.NewSteamAPIError("Session expired", statusCode, api.ErrSessionExpired)
+			return service.NewSteamAPIError("Session expired", statusCode, service.ErrSessionExpired)
 		}
 	}
 
 	// Parental Control (Family View)
 	if statusCode == http.StatusForbidden && rxFamilyView.Match(body) {
-		return api.NewSteamAPIError("Family View enabled", statusCode, api.ErrFamilyViewRestricted)
+		return service.NewSteamAPIError("Family View enabled", statusCode, service.ErrFamilyViewRestricted)
 	}
 
 	// Soft Auth Failure (Page loaded but user is guest)
 	if bytes.Contains(body, []byte("g_steamID = false;")) ||
 		bytes.Contains(body, []byte(`g_steamID = "0";`)) ||
 		bytes.Contains(body, []byte("<title>Sign In</title>")) {
-		return api.NewSteamAPIError("Session expired", statusCode, api.ErrSessionExpired)
+		return service.NewSteamAPIError("Session expired", statusCode, service.ErrSessionExpired)
 	}
 
 	// Generic Steam Error Pages ("Sorry!")
 	if bytes.Contains(body, []byte("<h1>Sorry!</h1>")) {
 		if matches := rxSorry.FindSubmatch(body); len(matches) > 1 {
-			return api.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
+			return service.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
 		}
 
-		return api.NewSteamAPIError(
+		return service.NewSteamAPIError(
 			"unknown steam community error (Sorry page)",
 			statusCode,
 			nil,
@@ -460,13 +467,13 @@ func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	// Embedded Trade Errors
 	if bytes.Contains(body, []byte("error_msg")) {
 		if matches := rxTradeError.FindSubmatch(body); len(matches) > 1 {
-			return api.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
+			return service.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
 		}
 	}
 
 	// Fallback to generic REST API error if status is bad but no Steam error matched
 	if statusCode >= http.StatusBadRequest {
-		return api.NewSteamAPIError(string(body), statusCode, nil)
+		return service.NewSteamAPIError(string(body), statusCode, nil)
 	}
 
 	return nil

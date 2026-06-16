@@ -17,10 +17,10 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth/websession"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
@@ -51,7 +51,7 @@ type communityClient interface {
 type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession
 
 // CommunityClientFactory constructs a communityClient instance.
-type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient
+type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient
 
 // SessionManager manages the session state of the client.
 //
@@ -75,7 +75,7 @@ type SessionManager struct {
 
 	unified   *service.Client // WebAPI (HTTP)
 	socketAPI *service.Client // CM (TCP/WS)
-	registry  *api.UnmarshalRegistry
+	registry  *encoding.UnmarshalRegistry
 
 	verifyTicker *time.Ticker
 	closed       atomic.Bool
@@ -121,7 +121,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 
 	c.communityFactory = cfg.CommunityFactory
 	if c.communityFactory == nil {
-		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient {
+		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient {
 			return community.NewClient(
 				httpClient,
 				sessionID,

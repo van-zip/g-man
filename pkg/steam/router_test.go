@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
@@ -56,7 +55,7 @@ func TestServiceRouter_Do_TransportSelection(t *testing.T) {
 		// 1st Attempt: Fails with Expired
 		httpDoer.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 			return r.URL.Path == "/mock_path"
-		})).Return(nil, api.ErrSessionExpired).Once()
+		})).Return(nil, service.ErrSessionExpired).Once()
 
 		// Router catches error and performs Refresh
 		refresher.On("Refresh", ctx).Return(nil).Once()
@@ -103,7 +102,7 @@ func TestServiceRouter_Do_Errors(t *testing.T) {
 
 	t.Run("Refresh Failure", func(t *testing.T) {
 		sock.On("IsConnected").Return(false).Once()
-		httpDoer.On("Do", mock.Anything).Return(nil, api.ErrSessionExpired).Once()
+		httpDoer.On("Do", mock.Anything).Return(nil, service.ErrSessionExpired).Once()
 
 		refresher.On("Refresh", ctx).Return(errors.New("refresh failed")).Once()
 

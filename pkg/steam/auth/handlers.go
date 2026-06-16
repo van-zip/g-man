@@ -19,9 +19,9 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/crypto"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
+	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
 // handleChannelEncryptRequest processes the initial TCP handshake from Steam CM.
@@ -123,7 +123,7 @@ func (a *Authenticator) handleLogOnResponse(packet *protocol.Packet) {
 	if res := enums.EResult(msg.GetEresult()); res != enums.EResult_OK {
 		a.getLogger().Error("Logon denied by CM", log.EResult(res))
 
-		a.failLogin(api.NewEResultError(res, nil))
+		a.failLogin(service.NewEResultError(res, nil))
 
 		a.bus.Publish(&LoggedOffEvent{Result: res})
 
@@ -177,8 +177,8 @@ func (a *Authenticator) handleLoggedOff(packet *protocol.Packet) {
 	res := enums.EResult(resp.GetEresult())
 	a.getLogger().Warn("Logged off by server", log.EResult(res))
 
-	if api.IsAuthError(res) {
-		a.failLogin(api.ErrSessionExpired)
+	if service.IsAuthError(res) {
+		a.failLogin(service.ErrSessionExpired)
 	}
 
 	a.setState(StateDisconnected)

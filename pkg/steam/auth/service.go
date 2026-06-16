@@ -16,7 +16,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
@@ -57,7 +56,7 @@ func (s *AuthenticationService) GetPasswordRSAPublicKey(
 		AccountName: proto.String(accountName),
 	}
 	resp, err := service.Unified[pb.CAuthentication_GetPasswordRSAPublicKey_Response](
-		ctx, s.client, req, api.WithHTTPMethod("GET"),
+		ctx, s.client, req, service.WithHTTPMethod("GET"),
 	)
 
 	return resp, err

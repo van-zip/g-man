@@ -17,7 +17,7 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
@@ -48,12 +48,12 @@ type Client struct {
 	transport   tr.Transport
 	apiKey      string
 	accessToken string
-	registry    *api.UnmarshalRegistry
+	registry    *encoding.UnmarshalRegistry
 }
 
 // Registry returns the underlying registry of decoders.
 // Implements [api.RegistryProvider].
-func (c *Client) Registry() *api.UnmarshalRegistry {
+func (c *Client) Registry() *encoding.UnmarshalRegistry {
 	return c.registry
 }
 
@@ -68,7 +68,7 @@ func (c *Client) AccessToken() string {
 }
 
 // WithRegistry sets a custom unmarshal registry for the client.
-func WithRegistry(r *api.UnmarshalRegistry) Option {
+func WithRegistry(r *encoding.UnmarshalRegistry) Option {
 	return func(c *Client) {
 		c.registry = r
 	}
@@ -78,7 +78,7 @@ func WithRegistry(r *api.UnmarshalRegistry) Option {
 func New(tr tr.Transport, opts ...Option) *Client {
 	c := &Client{
 		transport: tr,
-		registry:  api.NewUnmarshalRegistry(),
+		registry:  encoding.NewUnmarshalRegistry(),
 	}
 
 	for _, opt := range opts {
@@ -105,7 +105,7 @@ func (c *Client) WithAccessToken(token string) *Client {
 }
 
 // WithRegistry returns a copy of the client with a custom unmarshal registry.
-func (c *Client) WithRegistry(r *api.UnmarshalRegistry) *Client {
+func (c *Client) WithRegistry(r *encoding.UnmarshalRegistry) *Client {
 	clone := *c
 	clone.registry = r
 	return &clone
@@ -128,7 +128,7 @@ func (c *Client) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) 
 
 	resp, err := c.transport.Do(ctx, req)
 	if err != nil {
-		return nil, api.NewSteamAPIError("transport error", 0, err)
+		return nil, NewSteamAPIError("transport error", 0, err)
 	}
 
 	if err := c.validateEResult(resp); err != nil {
@@ -143,7 +143,7 @@ func (c *Client) validateEResult(resp *tr.Response) error {
 
 	if meta, ok := resp.HTTP(); ok {
 		if meta.StatusCode == http.StatusUnauthorized {
-			return api.NewSteamAPIError("session expired", meta.StatusCode, api.ErrSessionExpired)
+			return NewSteamAPIError("session expired", meta.StatusCode, ErrSessionExpired)
 		}
 
 		res = meta.Result
@@ -154,12 +154,12 @@ func (c *Client) validateEResult(resp *tr.Response) error {
 		res = meta.Result
 	}
 
-	if api.IsAuthError(res) {
-		return api.NewEResultError(res, api.ErrSessionExpired)
+	if IsAuthError(res) {
+		return NewEResultError(res, ErrSessionExpired)
 	}
 
 	if res != enums.EResult_OK {
-		return api.NewEResultError(res, nil)
+		return NewEResultError(res, nil)
 	}
 
 	return nil
@@ -172,7 +172,7 @@ func (c *Client) validateEResult(resp *tr.Response) error {
 // Example:
 //
 //	res, err := service.Unified[PlayerResponse](ctx, client, &CPlayer_GetGameBadgeLevels_Request{...})
-func Unified[Resp any](ctx context.Context, d Doer, msg proto.Message, opts ...api.CallOption) (*Resp, error) {
+func Unified[Resp any](ctx context.Context, d Doer, msg proto.Message, opts ...CallOption) (*Resp, error) {
 	iface, method, err := inferUnifiedMethod(msg)
 	if err != nil {
 		return nil, err
@@ -188,14 +188,14 @@ func UnifiedExplicit[Resp any](
 	httpMethod, iface, method string,
 	version int,
 	msg proto.Message,
-	opts ...api.CallOption,
+	opts ...CallOption,
 ) (*Resp, error) {
 	req, err := NewUnifiedRequest(httpMethod, iface, method, version, msg)
 	if err != nil {
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, api.FormatProtobuf, opts...)
+	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
 }
 
 // WebAPI executes a standard JSON-based WebAPI request.
@@ -205,7 +205,7 @@ func WebAPI[Resp any](
 	httpMethod, iface, method string,
 	version int,
 	reqMsg any,
-	opts ...api.CallOption,
+	opts ...CallOption,
 ) (*Resp, error) {
 	req := NewWebAPIRequest(httpMethod, iface, method, version)
 
@@ -218,7 +218,7 @@ func WebAPI[Resp any](
 		req.WithParams(params)
 	}
 
-	return execute[Resp](ctx, d, req, api.FormatJSON, opts...)
+	return execute[Resp](ctx, d, req, encoding.FormatJSON, opts...)
 }
 
 // Legacy executes a low-level Protobuf request based on an EMsg.
@@ -231,14 +231,14 @@ func Legacy[Resp any](
 	d Doer,
 	eMsg enums.EMsg,
 	reqMsg proto.Message,
-	opts ...api.CallOption,
+	opts ...CallOption,
 ) (*Resp, error) {
 	req, err := NewLegacyRequest(eMsg, reqMsg)
 	if err != nil {
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, api.FormatProtobuf, opts...)
+	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
 }
 
 // LegacyProto is like Legacy but forces a Protobuf CM header on the outer Steam
@@ -249,21 +249,21 @@ func LegacyProto[Resp any](
 	d Doer,
 	eMsg enums.EMsg,
 	reqMsg proto.Message,
-	opts ...api.CallOption,
+	opts ...CallOption,
 ) (*Resp, error) {
 	req, err := NewLegacyProtoRequest(eMsg, reqMsg)
 	if err != nil {
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, api.FormatProtobuf, opts...)
+	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
 }
 
 // WithRoutingAppID returns a CallOption that sets the routing AppID in the
 // outer CM packet's proto header. Required when sending to EMsg_ClientToGC so
 // Steam knows which Game Coordinator to forward the message to.
-func WithRoutingAppID(appID uint32) api.CallOption {
-	return func(req *tr.Request, _ *api.CallConfig) {
+func WithRoutingAppID(appID uint32) CallOption {
+	return func(req *tr.Request, _ *CallConfig) {
 		req.WithRoutingAppID(appID)
 	}
 }
@@ -272,19 +272,19 @@ func execute[Resp any](
 	ctx context.Context,
 	d Doer,
 	req *tr.Request,
-	def api.ResponseFormat,
-	opts ...api.CallOption,
+	def encoding.ResponseFormat,
+	opts ...CallOption,
 ) (*Resp, error) {
 	type registryProvider interface {
-		Registry() *api.UnmarshalRegistry
+		Registry() *encoding.UnmarshalRegistry
 	}
 
-	cfg := &api.CallConfig{Format: def}
+	cfg := &CallConfig{Format: def}
 
 	if rp, ok := d.(registryProvider); ok {
 		cfg.Registry = rp.Registry()
 	} else {
-		cfg.Registry = api.NewUnmarshalRegistry()
+		cfg.Registry = encoding.NewUnmarshalRegistry()
 	}
 
 	for _, opt := range opts {

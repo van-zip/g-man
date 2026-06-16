@@ -2,21 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package api
+package service
 
 import (
 	"net/url"
 	"strings"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
 // CallConfig holds internal configuration for an API call.
 type CallConfig struct {
 	// Format is the expected response format used by the unmarshaler.
-	Format ResponseFormat
+	Format encoding.ResponseFormat
 	// Registry is the unmarshal registry containing decoders.
-	Registry *UnmarshalRegistry
+	Registry *encoding.UnmarshalRegistry
 }
 
 // CallOption allows modifying the request (headers, params) or the CallConfig
@@ -57,7 +58,7 @@ func WithHeader(key, value string) CallOption {
 }
 
 // WithFormat tells the unmarshaler how to process the response body.
-func WithFormat(f ResponseFormat) CallOption {
+func WithFormat(f encoding.ResponseFormat) CallOption {
 	return func(_ *tr.Request, cfg *CallConfig) {
 		cfg.Format = f
 	}
@@ -85,7 +86,7 @@ func WithOverrideAPIKey(key string) CallOption {
 }
 
 // WithCustomRegistry sets the underlying registry for response decoding.
-func WithCustomRegistry(r *UnmarshalRegistry) CallOption {
+func WithCustomRegistry(r *encoding.UnmarshalRegistry) CallOption {
 	return func(_ *tr.Request, cfg *CallConfig) {
 		cfg.Registry = r
 	}

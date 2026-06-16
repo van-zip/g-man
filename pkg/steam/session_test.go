@@ -22,8 +22,8 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
@@ -210,7 +210,7 @@ func TestSessionManager_CustomFactories(t *testing.T) {
 			webCalled = true
 			return mw
 		},
-		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *api.UnmarshalRegistry) communityClient {
+		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient {
 			commCalled = true
 			return mc
 		},

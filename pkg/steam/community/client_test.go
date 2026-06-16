@@ -21,8 +21,9 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
+	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/test/requester"
 )
 
@@ -84,7 +85,7 @@ func TestClient_WithRegistry(t *testing.T) {
 	r1 := c1.Registry()
 	require.NotNil(t, r1)
 
-	r2 := api.NewUnmarshalRegistry()
+	r2 := encoding.NewUnmarshalRegistry()
 	c2 := c1.WithRegistry(r2)
 
 	// Assert the original client is unchanged
@@ -186,7 +187,7 @@ func TestClient_Request(t *testing.T) {
 				Header:     http.Header{"Location": {"https://steamcom/login/rendercapcha"}},
 				Body:       io.NopCloser(strings.NewReader("")),
 			},
-			expectedErr: api.ErrSessionExpired,
+			expectedErr: service.ErrSessionExpired,
 		},
 		{
 			name: "Family View Restricted",
@@ -206,7 +207,7 @@ func TestClient_Request(t *testing.T) {
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader("var g_steamID = false;")),
 			},
-			expectedErr: api.ErrSessionExpired,
+			expectedErr: service.ErrSessionExpired,
 		},
 		{
 			name: "Soft Auth Fail (g_steamID = \"0\")",
@@ -214,7 +215,7 @@ func TestClient_Request(t *testing.T) {
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(`var g_steamID = "0";`)),
 			},
-			expectedErr: api.ErrSessionExpired,
+			expectedErr: service.ErrSessionExpired,
 		},
 		{
 			name: "Soft Auth Fail (Sign In Title)",
@@ -222,7 +223,7 @@ func TestClient_Request(t *testing.T) {
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader("<title>Sign In</title>")),
 			},
-			expectedErr: api.ErrSessionExpired,
+			expectedErr: service.ErrSessionExpired,
 		},
 		{
 			name: "Sorry Page with Reason",
@@ -256,7 +257,7 @@ func TestClient_Request(t *testing.T) {
 				StatusCode: http.StatusBadRequest,
 				Body:       io.NopCloser(strings.NewReader("bad data")),
 			},
-			expectedErr: api.NewSteamAPIError("bad data", http.StatusBadRequest, nil),
+			expectedErr: service.NewSteamAPIError("bad data", http.StatusBadRequest, nil),
 		},
 	}
 
@@ -624,7 +625,13 @@ func TestPerformRequest(t *testing.T) {
 			},
 		}
 		client := community.NewClient(httpClient, nil)
-		_, err := community.Get[genericResponse](ctx, client, "/test", nil, api.WithHeader("X-Test-Header", "Value123"))
+		_, err := community.Get[genericResponse](
+			ctx,
+			client,
+			"/test",
+			nil,
+			service.WithHeader("X-Test-Header", "Value123"),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, "Value123", receivedHeaders.Get("X-Test-Header"))
 	})

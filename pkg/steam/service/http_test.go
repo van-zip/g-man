@@ -2,16 +2,28 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package api
+package service
 
 import (
+	"net/url"
 	"testing"
 
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
+type mockHTTPTarget struct {
+	URL        string
+	HTTPMethod string
+	Version    int
+}
+
+func (m *mockHTTPTarget) String() string         { return m.URL }
+func (m *mockHTTPTarget) SetHTTPMethod(s string) { m.HTTPMethod = s }
+func (m *mockHTTPTarget) SetVersion(v int)       { m.Version = v }
+
 func TestCallOptions_Detailed(t *testing.T) {
-	target := &mockTarget{URL: "http://api.steampowered.com"}
+	target := &mockHTTPTarget{URL: "http://api.steampowered.com"}
 	req := tr.NewRequest(target, nil)
 	cfg := &CallConfig{}
 
@@ -24,7 +36,7 @@ func TestCallOptions_Detailed(t *testing.T) {
 	})
 
 	t.Run("WithCustomRegistry", func(t *testing.T) {
-		customReg := &UnmarshalRegistry{}
+		customReg := &encoding.UnmarshalRegistry{}
 		WithCustomRegistry(customReg)(req, cfg)
 
 		if cfg.Registry != customReg {
@@ -134,10 +146,71 @@ func TestNewHttpRequest_Creation(t *testing.T) {
 	}
 }
 
+func TestNewHttpRequest(t *testing.T) {
+	req := NewHTTPRequest("POST", "http://example.com/api", []byte("body"))
+
+	target, ok := req.Target().(HTTPTarget)
+	if !ok {
+		t.Fatal("target is not HttpTarget")
+	}
+
+	if target.HTTPMethod() != "POST" || target.HTTPPath() != "api" {
+		t.Errorf("NewHttpRequest created invalid target: %+v", target)
+	}
+}
+
+func TestOptions_NonCompatibleTarget(t *testing.T) {
+	req := NewHTTPRequest("GET", "http://a.b", nil)
+
+	WithVersion(2)(req, &CallConfig{})
+	WithHTTPMethod("POST")(req, &CallConfig{})
+}
+
+func TestCallOptions(t *testing.T) {
+	target := &mockHTTPTarget{URL: "test"}
+	req := tr.NewRequest(target, nil)
+	cfg := &CallConfig{}
+
+	t.Run("WithHTTPMethod", func(t *testing.T) {
+		WithHTTPMethod("PUT")(req, cfg)
+
+		if target.HTTPMethod != "PUT" {
+			t.Error("WithHTTPMethod failed")
+		}
+	})
+
+	t.Run("WithVersion", func(t *testing.T) {
+		WithVersion(5)(req, cfg)
+
+		if target.Version != 5 {
+			t.Error("WithVersion failed")
+		}
+	})
+
+	t.Run("WithFormat", func(t *testing.T) {
+		WithFormat(encoding.FormatVDF)(req, cfg)
+
+		if cfg.Format != encoding.FormatVDF {
+			t.Error("WithFormat failed")
+		}
+	})
+
+	t.Run("QueryParams", func(t *testing.T) {
+		WithQueryParam("a", "1")(req, cfg)
+		WithQueryParams(url.Values{"b": {"2"}})(req, cfg)
+		WithOverrideAPIKey("secret")(req, cfg)
+
+		params := req.Params()
+		if params.Get("a") != "1" || params.Get("b") != "2" || params.Get("key") != "secret" {
+			t.Errorf("query params injection failed: %v", params)
+		}
+	})
+}
+
 func TestResponseFormat_Values(t *testing.T) {
-	formats := []ResponseFormat{
-		FormatUnknown, FormatRaw, FormatProtobuf,
-		FormatJSON, FormatVDF, FormatBinaryKV,
+	formats := []encoding.ResponseFormat{
+		encoding.FormatUnknown, encoding.FormatRaw, encoding.FormatProtobuf,
+		encoding.FormatJSON, encoding.FormatVDF, encoding.FormatBinaryKV,
 	}
 
 	for i, f := range formats {

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
@@ -76,7 +75,7 @@ func DefaultRouteMatcher(req *tr.Request, socketConnected bool) TransportType {
 func (r *ServiceRouter) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	resp, err := r.perform(ctx, req)
 
-	if err != nil && errors.Is(err, api.ErrSessionExpired) {
+	if err != nil && errors.Is(err, service.ErrSessionExpired) {
 		if refreshErr := r.session.Refresh(ctx); refreshErr != nil {
 			return nil, fmt.Errorf("router: auto-refresh failed: %w", refreshErr)
 		}

@@ -20,7 +20,6 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
@@ -402,8 +401,8 @@ func formatCurrencyDecimal(cents int, currency CurrencyCode) string {
 }
 
 // withMarketHeaders injects headers required for Steam Market AJAX calls.
-func withMarketHeaders(referer string) api.CallOption {
-	return func(req *tr.Request, _ *api.CallConfig) {
+func withMarketHeaders(referer string) service.CallOption {
+	return func(req *tr.Request, _ *service.CallConfig) {
 		req.WithHeader("X-Requested-With", "XMLHttpRequest")
 		req.WithHeader("X-Prototype-Version", "1.7")
 
@@ -415,8 +414,8 @@ func withMarketHeaders(referer string) api.CallOption {
 	}
 }
 
-func withOrigin() api.CallOption {
-	return func(req *tr.Request, _ *api.CallConfig) {
+func withOrigin() service.CallOption {
+	return func(req *tr.Request, _ *service.CallConfig) {
 		req.WithHeader("Origin", "https://steamcommunity.com")
 	}
 }

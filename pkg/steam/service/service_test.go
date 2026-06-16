@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
@@ -34,14 +34,14 @@ type mockTarget string
 func (m mockTarget) String() string { return string(m) }
 
 type mockDoerWithRegistry struct {
-	reg  *api.UnmarshalRegistry
+	reg  *encoding.UnmarshalRegistry
 	onDo func(req *tr.Request) (*tr.Response, error)
 }
 
 func (m *mockDoerWithRegistry) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	return m.onDo(req)
 }
-func (m *mockDoerWithRegistry) Registry() *api.UnmarshalRegistry { return m.reg }
+func (m *mockDoerWithRegistry) Registry() *encoding.UnmarshalRegistry { return m.reg }
 
 // These are only used for reflection tests and won't be passed to proto.Marshal.
 type (
@@ -62,7 +62,7 @@ func TestClient_Initialization(t *testing.T) {
 	c2 := c.WithAccessToken("token")
 	assert.Equal(t, "token", c2.accessToken)
 
-	reg := api.NewUnmarshalRegistry()
+	reg := encoding.NewUnmarshalRegistry()
 	c3 := c.WithRegistry(reg)
 	assert.Same(t, reg, c3.Registry())
 }
@@ -97,7 +97,7 @@ func TestClient_ValidateEResult(t *testing.T) {
 
 	// HTTP 401
 	resp := tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 401})
-	assert.ErrorIs(t, c.validateEResult(resp), api.ErrSessionExpired)
+	assert.ErrorIs(t, c.validateEResult(resp), ErrSessionExpired)
 
 	// HTTP Result 0 -> OK
 	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: 0})
@@ -105,13 +105,13 @@ func TestClient_ValidateEResult(t *testing.T) {
 
 	// Auth Error Result
 	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: enums.EResult_InvalidPassword})
-	assert.ErrorIs(t, c.validateEResult(resp), api.ErrSessionExpired)
+	assert.ErrorIs(t, c.validateEResult(resp), ErrSessionExpired)
 
 	// General Result Fail
 	resp = tr.NewResponse(nil, tr.HTTPMetadata{StatusCode: 200, Result: enums.EResult_Fail})
 	err := c.validateEResult(resp)
 
-	var resErr *api.EResultError
+	var resErr *EResultError
 	require.ErrorAs(t, err, &resErr)
 	assert.Equal(t, enums.EResult_Fail, resErr.Result)
 
@@ -161,7 +161,7 @@ func TestExecute_Logic(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Registry From Provider", func(t *testing.T) {
-		reg := api.NewUnmarshalRegistry()
+		reg := encoding.NewUnmarshalRegistry()
 		doer := &mockDoerWithRegistry{
 			reg: reg,
 			onDo: func(req *tr.Request) (*tr.Response, error) {
@@ -171,7 +171,7 @@ func TestExecute_Logic(t *testing.T) {
 
 		type resp struct{ Nickname string }
 
-		res, err := execute[resp](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		res, err := execute[resp](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
 		assert.NoError(t, err)
 		assert.Equal(t, "G", res.Nickname)
 	})
@@ -180,7 +180,7 @@ func TestExecute_Logic(t *testing.T) {
 		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
 			return tr.NewResponse([]byte(`{invalid}`), tr.HTTPMetadata{StatusCode: 200}), nil
 		}}
-		_, err := execute[map[string]any](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		_, err := execute[map[string]any](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
 		assert.Error(t, err)
 	})
 
@@ -188,7 +188,7 @@ func TestExecute_Logic(t *testing.T) {
 		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
 			return tr.NewResponse([]byte(`ignored`), tr.HTTPMetadata{StatusCode: 200}), nil
 		}}
-		res, err := execute[NoResponse](ctx, doer, tr.NewRequest(mockTarget("t"), nil), api.FormatJSON)
+		res, err := execute[NoResponse](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
 		assert.NoError(t, err)
 		assert.Nil(t, res)
 	})

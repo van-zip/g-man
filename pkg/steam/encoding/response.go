@@ -2,19 +2,25 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package api
+package encoding
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/andygrunwald/vdf"
 	"github.com/mitchellh/mapstructure"
 
 	"github.com/lemon4ksan/g-man/pkg/rest"
 )
+
+// ErrFormat is returned when the response doesn't
+// match the specified format or the target is invalid.
+var ErrFormat = errors.New("api: response format error")
 
 // ResponseFormat defines the expected encoding of the Steam API response.
 type ResponseFormat int
@@ -44,6 +50,7 @@ type RegistryProvider interface {
 //
 // Create and initialize new instances of the registry using the [NewUnmarshalRegistry] constructor.
 type UnmarshalRegistry struct {
+	mu       sync.RWMutex
 	decoders map[ResponseFormat]rest.Decoder
 }
 
@@ -65,6 +72,9 @@ func NewUnmarshalRegistry() *UnmarshalRegistry {
 
 // Register registers a new decoding function for the specified format.
 func (r *UnmarshalRegistry) Register(format ResponseFormat, d rest.Decoder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.decoders[format] = d
 }
 
@@ -77,7 +87,10 @@ func (r *UnmarshalRegistry) Unmarshal(data []byte, target any, format ResponseFo
 		return nil
 	}
 
+	r.mu.RLock()
 	fn, ok := r.decoders[format]
+	r.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("%w: unsupported or unregistered format %v", ErrFormat, format)
 	}

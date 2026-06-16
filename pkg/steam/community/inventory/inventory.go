@@ -18,9 +18,9 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
+	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
 // GetUserInventoryContents recursively parses user inventory using community requester
@@ -60,7 +60,7 @@ func GetUserInventoryContents(
 			StartAssetID string `url:"start_assetid,omitempty"`
 		}{Language: language, Count: 1000, StartAssetID: startAssetID}
 
-		resp, err := community.Get[inventoryResponse](ctx, c, path, req, api.WithHeader(
+		resp, err := community.Get[inventoryResponse](ctx, c, path, req, service.WithHeader(
 			"Referer", fmt.Sprintf("https://steamcommunity.com/profiles/%d/inventory", userID)),
 		)
 		if err != nil {
@@ -219,9 +219,9 @@ func GetInventoryHistory(
 	path := fmt.Sprintf("profiles/%d/inventoryhistory", steamID)
 
 	// Fetch HTML page
-	var htmlOpts []api.CallOption
+	var htmlOpts []service.CallOption
 	if len(query) > 0 {
-		htmlOpts = append(htmlOpts, api.WithQueryParams(query))
+		htmlOpts = append(htmlOpts, service.WithQueryParams(query))
 	}
 
 	htmlBytes, err := community.GetHTML(ctx, client, path, htmlOpts...)

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package api
+package encoding
 
 import (
 	"bytes"
@@ -10,26 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
-	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
-
-type mockTarget struct {
-	URL        string
-	HTTPMethod string
-	Version    int
-}
-
-func (m *mockTarget) String() string         { return m.URL }
-func (m *mockTarget) SetHTTPMethod(s string) { m.HTTPMethod = s }
-func (m *mockTarget) SetVersion(v int)       { m.Version = v }
 
 func UnmarshalResponse(data []byte, target any, format ResponseFormat) error {
 	if len(data) == 0 {
@@ -194,107 +181,6 @@ func TestEmptyResponse(t *testing.T) {
 	}
 }
 
-func TestCallOptions(t *testing.T) {
-	target := &mockTarget{URL: "test"}
-	req := tr.NewRequest(target, nil)
-	cfg := &CallConfig{}
-
-	t.Run("WithHTTPMethod", func(t *testing.T) {
-		WithHTTPMethod("PUT")(req, cfg)
-
-		if target.HTTPMethod != "PUT" {
-			t.Error("WithHTTPMethod failed")
-		}
-	})
-
-	t.Run("WithVersion", func(t *testing.T) {
-		WithVersion(5)(req, cfg)
-
-		if target.Version != 5 {
-			t.Error("WithVersion failed")
-		}
-	})
-
-	t.Run("WithFormat", func(t *testing.T) {
-		WithFormat(FormatVDF)(req, cfg)
-
-		if cfg.Format != FormatVDF {
-			t.Error("WithFormat failed")
-		}
-	})
-
-	t.Run("QueryParams", func(t *testing.T) {
-		WithQueryParam("a", "1")(req, cfg)
-		WithQueryParams(url.Values{"b": {"2"}})(req, cfg)
-		WithOverrideAPIKey("secret")(req, cfg)
-
-		params := req.Params()
-		if params.Get("a") != "1" || params.Get("b") != "2" || params.Get("key") != "secret" {
-			t.Errorf("query params injection failed: %v", params)
-		}
-	})
-}
-
-func TestAuthErrors(t *testing.T) {
-	authErrors := []enums.EResult{
-		enums.EResult_NotLoggedOn,
-		enums.EResult_Expired,
-		enums.EResult_InvalidPassword,
-	}
-
-	for _, res := range authErrors {
-		if !IsAuthError(res) {
-			t.Errorf("expected %v to be an auth error", res)
-		}
-	}
-
-	if IsAuthError(enums.EResult_OK) {
-		t.Error("EResult_OK should not be an auth error")
-	}
-}
-
-func TestErrorStructures(t *testing.T) {
-	t.Run("EResultError", func(t *testing.T) {
-		baseErr := errors.New("underlying")
-		err := NewEResultError(enums.EResult_Busy, baseErr)
-
-		if !errors.Is(err, baseErr) {
-			t.Error("EResultError unwrap failed")
-		}
-
-		if err.Error() == "" {
-			t.Error("empty error string")
-		}
-	})
-
-	t.Run("SteamAPIError", func(t *testing.T) {
-		baseErr := errors.New("network_fail")
-		err := NewSteamAPIError("fail", 500, baseErr)
-
-		if !errors.Is(err, baseErr) {
-			t.Error("SteamAPIError unwrap failed")
-		}
-
-		expected := "steam API error: message=fail, status=500: network_fail"
-		if err.Error() != expected {
-			t.Errorf("expected %s, got %s", expected, err.Error())
-		}
-	})
-}
-
-func TestNewHttpRequest(t *testing.T) {
-	req := NewHTTPRequest("POST", "http://example.com/api", []byte("body"))
-
-	target, ok := req.Target().(HTTPTarget)
-	if !ok {
-		t.Fatal("target is not HttpTarget")
-	}
-
-	if target.HTTPMethod() != "POST" || target.HTTPPath() != "api" {
-		t.Errorf("NewHttpRequest created invalid target: %+v", target)
-	}
-}
-
 func TestUnmarshalProtobuf_WrongType(t *testing.T) {
 	err := UnmarshalProtobuf([]byte("{}"), "not a proto message")
 	if err == nil {
@@ -312,13 +198,6 @@ func TestUnmarshalVDFText_Invalid(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid VDF text")
 	}
-}
-
-func TestOptions_NonCompatibleTarget(t *testing.T) {
-	req := NewHTTPRequest("GET", "http://a.b", nil)
-
-	WithVersion(2)(req, &CallConfig{})
-	WithHTTPMethod("POST")(req, &CallConfig{})
 }
 
 func TestUnmarshalResponse_BinaryKV(t *testing.T) {

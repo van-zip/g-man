@@ -18,9 +18,9 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/rest"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
@@ -105,7 +105,7 @@ type Config struct {
 	// Device specifies device details used during credential verification.
 	Device *auth.DeviceConfig
 	// Registry defines the unmarshaling registry for WebAPI and socket decoding.
-	Registry *api.UnmarshalRegistry
+	Registry *encoding.UnmarshalRegistry
 	// Bus is the central event bus.
 	Bus *bus.Bus
 	// ProxyURL defines a global proxy URL affecting all traffic.
@@ -211,7 +211,7 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 	}
 
 	if cfg.Registry == nil {
-		cfg.Registry = api.NewUnmarshalRegistry()
+		cfg.Registry = encoding.NewUnmarshalRegistry()
 	}
 
 	if cfg.Bus == nil {

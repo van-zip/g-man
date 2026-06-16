@@ -15,6 +15,9 @@ and legacy EMsg-based socket requests.
   - [UnifiedTarget]: Represents a modern Protobuf-based Steam Service method call.
   - [WebAPITarget]: Represents a classic JSON/VDF WebAPI call.
   - [LegacyTarget]: Represents a raw EMsg-based message used in socket connections.
+  - [HTTPTarget]: A basic implementation of the transport Target interface for HTTP-based calls.
+  - [SteamAPIError]: A structured error container that captures raw API response failures.
+  - [EResultError]: An error wrapper around Steam's internal EResult enum codes.
 
 # Basic Usage Example
 

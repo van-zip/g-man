@@ -17,11 +17,10 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/crypto"
 	pbSteam "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/api"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
-	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
 var rxTradeOfferID = regexp.MustCompile(`id="tradeofferid_(\d+)"`)
@@ -118,9 +117,7 @@ func (s *MobileConf) GetConfirmationOfferID(
 
 	path := "mobileconf/detailspage/" + strconv.FormatUint(confID, 10)
 
-	respBytes, err := community.Get[[]byte](ctx, s.client, path, params, func(r *tr.Request, c *api.CallConfig) {
-		c.Format = api.FormatRaw
-	})
+	respBytes, err := community.Get[[]byte](ctx, s.client, path, params, service.WithFormat(encoding.FormatRaw))
 	if err != nil {
 		return 0, err
 	}

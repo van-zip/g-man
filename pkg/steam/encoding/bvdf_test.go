@@ -74,7 +74,7 @@ func TestBVDFParser_AllTypes(t *testing.T) {
 
 	var target map[string]any
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestBVDFParser_SliceConversion(t *testing.T) {
 		List []string `mapstructure:"list"`
 	}
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestBVDFParser_Errors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var target any
 
-			err := UnmarshalBinaryKV(tt.data, &target)
+			err := BinaryVDFDecoder(bytes.NewReader(tt.data), &target)
 			if err == nil {
 				t.Error("expected error, got nil")
 			}
@@ -153,7 +153,7 @@ func TestBVDFParser_RootNotObject(t *testing.T) {
 
 	var target any
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err == nil {
 		t.Error("expected error because root is a slice (due to key '0'), but got nil")
 	} else if !errors.Is(err, ErrFormat) {
@@ -174,7 +174,7 @@ func TestBVDFParser_EmptyNameOptimization(t *testing.T) {
 
 	var target any
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestBVDFParser_SliceConversion_Complete(t *testing.T) {
 		List []string `mapstructure:"list"`
 	}
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestBVDFParser_Errors_Extended(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var target any
 
-			err := UnmarshalBinaryKV(tt.data, &target)
+			err := BinaryVDFDecoder(bytes.NewReader(tt.data), &target)
 			if err == nil {
 				t.Error("expected error for malformed data")
 			}
@@ -247,7 +247,7 @@ func TestBVDFParser_EmptyNameOptimization_Deep(t *testing.T) {
 
 	var target map[string]any
 
-	err := UnmarshalBinaryKV(buf.Bytes(), &target)
+	err := BinaryVDFDecoder(buf, &target)
 	if err != nil {
 		t.Fatal(err)
 	}

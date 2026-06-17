@@ -12,9 +12,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 )
 
@@ -48,49 +49,35 @@ func (m *Mock) SessionID(baseURL string) string {
 func (m *Mock) Request(
 	ctx context.Context,
 	method, path string,
-	body any,
-	query any,
-	mods ...rest.RequestModifier,
+	mods ...aoni.RequestModifier,
 ) (*http.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var bodyBytes []byte
-	switch b := body.(type) {
-	case io.Reader:
-		bodyBytes, _ = io.ReadAll(b)
-	case []byte:
-		bodyBytes = b
-	case string:
-		bodyBytes = []byte(b)
-	}
+	urlStr := community.BaseURL + path
 
-	u, _ := url.Parse(community.BaseURL + path)
-
-	qValues, err := rest.StructToValues(query)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(qValues) > 0 {
-		u.RawQuery = qValues.Encode()
-	}
-
-	urlStr := u.String()
-
-	req, _ := http.NewRequestWithContext(ctx, method, urlStr, bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequestWithContext(ctx, method, urlStr, nil)
 	for _, mod := range mods {
 		mod(req)
 	}
 
+	resolvedURL := req.URL.String()
+	resolvedPath := strings.TrimPrefix(req.URL.Path, "/")
+
 	m.Calls = append(m.Calls, req)
 
-	key := urlStr
+	key := resolvedURL
 	if _, ok := m.Responses[key]; !ok {
-		if _, ok := m.Responses[path]; ok {
+		if _, ok := m.Responses[urlStr]; ok {
+			key = urlStr
+		} else if _, ok := m.Responses[resolvedPath]; ok {
+			key = resolvedPath
+		} else if _, ok := m.Responses[path]; ok {
 			key = path
 		} else if _, ok := m.Responses[""]; ok {
 			key = ""
+		} else {
+			key = resolvedURL
 		}
 	}
 

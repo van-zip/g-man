@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
@@ -173,11 +173,9 @@ type mockCommunity struct{ mock.Mock }
 func (m *mockCommunity) Request(
 	ctx context.Context,
 	method, path string,
-	body any,
-	query any,
-	mods ...rest.RequestModifier,
+	mods ...aoni.RequestModifier,
 ) (*http.Response, error) {
-	args := m.Called(ctx, method, path, body, query, mods)
+	args := m.Called(ctx, method, path, mods)
 	return args.Get(0).(*http.Response), args.Error(1)
 }
 func (m *mockCommunity) SessionID(baseURL string) string { return m.Called(baseURL).String(0) }

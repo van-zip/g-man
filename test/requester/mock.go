@@ -16,7 +16,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
@@ -57,7 +57,7 @@ type Mock struct {
 	jsonResponses  map[string]any
 	rawResponses   map[string][]byte
 
-	BaseResponseFunc func() rest.BaseResponse
+	BaseResponseFunc func() aoni.BaseResponse
 }
 
 func New() *Mock {
@@ -69,7 +69,7 @@ func New() *Mock {
 	}
 }
 
-func (m *Mock) BaseResponse() rest.BaseResponse {
+func (m *Mock) BaseResponse() aoni.BaseResponse {
 	if m.BaseResponseFunc != nil {
 		return m.BaseResponseFunc()
 	}
@@ -101,45 +101,46 @@ func (m *Mock) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 
 	if data, ok := m.jsonResponses[methodName]; ok {
 		body, _ := json.Marshal(data)
-		return tr.NewResponse(body, tr.HTTPMetadata{StatusCode: 200}), nil
+		return tr.NewResponse(io.NopCloser(bytes.NewReader(body)), tr.HTTPMetadata{StatusCode: 200}), nil
 	}
 
 	if msg, ok := m.protoResponses[methodName]; ok {
 		body, _ := proto.Marshal(msg)
-		return tr.NewResponse(body, tr.SocketMetadata{Result: enums.EResult_OK}), nil
+		return tr.NewResponse(io.NopCloser(bytes.NewReader(body)), tr.SocketMetadata{Result: enums.EResult_OK}), nil
 	}
 
 	if body, ok := m.rawResponses[methodName]; ok {
-		return tr.NewResponse(body, tr.HTTPMetadata{StatusCode: 200}), nil
+		return tr.NewResponse(io.NopCloser(bytes.NewReader(body)), tr.HTTPMetadata{StatusCode: 200}), nil
 	}
 
-	return tr.NewResponse(nil, tr.SocketMetadata{Result: enums.EResult_OK}), nil
+	return tr.NewResponse(io.NopCloser(bytes.NewReader(nil)), tr.SocketMetadata{Result: enums.EResult_OK}), nil
 }
 
 func (m *Mock) Request(
 	ctx context.Context,
 	method, path string,
-	body any,
-	query any,
-	mods ...rest.RequestModifier,
+	mods ...aoni.RequestModifier,
 ) (*http.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var bodyBytes []byte
-	switch b := body.(type) {
-	case io.Reader:
-		bodyBytes, _ = io.ReadAll(b)
-	case []byte:
-		bodyBytes = b
-	case string:
-		bodyBytes = []byte(b)
+	dummyReq, _ := http.NewRequestWithContext(ctx, method, path, nil)
+	for _, mod := range mods {
+		mod(dummyReq)
+	}
+	if dummyReq.Body != nil {
+		bodyBytes, _ = io.ReadAll(dummyReq.Body)
+		dummyReq.Body.Close()
 	}
 
-	m.restCalls = append(m.restCalls, restCall{method, path, bodyBytes, query})
+	m.restCalls = append(m.restCalls, restCall{method, path, bodyBytes, nil})
 
 	if m.OnRest != nil {
-		return m.OnRest(method, path, body)
+		if len(bodyBytes) > 0 {
+			return m.OnRest(method, path, bodyBytes)
+		}
+		return m.OnRest(method, path, nil)
 	}
 
 	key := fmt.Sprintf("%s:%s", method, path)
@@ -152,16 +153,16 @@ func (m *Mock) Request(
 		respData = restResponse{Status: http.StatusOK, Body: []byte("{}")}
 	}
 
-	dummyReq, _ := http.NewRequest(method, path, bytes.NewReader(bodyBytes))
+	dummyReq2, _ := http.NewRequest(method, path, bytes.NewReader(bodyBytes))
 	for _, mod := range mods {
-		mod(dummyReq)
+		mod(dummyReq2)
 	}
 
 	return &http.Response{
 		StatusCode: respData.Status,
 		Body:       io.NopCloser(bytes.NewReader(respData.Body)),
 		Header:     respData.Header,
-		Request:    dummyReq,
+		Request:    dummyReq2,
 	}, nil
 }
 
@@ -215,7 +216,8 @@ func (m *Mock) GetLastCall(out proto.Message) *tr.Request {
 	req := m.Calls[len(m.Calls)-1]
 
 	if out != nil && req.Body() != nil {
-		_ = proto.Unmarshal(req.Body(), out)
+		bodyBytes, _ := io.ReadAll(req.Body())
+		_ = proto.Unmarshal(bodyBytes, out)
 	}
 
 	return req
@@ -268,9 +270,9 @@ func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 		bodyBytes, _ = io.ReadAll(req.Body)
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
-	return m.mock.Request(req.Context(), req.Method, req.URL.String(), bodyBytes, nil)
+	return m.mock.Request(req.Context(), req.Method, req.URL.String())
 }
 
-func (m *Mock) HTTP() rest.HTTPDoer {
+func (m *Mock) HTTP() aoni.HTTPDoer {
 	return &mockHTTPDoer{mock: m}
 }

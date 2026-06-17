@@ -12,24 +12,31 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 )
 
 type mockRequester struct {
 	mock.Mock
+	LastRequest *http.Request
 }
 
 func (m *mockRequester) Request(
 	ctx context.Context,
 	method, path string,
-	body, query any,
-	mods ...rest.RequestModifier,
+	mods ...aoni.RequestModifier,
 ) (*http.Response, error) {
-	args := m.Called(ctx, method, path, body, query, mods)
+	req, _ := http.NewRequestWithContext(ctx, method, "https://steamcommunity.com/"+path, nil)
+	for _, mod := range mods {
+		mod(req)
+	}
+
+	m.LastRequest = req
+
+	args := m.Called(ctx, method, path, mods)
 
 	var resp *http.Response
 	if args.Get(0) != nil {
@@ -51,22 +58,20 @@ func TestEditProfile(t *testing.T) {
 		client := new(mockRequester)
 		client.On("SessionID", mock.Anything).Return("mock_session_id")
 
-		// 1. GET response html
 		editHTML := `
 		<html>
 			<body>
 				<div id="profile_edit_config" data-profile-edit='{"strPersonaName":"OldNickname","strRealName":"OldRealName","strSummary":"OldSummary","strCustomURL":"oldurl","LocationData":{"locCountryCode":"US","locStateCode":"FL","locCityCode":"Miami"}}'></div>
 			</body>
 		</html>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/info", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(editHTML)),
 			}, nil).
 			Once()
 
-		// 2. POST save response
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/76561197960265728/edit", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/edit", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":1}`)),
@@ -87,18 +92,8 @@ func TestEditProfile(t *testing.T) {
 		err := EditProfile(ctx, client, steamID, settings)
 		assert.NoError(t, err)
 
-		// Assertions on the captured arguments
-		var postCall *mock.Call
-		for _, call := range client.Calls {
-			if call.Method == "Request" && call.Arguments.String(1) == http.MethodPost {
-				postCall = &call
-				break
-			}
-		}
-
-		assert.NotNil(t, postCall)
-		postBody := postCall.Arguments.Get(3).([]byte)
-		bodyStr := string(postBody)
+		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		bodyStr := string(bodyBytes)
 		assert.Contains(t, bodyStr, "personaName=NewNickname")
 		assert.Contains(t, bodyStr, "real_name=OldRealName")
 		assert.Contains(t, bodyStr, "summary=NewSummary")
@@ -110,7 +105,7 @@ func TestEditProfile(t *testing.T) {
 
 	t.Run("GET fails", func(t *testing.T) {
 		client := new(mockRequester)
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/info", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
 			Return(nil, errors.New("network error")).
 			Once()
 
@@ -120,7 +115,7 @@ func TestEditProfile(t *testing.T) {
 
 	t.Run("Missing config element", func(t *testing.T) {
 		client := new(mockRequester)
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/info", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`<html><body></body></html>`)),
@@ -136,14 +131,14 @@ func TestEditProfile(t *testing.T) {
 		client.On("SessionID", mock.Anything).Return("mock_session_id")
 
 		editHTML := `<div id="profile_edit_config" data-profile-edit='{"strPersonaName":"a"}'></div>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/info", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(editHTML)),
 			}, nil).
 			Once()
 
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/76561197960265728/edit", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/edit", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":0,"errmsg":"invalid custom URL"}`)),
@@ -169,14 +164,14 @@ func TestUpdatePrivacySettings(t *testing.T) {
 				<div id="profile_edit_config" data-profile-edit='{"Privacy":{"PrivacySettings":{"PrivacyProfile":3,"PrivacyInventory":3,"PrivacyInventoryGifts":3,"PrivacyOwnedGames":3,"PrivacyPlaytime":3,"PrivacyFriendsList":3},"eCommentPermission":1}}'></div>
 			</body>
 		</html>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/settings", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/settings", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(settingsHTML)),
 			}, nil).
 			Once()
 
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/76561197960265728/ajaxsetprivacy", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/ajaxsetprivacy", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":1}`)),
@@ -195,18 +190,8 @@ func TestUpdatePrivacySettings(t *testing.T) {
 		err := UpdatePrivacySettings(ctx, client, steamID, settings)
 		assert.NoError(t, err)
 
-		// Assertions on the captured arguments
-		var postCall *mock.Call
-		for _, call := range client.Calls {
-			if call.Method == "Request" && call.Arguments.String(1) == http.MethodPost {
-				postCall = &call
-				break
-			}
-		}
-
-		assert.NotNil(t, postCall)
-		postBody := postCall.Arguments.Get(3).([]byte)
-		bodyStr := string(postBody)
+		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		bodyStr := string(bodyBytes)
 		assert.Contains(
 			t,
 			bodyStr,
@@ -222,14 +207,14 @@ func TestUpdatePrivacySettings(t *testing.T) {
 		client.On("SessionID", mock.Anything).Return("mock_session_id")
 
 		settingsHTML := `<div id="profile_edit_config" data-profile-edit='{"Privacy":{"PrivacySettings":{},"eCommentPermission":1}}'></div>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/76561197960265728/edit/settings", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/settings", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(settingsHTML)),
 			}, nil).
 			Once()
 
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/76561197960265728/ajaxsetprivacy", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/ajaxsetprivacy", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":0}`)),
@@ -250,7 +235,7 @@ func TestUploadAvatar(t *testing.T) {
 		client := new(mockRequester)
 		client.On("SessionID", mock.Anything).Return("mock_session_id")
 
-		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":true,"hash":"new_jpg_avatar_hash"}`)),
@@ -261,18 +246,8 @@ func TestUploadAvatar(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "new_jpg_avatar_hash", hash)
 
-		// Assertions on the captured arguments
-		var postCall *mock.Call
-		for _, call := range client.Calls {
-			if call.Method == "Request" && call.Arguments.String(1) == http.MethodPost {
-				postCall = &call
-				break
-			}
-		}
-
-		assert.NotNil(t, postCall)
-		postBody := postCall.Arguments.Get(3).([]byte)
-		bodyStr := string(postBody)
+		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		bodyStr := string(bodyBytes)
 		assert.Contains(t, bodyStr, "player_avatar_image")
 		assert.Contains(t, bodyStr, "76561197960265728")
 		assert.Contains(t, bodyStr, "avatar.jpg")
@@ -297,7 +272,7 @@ func TestUploadAvatar(t *testing.T) {
 		client := new(mockRequester)
 		client.On("SessionID", mock.Anything).Return("mock_session_id")
 
-		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything, mock.Anything, mock.Anything).
+		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything).
 			Return(&http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewBufferString(`{"success":false,"message":"file too large"}`)),

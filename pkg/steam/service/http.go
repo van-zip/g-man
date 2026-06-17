@@ -5,24 +5,19 @@
 package service
 
 import (
+	"io"
 	"net/url"
 	"strings"
+
+	"github.com/lemon4ksan/aoni"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
-// CallConfig holds internal configuration for an API call.
-type CallConfig struct {
-	// Format is the expected response format used by the unmarshaler.
-	Format encoding.ResponseFormat
-	// Registry is the unmarshal registry containing decoders.
-	Registry *encoding.UnmarshalRegistry
-}
-
 // CallOption allows modifying the request (headers, params) or the CallConfig
 // before the request is executed.
-type CallOption func(req *tr.Request, cfg *CallConfig)
+type CallOption func(req *tr.Request)
 
 // WithHTTPMethod overrides the default HTTP verb (e.g., "POST" instead of "GET").
 func WithHTTPMethod(method string) CallOption {
@@ -30,7 +25,7 @@ func WithHTTPMethod(method string) CallOption {
 		SetHTTPMethod(string)
 	}
 
-	return func(req *tr.Request, cfg *CallConfig) {
+	return func(req *tr.Request) {
 		if t, ok := req.Target().(httpMethodSetter); ok {
 			t.SetHTTPMethod(method)
 		}
@@ -43,7 +38,7 @@ func WithVersion(version int) CallOption {
 		SetVersion(int)
 	}
 
-	return func(req *tr.Request, cfg *CallConfig) {
+	return func(req *tr.Request) {
 		if t, ok := req.Target().(versionSetter); ok {
 			t.SetVersion(version)
 		}
@@ -52,43 +47,70 @@ func WithVersion(version int) CallOption {
 
 // WithHeader adds a custom HTTP header to the request.
 func WithHeader(key, value string) CallOption {
-	return func(req *tr.Request, _ *CallConfig) {
+	return func(req *tr.Request) {
 		req.WithHeader(key, value)
 	}
 }
 
-// WithFormat tells the unmarshaler how to process the response body.
+// WithDecoder sets the decoder for the response body.
+func WithDecoder(d aoni.Decoder) CallOption {
+	return func(req *tr.Request) {
+		req.SetDecoder(d)
+		req.WithModifier(aoni.WithDecoder(d))
+	}
+}
+
+// WithFormat sets the response format for the request.
 func WithFormat(f encoding.ResponseFormat) CallOption {
-	return func(_ *tr.Request, cfg *CallConfig) {
-		cfg.Format = f
+	return func(req *tr.Request) {
+		var decoder aoni.Decoder
+		switch f {
+		case encoding.FormatJSON:
+			decoder = encoding.SteamJSONDecoder
+		case encoding.FormatProtobuf:
+			decoder = encoding.ProtobufDecoder
+		case encoding.FormatVDF:
+			decoder = encoding.VDFDecoder
+		case encoding.FormatBinaryVDF:
+			decoder = encoding.BinaryVDFDecoder
+		case encoding.FormatRaw:
+			decoder = aoni.RawDecoder
+		}
+
+		if decoder != nil {
+			req.SetDecoder(decoder)
+			req.WithModifier(aoni.WithDecoder(decoder))
+		}
 	}
 }
 
 // WithQueryParam adds a single key=value pair to the URL query string.
 func WithQueryParam(key, value string) CallOption {
-	return func(req *tr.Request, _ *CallConfig) {
+	return func(req *tr.Request) {
 		req.WithParam(key, value)
 	}
 }
 
 // WithQueryParams adds multiple key=value pairs to the URL query string.
 func WithQueryParams(v url.Values) CallOption {
-	return func(req *tr.Request, _ *CallConfig) {
+	return func(req *tr.Request) {
 		req.WithParams(v)
 	}
 }
 
 // WithOverrideAPIKey sets or overrides the "key" parameter in the request.
 func WithOverrideAPIKey(key string) CallOption {
-	return func(req *tr.Request, _ *CallConfig) {
+	return func(req *tr.Request) {
 		req.WithParam("key", key)
 	}
 }
 
-// WithCustomRegistry sets the underlying registry for response decoding.
-func WithCustomRegistry(r *encoding.UnmarshalRegistry) CallOption {
-	return func(_ *tr.Request, cfg *CallConfig) {
-		cfg.Registry = r
+// WithRoutingAppID returns a CallOption that sets the routing AppID in the
+// outer CM packet's proto header. Required when sending to EMsg_ClientToGC so
+// Steam knows which Game Coordinator to forward the message to.
+func WithRoutingAppID(appID uint32) CallOption {
+	return func(req *tr.Request) {
+		req.WithRoutingAppID(appID)
 	}
 }
 
@@ -122,6 +144,6 @@ func (c HTTPTarget) HTTPPath() string {
 }
 
 // NewHTTPRequest creates a new transport request for a generic HTTP endpoint.
-func NewHTTPRequest(httpMethod, url string, body []byte) *tr.Request {
+func NewHTTPRequest(httpMethod, url string, body io.Reader) *tr.Request {
 	return tr.NewRequest(HTTPTarget{Method: httpMethod, URL: url}, body)
 }

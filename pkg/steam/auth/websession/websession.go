@@ -17,9 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
@@ -42,7 +43,7 @@ const (
 // WebSession handles HTTP-based interactions with Steam Community and Store.
 // It manages a shared cookie jar and provides a thread-safe way to authenticate.
 //
-// It implements the [rest.HTTPDoer] interface, allowing it to be used
+// It implements the [aoni.HTTPDoer] interface, allowing it to be used
 // as a transport for REST clients that require session-aware cookies.
 //
 // By default, cookies are synchronized across standard Steam domains. To add
@@ -52,16 +53,16 @@ type WebSession struct {
 	mu sync.RWMutex
 
 	steamID    id.ID
-	baseDoer   rest.HTTPDoer
+	baseDoer   aoni.HTTPDoer
 	httpClient *http.Client
 	jar        http.CookieJar
 	logger     log.Logger
 	isAuth     bool
-	domains    []string
+	domains    []*url.URL
 }
 
 type doerRoundTripper struct {
-	doer rest.HTTPDoer
+	doer aoni.HTTPDoer
 }
 
 func (d *doerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -72,21 +73,21 @@ func (d *doerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 //
 // If the baseDoer argument is nil, it automatically initializes a default
 // [http.Client] with a 30-second timeout.
-func New(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) *WebSession {
+func New(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) *WebSession {
+	if baseDoer == nil {
+		baseDoer = &http.Client{Timeout: 30 * time.Second}
+	}
+
 	ws := &WebSession{
 		steamID:  steamID,
 		baseDoer: baseDoer,
 		logger:   logger.With(log.Module("websession")),
-		domains:  append([]string{}, defaultDomains...),
 	}
 
-	if baseDoer == nil {
-		ws.baseDoer = &http.Client{Timeout: 30 * time.Second}
-	}
-
-	ws.httpClient = &http.Client{
-		Transport: &doerRoundTripper{doer: ws.baseDoer},
-		Timeout:   30 * time.Second,
+	for _, d := range defaultDomains {
+		if u, err := url.Parse(d); err == nil {
+			ws.domains = append(ws.domains, u)
+		}
 	}
 
 	ws.Clear()
@@ -94,27 +95,30 @@ func New(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) *WebSession {
 	return ws
 }
 
-// Do implements [rest.HTTPDoer]. It executes the request using the session's
+// Do implements [aoni.HTTPDoer]. It executes the request using the session's
 // internal cookie-aware HTTP client.
 func (s *WebSession) Do(req *http.Request) (*http.Response, error) {
 	s.mu.RLock()
 	client := s.httpClient
 	s.mu.RUnlock()
 
-	// #nosec G704
-	return client.Do(req)
+	return client.Do(req) //nolint:gosec
 }
 
-// REST returns a new REST client instance configured to use this session.
-func (s *WebSession) REST() *rest.Client {
-	return rest.NewClient(s)
-}
-
-// HTTP returns the raw cookie-aware http.Client.
-func (s *WebSession) HTTP() *http.Client {
+// REST returns a new [aoni.Client] instance configured to use this session.
+func (s *WebSession) REST() *aoni.Client {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	retrier := aoni.RetryMiddleware(aoni.RetryOptions{MaxRetries: 3}, aoni.RetryOnErr())
+
+	return aoni.NewClient(aoni.Chain(s, retrier))
+}
+
+// HTTP returns the raw cookie-aware [http.Client].
+func (s *WebSession) HTTP() *http.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.httpClient
 }
 
@@ -123,7 +127,11 @@ func (s *WebSession) AddDomains(domains ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.domains = append(s.domains, domains...)
+	for _, d := range domains {
+		if u, err := url.Parse(d); err == nil {
+			s.domains = append(s.domains, u)
+		}
+	}
 }
 
 // Authenticate synchronizes the web session with Steam's OIDC providers.
@@ -165,15 +173,10 @@ func (s *WebSession) Verify(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	resp, err := s.REST().Request(ctx, http.MethodGet, urlVerify, nil, nil)
+	_, err := aoni.GetJSON[aoni.NoResponse](ctx, s.REST(), urlVerify)
 	if err != nil {
-		return false, fmt.Errorf("verify request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path == "/login/home/" {
 		s.Clear()
-		return false, nil
+		return false, nil //nolint:nilerr
 	}
 
 	return true, nil
@@ -211,14 +214,17 @@ func (s *WebSession) SessionID(targetURL string) string {
 // Clear completely resets the web session state by instantiating a fresh cookie jar.
 func (s *WebSession) Clear() {
 	s.mu.Lock()
-	if s.httpClient != nil {
-		jar, _ := cookiejar.New(nil)
-		s.jar = jar
-		s.httpClient.Jar = jar
-	}
+	defer s.mu.Unlock()
 
+	jar, _ := cookiejar.New(nil)
+	s.jar = jar
+
+	s.httpClient = &http.Client{
+		Transport: &doerRoundTripper{doer: s.baseDoer},
+		Jar:       jar,
+		Timeout:   30 * time.Second,
+	}
 	s.isAuth = false
-	s.mu.Unlock()
 }
 
 func (s *WebSession) applyFastPath(accessToken, sessionID string) error {
@@ -233,7 +239,7 @@ func (s *WebSession) applyFastPath(accessToken, sessionID string) error {
 }
 
 func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID string) error {
-	params := map[string]string{
+	payload := map[string]string{
 		"nonce":         refreshToken,
 		cookieSessionID: sessionID,
 		"redir":         "https://steamcommunity.com/login/home/?goto=",
@@ -247,7 +253,7 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 		} `json:"transfer_info"`
 	}
 
-	res, err := rest.PostJSON[map[string]string, finalizeResponse](ctx, s.REST(), urlFinalize, params, nil)
+	res, err := aoni.PostJSON[map[string]string, finalizeResponse](ctx, s.REST(), urlFinalize, payload)
 	if err != nil {
 		return fmt.Errorf("websession: finalize login failed: %w", err)
 	}
@@ -260,7 +266,7 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 		transferParams := map[string]string{"steamID": fmt.Sprintf("%d", s.steamID)}
 		maps.Copy(transferParams, transfer.Params)
 
-		if err := s.executeTransferWithRetry(ctx, transfer.URL, transferParams); err != nil {
+		if err := s.executeTransfer(ctx, transfer.URL, transferParams); err != nil {
 			return err
 		}
 	}
@@ -274,42 +280,28 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 	return nil
 }
 
-func (s *WebSession) executeTransferWithRetry(
-	ctx context.Context,
-	transferURL string,
-	params map[string]string,
-) error {
-	const maxRetries = 3
-
+func (s *WebSession) executeTransfer(ctx context.Context, transferURL string, params map[string]string) error {
 	type transferResult struct {
 		Result enums.EResult `json:"result"`
 	}
 
-	var lastErr error
-	for range maxRetries {
-		res, err := rest.PostJSON[map[string]string, transferResult](ctx, s.REST(), transferURL, params, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		if res.Result != enums.EResult_OK {
-			return fmt.Errorf("steam error: %s", res.Result.String())
-		}
-
-		return nil
+	res, err := aoni.PostJSON[map[string]string, transferResult](ctx, s.REST(), transferURL, params)
+	if err != nil {
+		return err
 	}
 
-	return fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+	if res.Result != enums.EResult_OK {
+		return fmt.Errorf("steam error: %s", res.Result.String())
+	}
+
+	return nil
 }
 
 func (s *WebSession) seedCookies(sessionID, secureValue string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, domain := range s.domains {
-		u, _ := url.Parse(domain)
-
+	for _, u := range s.domains {
 		cookies := []*http.Cookie{
 			{
 				Name:     cookieSessionID,

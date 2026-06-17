@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
@@ -27,7 +28,7 @@ func (m *mockInitContext) Storage() storage.Provider                        { re
 func (m *mockInitContext) Bus() *bus.Bus                                    { return m.bus }
 func (m *mockInitContext) Logger() log.Logger                               { return m.logger }
 func (m *mockInitContext) Service() service.Doer                            { return nil }
-func (m *mockInitContext) Rest() rest.Requester                             { return nil }
+func (m *mockInitContext) Rest() aoni.Requester                             { return nil }
 func (m *mockInitContext) RegisterPacketHandler(enums.EMsg, socket.Handler) {}
 func (m *mockInitContext) RegisterServiceHandler(string, socket.Handler)    {}
 func (m *mockInitContext) Module(string) Module                             { return nil }

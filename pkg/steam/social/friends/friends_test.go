@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
@@ -157,7 +157,7 @@ func TestManager_InviteToGroups(t *testing.T) {
 		comm.ClearCalls()
 		comm.SetJSONResponse(community.BaseURL+path, 200, map[string]any{"success": true})
 
-		comm.ResponseErrs[path] = &rest.APIError{StatusCode: 400, Body: []byte("already in group")}
+		comm.ResponseErrs[path] = &aoni.APIError{StatusCode: 400, Body: []byte("already in group")}
 
 		m.InviteToGroups(ctx, FriendID1, []uint64{1001, 1002})
 
@@ -344,7 +344,7 @@ func TestManager_UnblockCommunication(t *testing.T) {
 	comm := tc.New()
 	m.community = comm
 
-	path := "profiles/76561198000000000/friends/blocked"
+	path := "profiles/{mySteamID}/friends/blocked"
 
 	t.Run("Success", func(t *testing.T) {
 		comm.ClearCalls()

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/lemon4ksan/aoni"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
@@ -525,17 +526,13 @@ func (m *Manager) UnblockCommunication(ctx context.Context, steamID id.ID) error
 		"sessionid":                         {comm.SessionID(community.BaseURL)},
 	}
 
-	path := fmt.Sprintf("profiles/%d/friends/blocked", mySteamID)
-
 	resp, err := comm.Request(
 		ctx,
 		http.MethodPost,
-		path,
-		[]byte(form.Encode()),
-		nil,
-		func(req *http.Request) {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		},
+		"profiles/{mySteamID}/friends/blocked",
+		aoni.WithVar("mySteamID", mySteamID),
+		aoni.WithBody(strings.NewReader(form.Encode())),
+		aoni.WithContentType("application/x-www-form-urlencoded"),
 	)
 	if err != nil {
 		return fmt.Errorf("friends: unblock request failed: %w", err)
@@ -568,15 +565,16 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 		"sessionid": {comm.SessionID(community.BaseURL)},
 	}
 
-	path := fmt.Sprintf("comment/Profile/post/%d/-1", steamID)
-
 	type postCommentResponse struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[postCommentResponse](ctx, comm, path, form)
+	resp, err := community.PostForm[postCommentResponse](ctx, comm,
+		"comment/Profile/post/{steamID}/-1", form,
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return "", fmt.Errorf("friends: post comment request failed: %w", err)
 	}
@@ -634,15 +632,16 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 		"feature2":   {"-1"},
 	}
 
-	path := fmt.Sprintf("comment/Profile/delete/%d/-1", steamID)
-
 	type deleteCommentResponse struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[deleteCommentResponse](ctx, comm, path, form)
+	resp, err := community.PostForm[deleteCommentResponse](ctx, comm,
+		"comment/Profile/delete/{steamID}/-1", form,
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return fmt.Errorf("friends: delete comment request failed: %w", err)
 	}
@@ -683,8 +682,6 @@ func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, cou
 		"sessionid": {comm.SessionID(community.BaseURL)},
 	}
 
-	path := fmt.Sprintf("comment/Profile/render/%d/-1", steamID)
-
 	type renderCommentsResponse struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
@@ -692,7 +689,10 @@ func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, cou
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[renderCommentsResponse](ctx, comm, path, form)
+	resp, err := community.PostForm[renderCommentsResponse](ctx, comm,
+		"comment/Profile/render/{steamID}/-1", form,
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("friends: render comments request failed: %w", err)
 	}

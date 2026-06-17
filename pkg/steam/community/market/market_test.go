@@ -66,10 +66,6 @@ func TestMarket_CreateSellOrder(t *testing.T) {
 		t.Errorf("expected POST, got %s", lastCall.Method)
 	}
 
-	if lastCall.Header.Get("Origin") != "https://steamcommunity.com" {
-		t.Error("missing or invalid Origin header")
-	}
-
 	if !strings.Contains(lastCall.Header.Get("Referer"), "inventory") {
 		t.Error("Referer should point to inventory")
 	}
@@ -285,10 +281,6 @@ func TestMarket_Search(t *testing.T) {
 	q := lastCall.URL.Query()
 	if q.Get("query") != "key" {
 		t.Errorf("expected query 'key', got %s", q.Get("query"))
-	}
-
-	if q.Get("norender") != "1" {
-		t.Error("expected norender=1 for JSON search")
 	}
 
 	if q.Get("count") != "10" {

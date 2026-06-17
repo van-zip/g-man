@@ -13,14 +13,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
-	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
@@ -99,13 +98,11 @@ type Config struct {
 	// Storage defines the persistent storage provider for credentials.
 	Storage storage.Provider
 	// HTTP defines an optional, custom raw HTTP client.
-	HTTP rest.HTTPDoer
+	HTTP aoni.HTTPDoer
 	// REST defines an optional custom REST client.
-	REST *rest.Client
+	REST *aoni.Client
 	// Device specifies device details used during credential verification.
 	Device *auth.DeviceConfig
-	// Registry defines the unmarshaling registry for WebAPI and socket decoding.
-	Registry *encoding.UnmarshalRegistry
 	// Bus is the central event bus.
 	Bus *bus.Bus
 	// ProxyURL defines a global proxy URL affecting all traffic.
@@ -185,7 +182,7 @@ type Client struct {
 	session *SessionManager
 	router  *ServiceRouter
 	modules *ModuleManager
-	rest    *rest.Client
+	rest    *aoni.Client
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -208,10 +205,6 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 
 	if cfg.Storage == nil {
 		cfg.Storage = memory.New()
-	}
-
-	if cfg.Registry == nil {
-		cfg.Registry = encoding.NewUnmarshalRegistry()
 	}
 
 	if cfg.Bus == nil {
@@ -254,7 +247,7 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 	if cfg.REST != nil {
 		c.rest = cfg.REST
 	} else {
-		c.rest = rest.NewClient(cfg.HTTP)
+		c.rest = aoni.NewClient(cfg.HTTP)
 	}
 
 	return c, nil
@@ -374,7 +367,7 @@ func (c *Client) enrichLogger(account string, steamID id.ID) {
 }
 
 // Rest returns the low-level REST requester.
-func (c *Client) Rest() rest.Requester { return c.rest }
+func (c *Client) Rest() aoni.Requester { return c.rest }
 
 // Service returns the Doer interface for making API requests.
 func (c *Client) Service() service.Doer {

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
 )
 
 // CurrencyCode is a steam currency code.
@@ -87,15 +87,15 @@ type Asset struct {
 	// AppID is the Steam AppID of the application.
 	AppID int `json:"appid"`
 	// ContextID is the unique context identifier.
-	ContextID rest.Int64String `json:"contextid"`
+	ContextID aoni.Int64String `json:"contextid"`
 	// ID is the unique asset identifier.
-	ID rest.Uint64String `json:"id"`
+	ID aoni.Uint64String `json:"id"`
 	// ClassID is the class identifier of the asset.
-	ClassID rest.Uint64String `json:"classid"`
+	ClassID aoni.Uint64String `json:"classid"`
 	// InstanceID is the instance identifier of the asset.
-	InstanceID rest.Uint64String `json:"instanceid"`
+	InstanceID aoni.Uint64String `json:"instanceid"`
 	// Amount is the quantity of the asset.
-	Amount rest.Int64String `json:"amount"`
+	Amount aoni.Int64String `json:"amount"`
 	// BackgroundColor is the background color of the asset icon.
 	BackgroundColor string `json:"background_color"`
 	// IconURL is the direct path suffix to the asset icon image.
@@ -105,7 +105,7 @@ type Asset struct {
 	// Descriptions contains detailed item descriptions.
 	Descriptions []Description `json:"descriptions"`
 	// Tradable is true if the asset can be traded.
-	Tradable rest.BoolInt `json:"tradable"`
+	Tradable aoni.BoolInt `json:"tradable"`
 	// Actions contains interactive action links.
 	Actions []Action `json:"actions"`
 	// Name is the display name of the asset.
@@ -119,9 +119,9 @@ type Asset struct {
 	// MarketHashName is the standard market identifier name.
 	MarketHashName string `json:"market_hash_name"`
 	// Commodity is true if the asset is a commodity (standard stackable item).
-	Commodity rest.BoolInt `json:"commodity"`
+	Commodity aoni.BoolInt `json:"commodity"`
 	// Marketable is true if the asset can be sold on the Steam Market.
-	Marketable rest.BoolInt `json:"marketable"`
+	Marketable aoni.BoolInt `json:"marketable"`
 }
 
 // CreateSellOrderOptions contains parameters for creating a sell order.
@@ -427,17 +427,17 @@ type BuyOrderResponse struct {
 // SearchOptions contains parameters for determining the TP.
 type SearchOptions struct {
 	// Query is the search keywords filter.
-	Query string
+	Query string `url:"query"`
 	// Start is the starting offset of pagination.
-	Start int
+	Start int `url:"start"`
 	// Count is the maximum number of items returned.
-	Count int
+	Count int `url:"count" default:"100"`
 	// SearchDescriptions is true if keywords should be matched against descriptions.
-	SearchDescriptions bool
+	SearchDescriptions bool `url:"search_descriptions"`
 	// SortColumn specifies the column to sort by (such as "popular", "price", "quantity", or "name").
-	SortColumn string
+	SortColumn string `url:"sort_column" default:"popular"`
 	// SortDir specifies the chronological sorting direction (such as "asc" or "desc").
-	SortDir string
+	SortDir string `url:"sort_dir" default:"desc"`
 }
 
 // SearchResponse is the raw structure of the search.

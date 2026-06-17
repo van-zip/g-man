@@ -11,17 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/lemon4ksan/aoni"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
@@ -34,9 +33,9 @@ var (
 )
 
 // Requester defines the requirements for making Community requests.
-// It embeds [rest.Requester] and adds Steam session management.
+// It embeds [aoni.Requester] and adds Steam session management.
 type Requester interface {
-	rest.Requester
+	aoni.Requester
 	// SessionID returns the current Steam session identifier for the given base URL.
 	SessionID(baseURL string) string
 }
@@ -58,6 +57,18 @@ var ErrAPITokenNotFound = errors.New(
 	"community: could not find api key or registration form (account might be limited)",
 )
 
+// Decorate wraps an existing Requester and adds global request modifiers.
+func Decorate(r Requester, mods ...aoni.RequestModifier) Requester {
+	if len(mods) == 0 {
+		return r
+	}
+
+	return &decoratedRequester{
+		Requester:   r,
+		defaultMods: mods,
+	}
+}
+
 // Option defines a functional configuration for the Client.
 type Option = bus.Option[*Client]
 
@@ -69,52 +80,35 @@ func WithLogger(l log.Logger) Option {
 }
 
 // WithREST sets a custom rest client for performing requests.
-func WithREST(r rest.Requester) Option {
+func WithREST(r aoni.Requester) Option {
 	return func(c *Client) {
 		c.restClient = r
 	}
 }
 
-// WithRegistry sets a custom unmarshal registry for the client.
-func WithRegistry(r *encoding.UnmarshalRegistry) Option {
-	return func(c *Client) {
-		c.registry = r
-	}
-}
-
-// WithRegistry returns a copy of the client with a custom registry of decoders.
-func (c *Client) WithRegistry(r *encoding.UnmarshalRegistry) *Client {
-	clone := *c
-	clone.registry = r
-	return &clone
-}
-
 // Client handles communication with Steam Community, backed by a generic REST client.
 //
-// It wraps a [rest.Client] and automatically configures default headers such as
+// It wraps a [aoni.Client] and automatically configures default headers such as
 // Origin and Referer, which are required by Steam. Use [NewClient] to construct
 // new instances of the client.
 type Client struct {
-	restClient  rest.Requester
+	restClient  aoni.Requester
 	sessionFunc func(string) string
 	logger      log.Logger
-
-	// registry holds the decoders used to parse WebAPI and Socket responses.
-	registry *encoding.UnmarshalRegistry
 }
 
 // NewClient creates a new Community Client.
-// It initializes a [rest.Client] with the required default browser-like headers.
-func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
-	rc := rest.NewClient(httpClient).
+// It initializes a [aoni.Client] with the required default browser-like headers.
+func NewClient(httpClient aoni.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
+	rc := aoni.NewClient(httpClient).
 		WithBaseURL(BaseURL).
-		WithOrigin(BaseURL)
+		WithOrigin(BaseURL).
+		WithMultiReadBody(10 * 1024 * 1024)
 
 	c := &Client{
 		restClient:  rc,
 		sessionFunc: sessionFunc,
 		logger:      log.Discard,
-		registry:    encoding.NewUnmarshalRegistry(),
 	}
 
 	for _, opt := range opts {
@@ -122,12 +116,6 @@ func NewClient(httpClient rest.HTTPDoer, sessionFunc func(string) string, opts .
 	}
 
 	return c
-}
-
-// Registry returns the underlying registry of decoders.
-// Implements [api.RegistryProvider].
-func (c *Client) Registry() *encoding.UnmarshalRegistry {
-	return c.registry
 }
 
 // SessionID retrieves the session identifier for the specified URI.
@@ -139,7 +127,7 @@ func (c *Client) SessionID(targetURI string) string {
 	return c.sessionFunc(targetURI)
 }
 
-// Request implements [rest.Requester]. It executes the HTTP request and deeply
+// Request implements [aoni.Requester]. It executes the HTTP request and deeply
 // inspects the response for Steam-specific soft errors.
 //
 // If an authentication failure, rate limit, family view, or generic Steam "Sorry!" error
@@ -147,30 +135,56 @@ func (c *Client) SessionID(targetURI string) string {
 func (c *Client) Request(
 	ctx context.Context,
 	method, path string,
-	body any,
-	query any,
-	mods ...rest.RequestModifier,
+	mods ...aoni.RequestModifier,
 ) (*http.Response, error) {
 	c.logger.Debug("Community Request", log.String("method", method), log.String("path", path))
 
-	resp, err := c.restClient.Request(ctx, method, path, body, query, mods...)
+	resp, err := c.restClient.Request(ctx, method, path, mods...)
 	if err != nil {
 		return nil, err
 	}
 
-	// We must read the body to check for HTML errors like "Sorry!" or Family View.
-	rawBody, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	var mBody interface{ Reset() }
 
-	if err != nil {
-		return nil, err
+	curr := io.Closer(resp.Body)
+	for {
+		if rb, ok := curr.(interface{ Reset() }); ok {
+			mBody = rb
+			break
+		}
+
+		u, ok := curr.(interface{ Unwrap() io.Closer })
+		if !ok {
+			break
+		}
+
+		curr = u.Unwrap()
 	}
 
-	// Reconstruct the body so the caller (or UnmarshalResponse) can read it later
-	resp.Body = io.NopCloser(bytes.NewReader(rawBody))
+	var rawBody []byte
+	if mBody != nil {
+		limitReader := io.LimitReader(resp.Body, 100*1024)
 
-	// Catch soft Steam errors
+		rawBody, err = io.ReadAll(limitReader)
+		if err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+
+		mBody.Reset()
+	} else {
+		rawBody, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if err != nil {
+			return nil, err
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(rawBody))
+	}
+
 	if err := checkSteamErrors(resp.StatusCode, resp.Header, rawBody); err != nil {
+		_ = resp.Body.Close()
 		return resp, err
 	}
 
@@ -187,17 +201,27 @@ func (c *Client) GetOrRegisterAPIKey(ctx context.Context, domain string) (string
 		domain = "localhost"
 	}
 
-	body, err := GetHTML(ctx, c, "dev/apikey")
+	htmlStream, err := GetHTML(ctx, c, "dev/apikey")
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch apikey page: %w", err)
 	}
+	defer htmlStream.Close()
 
-	key := rxAPIKey.FindString(string(body))
-	if key != "" {
-		return key[5:], nil
+	body := aoni.AsReplayable(htmlStream)
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, body); err != nil {
+		return "", err
 	}
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	apiKey := rxAPIKey.FindString(buf.String())
+	if apiKey != "" {
+		return apiKey[5:], nil
+	}
+
+	body.Reset()
+
+	doc, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
 		return "", err
 	}
@@ -223,11 +247,8 @@ func (c *Client) registerAPIKey(ctx context.Context, domain string) (string, err
 		ctx,
 		http.MethodPost,
 		"dev/registerkey",
-		[]byte(formData.Encode()),
-		nil,
-		func(req *http.Request) {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		},
+		aoni.WithBody(strings.NewReader(formData.Encode())),
+		aoni.WithContentType("application/x-www-form-urlencoded"),
 	)
 	if err != nil {
 		return "", fmt.Errorf("registration request failed: %w", err)
@@ -245,45 +266,38 @@ func Get[Resp any](
 	r Requester,
 	path string,
 	reqMsg any,
-	opts ...service.CallOption,
+	mods ...aoni.RequestModifier,
 ) (*Resp, error) {
-	var query url.Values
-
 	if reqMsg != nil {
-		var err error
-
-		query, err = rest.StructToValues(reqMsg)
-		if err != nil {
-			return nil, err
-		}
+		mods = append([]aoni.RequestModifier{aoni.WithQuery(reqMsg)}, mods...)
 	}
 
-	myOpts := append([]service.CallOption{
-		service.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
-		service.WithHeader("X-Requested-With", "XMLHttpRequest"),
-	}, opts...)
+	mods = append([]aoni.RequestModifier{
+		aoni.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
+		aoni.WithHeader("X-Requested-With", "XMLHttpRequest"),
+	}, mods...)
 
-	return execute[Resp](ctx, r, http.MethodGet, path, nil, query, myOpts...)
+	return execute[Resp](ctx, r, http.MethodGet, path, mods...)
 }
 
 // GetHTML performs a GET request specifically for raw HTML content.
 //
 // If the reqMsg argument is nil, query parameters are omitted.
-func GetHTML(ctx context.Context, r Requester, path string, opts ...service.CallOption) ([]byte, error) {
-	myOpts := append([]service.CallOption{
-		service.WithHeader(
+func GetHTML(ctx context.Context, r Requester, path string, mods ...aoni.RequestModifier) (io.ReadCloser, error) {
+	mods = append([]aoni.RequestModifier{
+		aoni.WithHeader(
 			"Accept",
 			"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 		),
-	}, opts...)
+	}, mods...)
 
-	resp, _, err := performRequest(ctx, r, http.MethodGet, path, nil, nil, myOpts...)
+	resp, err := r.Request(ctx, http.MethodGet, path, mods...)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	return io.ReadAll(resp.Body)
+	return resp.Body, nil
 }
 
 // PostForm performs a POST request with application/x-www-form-urlencoded data.
@@ -295,14 +309,14 @@ func PostForm[Resp any](
 	r Requester,
 	path string,
 	reqMsg any,
-	opts ...service.CallOption,
+	mods ...aoni.RequestModifier,
 ) (*Resp, error) {
 	var params url.Values
 
 	if reqMsg != nil {
 		var err error
 
-		params, err = rest.StructToValues(reqMsg)
+		params, err = aoni.StructToValues(reqMsg)
 		if err != nil {
 			return nil, err
 		}
@@ -314,12 +328,13 @@ func PostForm[Resp any](
 		params.Set("sessionid", r.SessionID(BaseURL))
 	}
 
-	myOpts := append([]service.CallOption{
-		service.WithHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"),
-		service.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
-	}, opts...)
+	mods = append([]aoni.RequestModifier{
+		aoni.WithBody(strings.NewReader(params.Encode())),
+		aoni.WithContentType("application/x-www-form-urlencoded; charset=UTF-8"),
+		aoni.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
+	}, mods...)
 
-	return execute[Resp](ctx, r, http.MethodPost, path, []byte(params.Encode()), nil, myOpts...)
+	return execute[Resp](ctx, r, http.MethodPost, path, mods...)
 }
 
 // PostJSON performs a POST request with a JSON body.
@@ -331,95 +346,64 @@ func PostJSON[Resp any](
 	r Requester,
 	path string,
 	reqMsg any,
-	opts ...service.CallOption,
+	mods ...aoni.RequestModifier,
 ) (*Resp, error) {
-	var body []byte
-
-	if reqMsg != nil {
-		var err error
-
-		body, err = json.Marshal(reqMsg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	var query url.Values
 	if sid := r.SessionID(BaseURL); sid != "" {
 		query = url.Values{"sessionid": {sid}}
 	}
 
-	myOpts := append([]service.CallOption{
-		service.WithHeader("Content-Type", "application/json; charset=UTF-8"),
-		service.WithHeader("Accept", "application/json"),
-	}, opts...)
-
-	return execute[Resp](ctx, r, http.MethodPost, path, body, query, myOpts...)
-}
-
-func performRequest(
-	ctx context.Context,
-	r Requester,
-	method, path string,
-	body []byte,
-	query url.Values,
-	opts ...service.CallOption,
-) (*http.Response, *service.CallConfig, error) {
-	req := service.NewHTTPRequest(method, BaseURL+path, body).WithParams(query)
-
-	cfg := &service.CallConfig{
-		Format:   encoding.FormatJSON,
-		Registry: getRegistry(r),
-	}
-	for _, opt := range opts {
-		opt(req, cfg)
+	if len(query) > 0 {
+		mods = append([]aoni.RequestModifier{aoni.WithQuery(query)}, mods...)
 	}
 
-	modifier := func(hr *http.Request) {
-		maps.Copy(hr.Header, req.Header())
-	}
-	resp, err := r.Request(ctx, method, path, body, req.Params(), modifier)
+	if reqMsg != nil {
+		bodyBytes, err := json.Marshal(reqMsg)
+		if err != nil {
+			return nil, err
+		}
 
-	return resp, cfg, err
+		mods = append([]aoni.RequestModifier{aoni.WithBody(bytes.NewReader(bodyBytes))}, mods...)
+	}
+
+	mods = append([]aoni.RequestModifier{
+		aoni.WithContentType("application/json; charset=UTF-8"),
+		aoni.WithHeader("Accept", "application/json"),
+	}, mods...)
+
+	return execute[Resp](ctx, r, http.MethodPost, path, mods...)
 }
 
 func execute[Resp any](
 	ctx context.Context,
 	r Requester,
 	method, path string,
-	body []byte,
-	query url.Values,
-	opts ...service.CallOption,
+	mods ...aoni.RequestModifier,
 ) (*Resp, error) {
-	resp, cfg, err := performRequest(ctx, r, method, path, body, query, opts...)
+	resp, err := r.Request(ctx, method, path, mods...)
 	if err != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	rawBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	var zero Resp
+	if _, ok := any(&zero).(*[]byte); ok {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		p := any(&raw).(*Resp)
+
+		return p, nil
 	}
 
 	result := new(Resp)
-	if err := cfg.Registry.Unmarshal(rawBody, result, cfg.Format); err != nil {
+	if err := encoding.SteamJSONDecoder.Decode(resp.Body, result); err != nil {
 		return nil, err
 	}
 
 	return result, nil
-}
-
-func getRegistry(r Requester) *encoding.UnmarshalRegistry {
-	if rp, ok := r.(encoding.RegistryProvider); ok {
-		return rp.Registry()
-	}
-
-	return encoding.NewUnmarshalRegistry()
 }
 
 func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
@@ -457,24 +441,35 @@ func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 			return service.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
 		}
 
-		return service.NewSteamAPIError(
-			"unknown steam community error (Sorry page)",
-			statusCode,
-			nil,
-		)
+		return service.NewSteamAPIError("unknown steam community error (Sorry page)", statusCode, nil)
 	}
 
-	// Embedded Trade Errors
 	if bytes.Contains(body, []byte("error_msg")) {
 		if matches := rxTradeError.FindSubmatch(body); len(matches) > 1 {
 			return service.NewSteamAPIError(string(bytes.TrimSpace(matches[1])), statusCode, nil)
 		}
 	}
 
-	// Fallback to generic REST API error if status is bad but no Steam error matched
 	if statusCode >= http.StatusBadRequest {
 		return service.NewSteamAPIError(string(body), statusCode, nil)
 	}
 
 	return nil
+}
+
+type decoratedRequester struct {
+	Requester
+	defaultMods []aoni.RequestModifier
+}
+
+func (d *decoratedRequester) Request(
+	ctx context.Context,
+	method, path string,
+	mods ...aoni.RequestModifier,
+) (*http.Response, error) {
+	allMods := make([]aoni.RequestModifier, 0, len(d.defaultMods)+len(mods))
+	allMods = append(allMods, d.defaultMods...)
+	allMods = append(allMods, mods...)
+
+	return d.Requester.Request(ctx, method, path, allMods...)
 }

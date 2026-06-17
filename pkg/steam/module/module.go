@@ -11,9 +11,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -65,7 +66,7 @@ type InitContext interface {
 	Service() service.Doer
 
 	// Rest returns a client for making http rest api calls.
-	Rest() rest.Requester
+	Rest() aoni.Requester
 
 	// RegisterPacketHandler registers a handler for low-level EMsg (TCP/UDP).
 	RegisterPacketHandler(eMsg enums.EMsg, handler socket.Handler)

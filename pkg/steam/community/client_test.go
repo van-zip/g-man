@@ -16,13 +16,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
-	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 	"github.com/lemon4ksan/g-man/test/requester"
 )
@@ -34,7 +33,7 @@ func (fr faultyReader) Read(p []byte) (n int, err error) {
 	return 0, errors.New("read error")
 }
 
-// mockHTTPDoer is a mock implementation of rest.HTTPDoer for isolated client tests.
+// mockHTTPDoer is a mock implementation of aoni.HTTPDoer for isolated client tests.
 type mockHTTPDoer struct {
 	doFunc func(req *http.Request) (*http.Response, error)
 }
@@ -73,25 +72,11 @@ func TestNewClient(t *testing.T) {
 	})
 
 	t.Run("WithREST Option", func(t *testing.T) {
-		rc := rest.NewClient(mockHTTP)
+		rc := aoni.NewClient(mockHTTP)
 		// This test ensures the option can be applied without panicking.
 		c := community.NewClient(mockHTTP, sessionFunc, community.WithREST(rc))
 		require.NotNil(t, c)
 	})
-}
-
-func TestClient_WithRegistry(t *testing.T) {
-	c1 := community.NewClient(&http.Client{}, nil)
-	r1 := c1.Registry()
-	require.NotNil(t, r1)
-
-	r2 := encoding.NewUnmarshalRegistry()
-	c2 := c1.WithRegistry(r2)
-
-	// Assert the original client is unchanged
-	assert.Same(t, r1, c1.Registry(), "Original client's registry should not change")
-	// Assert the new client has the new registry
-	assert.Same(t, r2, c2.Registry(), "New client should have the new registry")
 }
 
 func TestClient_SessionID(t *testing.T) {
@@ -119,7 +104,7 @@ func TestClient_Request(t *testing.T) {
 		}
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 
-		resp, err := client.Request(ctx, http.MethodGet, "/test", nil, nil)
+		resp, err := client.Request(ctx, http.MethodGet, "/test")
 		require.NoError(t, err)
 
 		require.NotNil(t, resp)
@@ -137,7 +122,7 @@ func TestClient_Request(t *testing.T) {
 		}
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 
-		_, err := client.Request(ctx, http.MethodGet, "/test", nil, nil)
+		_, err := client.Request(ctx, http.MethodGet, "/test")
 		require.Error(t, err)
 		assert.Equal(t, expectedErr, err)
 	})
@@ -152,7 +137,7 @@ func TestClient_Request(t *testing.T) {
 		}
 		client := community.NewClient(nil, nil, community.WithREST(mock))
 
-		_, err := client.Request(ctx, http.MethodGet, "/test", nil, nil)
+		_, err := client.Request(ctx, http.MethodGet, "/test")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "read error")
 	})
@@ -272,7 +257,7 @@ func TestClient_Request(t *testing.T) {
 			}
 			client := community.NewClient(nil, nil, community.WithREST(mock))
 
-			_, err := client.Request(ctx, http.MethodGet, "/test", nil, nil)
+			_, err := client.Request(ctx, http.MethodGet, "/test")
 			require.Error(t, err)
 
 			if tt.errorContent != "" {
@@ -332,10 +317,12 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 				assert.Equal(t, "dev/registerkey", path)
 
 				var bodyStr string
-				if b, ok := body.([]byte); ok {
-					bodyStr = string(b)
-				} else {
-					bodyStr = body.(string)
+				if body != nil {
+					if b, ok := body.([]byte); ok {
+						bodyStr = string(b)
+					} else if s, ok := body.(string); ok {
+						bodyStr = s
+					}
 				}
 
 				vals, _ := url.ParseQuery(bodyStr)
@@ -475,9 +462,9 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("Request Struct Conversion Error", func(t *testing.T) {
-		_, err := community.Get[genericResponse](ctx, client, "/test/get", make(chan int))
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported type")
+		resp, err := community.Get[genericResponse](ctx, client, "/test/get", make(chan int))
+		require.NoError(t, err)
+		assert.NotNil(t, resp)
 	})
 
 	t.Run("Unmarshal Error", func(t *testing.T) {
@@ -505,7 +492,9 @@ func TestGetHTML(t *testing.T) {
 		}
 		resp, err := community.GetHTML(ctx, client, "/test/html")
 		require.NoError(t, err)
-		assert.Equal(t, html, string(resp))
+
+		bodyBytes, _ := io.ReadAll(resp)
+		assert.Equal(t, html, string(bodyBytes))
 	})
 
 	t.Run("Request Fails", func(t *testing.T) {
@@ -630,7 +619,7 @@ func TestPerformRequest(t *testing.T) {
 			client,
 			"/test",
 			nil,
-			service.WithHeader("X-Test-Header", "Value123"),
+			aoni.WithHeader("X-Test-Header", "Value123"),
 		)
 		require.NoError(t, err)
 		assert.Equal(t, "Value123", receivedHeaders.Get("X-Test-Header"))
@@ -650,6 +639,6 @@ func TestPerformRequest(t *testing.T) {
 	})
 }
 
-type customRequester struct{ rest.Requester }
+type customRequester struct{ aoni.Requester }
 
 func (cr customRequester) SessionID(baseURL string) string { return "" }

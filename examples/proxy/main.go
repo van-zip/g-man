@@ -12,9 +12,11 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam"
+	"github.com/lemon4ksan/g-man/pkg/steam/httpc"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
 )
@@ -31,7 +33,7 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 	socketCfg.Connector.Dialers = connector.DefaultDialers()
 
 	// PART 2: Proxy rotation for stateless HTTP WebAPI requests
-	var rotatableClients []rest.HTTPDoer
+	var rotatableClients []aoni.ClientWithProxy
 
 	for _, proxyURL := range webProxies {
 		// Configure transport settings for each proxy in the pool
@@ -55,7 +57,7 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 			Timeout:   15 * time.Second,
 		}
 
-		rotatableClients = append(rotatableClients, httpClient)
+		rotatableClients = append(rotatableClients, aoni.ClientWithProxy{Client: httpClient, ProxyURL: proxyURL})
 	}
 
 	if len(rotatableClients) == 0 {
@@ -63,34 +65,33 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 	}
 
 	// Initialize the proxy rotator with a strategy to automatically remove unhealthy nodes from the pool
-	rotatorConfig := rest.ProxyRotatorConfig{
+	rotatorConfig := aoni.ProxyRotatorConfig{
 		MaxFails:            3,                // Maximum of 3 consecutive errors before marking the proxy as unhealthy
 		RetryAfter:          45 * time.Second, // Cool-off period to temporarily remove the unhealthy proxy from the pool
 		HealthCheckURL:      "https://api.steampowered.com/ISteamDirectory/GetCMList/v1",
 		HealthCheckInterval: 2 * time.Minute,
 	}
 
-	proxyRotator, err := rest.NewProxyRotator(rotatorConfig, rotatableClients...)
+	proxyRotator, err := aoni.NewProxyRotator(rotatorConfig, rotatableClients...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize proxy rotator: %w", err)
 	}
 
 	// Enable sticky session support based on Steam session cookies
 	// This ensures that requests within a single session route through the same proxy
-	stickyRotator := proxyRotator.WithStickySessions(rest.SteamStickyKey)
+	stickyRotator := proxyRotator.WithStickySessions(httpc.SteamStickyKey)
 
 	// Create retry middleware: in case of a proxy network failure, the request automatically retries on another node
-	retryMiddleware := rest.RetryMiddleware(rest.RetryOptions{
+	retryMiddleware := aoni.RetryMiddleware(aoni.RetryOptions{
 		MaxRetries: 3,
 		Backoff:    500 * time.Millisecond,
-	}, proxyRotator)
+	}, aoni.ProxyRetryCondition(proxyRotator))
 
 	// Build the call chain: Base client -> Logging -> Retry layer -> Rotator
-	loggingMiddleware := rest.LoggingMiddleware(logger)
-	chainedDoer := rest.Chain(stickyRotator, loggingMiddleware, retryMiddleware)
+	chainedDoer := aoni.Chain(stickyRotator, httpc.LoggingMiddleware(logger), retryMiddleware)
 
 	// Initialize the final REST client that will make the calls
-	httpClient := rest.NewClient(chainedDoer)
+	httpClient := aoni.NewClient(chainedDoer)
 
 	// PART 3: Initialize the main Steam client
 	clientCfg := steam.DefaultConfig()

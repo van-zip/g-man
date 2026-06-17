@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -17,14 +18,18 @@ import (
 	"sync"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/lemon4ksan/aoni"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
-	"github.com/lemon4ksan/g-man/pkg/steam/service"
-	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
+)
+
+var (
+	rxBoosterCreator = regexp.MustCompile(`(?s)CBoosterCreatorPage\.Init\(\s*(.*?),\s*(\d+),\s*(\d+),\s*(\d+),\s*\[`)
+	rxMarketApps     = regexp.MustCompile(`https?://steamcommunity.com/market/search\?appid=(\d+)`)
 )
 
 // ModuleName is the unique identifier for the market module.
@@ -68,8 +73,8 @@ func DefaultConfig() Config {
 type Market struct {
 	module.Base
 
-	config    Config
-	community community.Requester
+	config       Config
+	marketClient community.Requester
 
 	mu      sync.RWMutex
 	steamID id.ID
@@ -92,8 +97,11 @@ func (m *Market) Init(init module.InitContext) error {
 // It captures the authenticated community requester and the user's SteamID.
 func (m *Market) StartAuthed(ctx context.Context, auth module.AuthContext) error {
 	m.mu.Lock()
-	m.community = auth.Community()
 	m.steamID = auth.SteamID()
+	m.marketClient = community.Decorate(auth.Community(),
+		aoni.WithHeader("X-Requested-With", "XMLHttpRequest"),
+		aoni.WithHeader("X-Prototype-Version", "1.7"),
+	)
 	m.mu.Unlock()
 
 	m.Logger.Info("Market module ready",
@@ -116,16 +124,13 @@ func (m *Market) Close() error {
 // It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOptions) (*CreateSellOrder, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	myID := m.steamID
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
-
-	sessionID := comm.SessionID(community.BaseURL)
-	referer := fmt.Sprintf("%sprofiles/%d/inventory?modal=1&market=1", community.BaseURL, myID)
 
 	req := struct {
 		SessionID string `url:"sessionid"`
@@ -134,11 +139,10 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 		AssetID   uint64 `url:"assetid"`
 		Amount    int    `url:"amount"`
 		Price     int    `url:"price"`
-	}{sessionID, opts.AppID, opts.ContextID, opts.AssetID, opts.Amount, opts.Price}
+	}{comm.SessionID(community.BaseURL), opts.AppID, opts.ContextID, opts.AssetID, opts.Amount, opts.Price}
 
 	resp, err := community.PostForm[CreateSellOrderResponse](ctx, comm, "market/sellitem", req,
-		withMarketHeaders(referer),
-		withOrigin(),
+		aoni.WithHeader("Referer", fmt.Sprintf("%sprofiles/%d/inventory?modal=1&market=1", community.BaseURL, myID)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("market: sell order failed: %w", err)
@@ -158,24 +162,15 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 // It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions) (*CreateBuyOrderResponse, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	sessionID := comm.SessionID(community.BaseURL)
-	referer := fmt.Sprintf(
-		"%smarket/listings/%d/%s",
-		community.BaseURL,
-		opts.AppID,
-		url.PathEscape(opts.MarketHashName),
-	)
-
 	// Format price to Steam's expected decimal string (e.g., "1.50")
 	totalCents := opts.Price * opts.Amount
-	priceTotalStr := formatCurrencyDecimal(totalCents, m.config.Currency)
 
 	req := struct {
 		SessionID      string       `url:"sessionid"`
@@ -187,19 +182,23 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 		BillingState   string       `url:"billing_state"`
 		SaveMyAddress  string       `url:"save_my_address"`
 	}{
-		SessionID:      sessionID,
+		SessionID:      comm.SessionID(community.BaseURL),
 		AppID:          opts.AppID,
 		Currency:       m.config.Currency,
 		MarketHashName: opts.MarketHashName,
-		PriceTotal:     priceTotalStr,
+		PriceTotal:     formatCurrencyDecimal(totalCents, m.config.Currency),
 		Quantity:       opts.Amount,
 		BillingState:   "",
 		SaveMyAddress:  "0",
 	}
 
 	resp, err := community.PostForm[CreateBuyOrderResponse](ctx, comm, "market/createbuyorder", req,
-		withMarketHeaders(referer),
-		withOrigin(),
+		aoni.WithHeader("Referer", fmt.Sprintf(
+			"%smarket/listings/%d/%s",
+			community.BaseURL,
+			opts.AppID,
+			url.PathEscape(opts.MarketHashName),
+		)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("market: buy order failed: %w", err)
@@ -213,7 +212,7 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 // It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
@@ -225,14 +224,7 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 		BuyOrderID uint64 `url:"buy_orderid"`
 	}{comm.SessionID(community.BaseURL), buyOrderID}
 
-	_, err := community.PostForm[service.NoResponse](
-		ctx,
-		comm,
-		"market/cancelbuyorder",
-		req,
-		withMarketHeaders(""),
-		withOrigin(),
-	)
+	_, err := community.PostForm[aoni.NoResponse](ctx, comm, "market/cancelbuyorder", req)
 
 	return err
 }
@@ -242,7 +234,7 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 // It returns an error if the request fails or is rejected by Steam Community.
 func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
@@ -253,8 +245,9 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 		SessionID string `url:"sessionid"`
 	}{comm.SessionID(community.BaseURL)}
 
-	path := fmt.Sprintf("market/removelisting/%d", listingID)
-	_, err := community.PostForm[service.NoResponse](ctx, comm, path, req, withMarketHeaders(""), withOrigin())
+	_, err := community.PostForm[aoni.NoResponse](ctx, comm, "market/removelisting/{listingID}", req,
+		aoni.WithVar("listingID", listingID),
+	)
 
 	return err
 }
@@ -263,38 +256,8 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 //
 // It returns the search results or an error if the request fails.
 func (m *Market) Search(ctx context.Context, appID uint32, opts SearchOptions) (*SearchResponse, error) {
-	referer := fmt.Sprintf("https://steamcommunity.com/market/search?appid=%d", appID)
-
-	if opts.Count == 0 {
-		opts.Count = 100
-	}
-
-	if opts.SortColumn == "" {
-		opts.SortColumn = "popular"
-	}
-
-	if opts.SortDir == "" {
-		opts.SortDir = "desc"
-	}
-
-	searchDesc := "0"
-	if opts.SearchDescriptions {
-		searchDesc = "1"
-	}
-
-	req := struct {
-		Query              string `url:"query"`
-		Start              int    `url:"start"`
-		Count              int    `url:"count"`
-		SearchDescriptions string `url:"search_descriptions"`
-		SortColumn         string `url:"sort_column"`
-		SortDir            string `url:"sort_dir"`
-		AppID              uint32 `url:"appid"`
-		NoRender           string `url:"norender"`
-	}{opts.Query, opts.Start, opts.Count, searchDesc, opts.SortColumn, opts.SortDir, appID, "1"}
-
-	return community.Get[SearchResponse](
-		ctx, m.community, "market/search/render", req, withMarketHeaders(referer),
+	return community.Get[SearchResponse](ctx, m.marketClient, "market/search/render", opts,
+		aoni.WithHeader("Referer", fmt.Sprintf("https://steamcommunity.com/market/search?appid=%d", appID)),
 	)
 }
 
@@ -312,9 +275,7 @@ func (m *Market) GetPriceOverview(
 		MarketHashName string       `url:"market_hash_name"`
 	}{appID, m.config.Currency, marketHashName}
 
-	return community.Get[PriceOverviewResponse](
-		ctx, m.community, "market/priceoverview", req, withMarketHeaders(""),
-	)
+	return community.Get[PriceOverviewResponse](ctx, m.marketClient, "market/priceoverview", req)
 }
 
 // GetItemOrdersHistogram gets a histogram of active buy and sell orders.
@@ -327,8 +288,6 @@ func (m *Market) GetItemOrdersHistogram(
 	marketHashName string,
 	itemNameID uint64,
 ) (*ItemOrdersHistogram, error) {
-	referer := fmt.Sprintf("https://steamcommunity.com/market/listings/%d/%s", appID, url.PathEscape(marketHashName))
-
 	req := struct {
 		Country    string       `url:"country"`
 		Language   string       `url:"language"`
@@ -339,10 +298,13 @@ func (m *Market) GetItemOrdersHistogram(
 
 	resp, err := community.Get[ItemOrdersHistogramResponse](
 		ctx,
-		m.community,
+		m.marketClient,
 		"market/itemordershistogram",
 		req,
-		withMarketHeaders(referer),
+		aoni.WithHeader(
+			"Referer",
+			fmt.Sprintf("https://steamcommunity.com/market/listings/%d/%s", appID, url.PathEscape(marketHashName)),
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -377,17 +339,13 @@ func (m *Market) GetItemOrdersHistogram(
 //
 // It returns the active listings or an error if the request fails.
 func (m *Market) GetMyListings(ctx context.Context, start, count int) (*MyListingsResponse, error) {
-	if count == 0 {
-		count = 100
-	}
-
 	req := struct {
 		Start    int `url:"start"`
-		Count    int `url:"count"`
+		Count    int `url:"count" default:"100"`
 		NoRender int `url:"norender"`
 	}{start, count, 1}
 
-	return community.Get[MyListingsResponse](ctx, m.community, "market/mylistings", req, withMarketHeaders(""))
+	return community.Get[MyListingsResponse](ctx, m.marketClient, "market/mylistings", req)
 }
 
 func formatCurrencyDecimal(cents int, currency CurrencyCode) string {
@@ -400,49 +358,25 @@ func formatCurrencyDecimal(cents int, currency CurrencyCode) string {
 	}
 }
 
-// withMarketHeaders injects headers required for Steam Market AJAX calls.
-func withMarketHeaders(referer string) service.CallOption {
-	return func(req *tr.Request, _ *service.CallConfig) {
-		req.WithHeader("X-Requested-With", "XMLHttpRequest")
-		req.WithHeader("X-Prototype-Version", "1.7")
-
-		if referer != "" {
-			req.WithHeader("Referer", referer)
-		} else {
-			req.WithHeader("Referer", community.BaseURL+"market/")
-		}
-	}
-}
-
-func withOrigin() service.CallOption {
-	return func(req *tr.Request, _ *service.CallConfig) {
-		req.WithHeader("Origin", "https://steamcommunity.com")
-	}
-}
-
-var (
-	rxBoosterCreator = regexp.MustCompile(`(?s)CBoosterCreatorPage\.Init\(\s*(.*?),\s*(\d+),\s*(\d+),\s*(\d+),\s*\[`)
-	rxMarketApps     = regexp.MustCompile(`https?://steamcommunity.com/market/search\?appid=(\d+)`)
-)
-
 // GetMarketApps retrieves all apps listed on the Steam Community Market.
 //
 // It returns the apps mapped by AppID or an error if parsing fails.
 func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	body, err := community.GetHTML(ctx, comm, "market")
+	html, err := community.GetHTML(ctx, comm, "market")
 	if err != nil {
 		return nil, fmt.Errorf("market: failed to fetch market page: %w", err)
 	}
+	defer html.Close()
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	doc, err := goquery.NewDocumentFromReader(html)
 	if err != nil {
 		return nil, fmt.Errorf("market: failed to parse HTML: %w", err)
 	}
@@ -473,14 +407,13 @@ func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
 // It returns the gem value details or an error if Steam rejects the query.
 func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) (*GemValue, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	path := "ajaxgetgoovalue"
 	req := url.Values{
 		"sessionid": {comm.SessionID(community.BaseURL)},
 		"appid":     {strconv.FormatUint(uint64(appID), 10)},
@@ -495,7 +428,7 @@ func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) 
 		StrTitle string `json:"strTitle"`
 	}
 
-	resp, err := community.Get[response](ctx, comm, path, req)
+	resp, err := community.Get[response](ctx, comm, "ajaxgetgoovalue", req)
 	if err != nil {
 		return nil, err
 	}
@@ -522,14 +455,13 @@ func (m *Market) TurnItemIntoGems(
 	expectedGemsValue int,
 ) (*GemsResult, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	path := "ajaxgrindintogoo"
 	req := url.Values{
 		"sessionid":          {comm.SessionID(community.BaseURL)},
 		"appid":              {strconv.FormatUint(uint64(appID), 10)},
@@ -545,7 +477,7 @@ func (m *Market) TurnItemIntoGems(
 		GooValueTotal    string `json:"goo_value_total"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "ajaxgrindintogoo", req)
 	if err != nil {
 		return nil, err
 	}
@@ -568,14 +500,13 @@ func (m *Market) TurnItemIntoGems(
 // It returns the unpacked items details or an error if the request is rejected.
 func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint64) ([]any, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	path := "ajaxunpackbooster"
 	req := url.Values{
 		"sessionid":       {comm.SessionID(community.BaseURL)},
 		"appid":           {strconv.FormatUint(uint64(appID), 10)},
@@ -588,7 +519,7 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 		RgItems []any  `json:"rgItems"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "ajaxunpackbooster", req)
 	if err != nil {
 		return nil, err
 	}
@@ -605,19 +536,25 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 // It returns the catalog details or an error if parsing from JS config block fails.
 func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	body, err := community.GetHTML(ctx, comm, "tradingcards/boostercreator")
+	html, err := community.GetHTML(ctx, comm, "tradingcards/boostercreator")
 	if err != nil {
 		return nil, fmt.Errorf("market: failed to fetch booster creator page: %w", err)
 	}
+	defer html.Close()
 
-	match := rxBoosterCreator.FindSubmatch(body)
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, html); err != nil {
+		return nil, err
+	}
+
+	match := rxBoosterCreator.FindSubmatch(buf.Bytes())
 	if len(match) != 5 {
 		return nil, errors.New("market: failed to parse booster creator catalog from JS")
 	}
@@ -649,25 +586,24 @@ func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, er
 // It returns the resulting gem balances and item details, or an error if purchase fails.
 func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntradableGems bool) (*BoosterResult, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	tradability := "2" // Prefer tradable gems only
+	tradability := 2 // Prefer tradable gems only
 	if useUntradableGems {
-		tradability = "3" // Prefer untradable gems
+		tradability = 3 // Prefer untradable gems
 	}
 
-	path := "tradingcards/ajaxcreatebooster"
-	req := url.Values{
-		"sessionid":              {comm.SessionID(community.BaseURL)},
-		"appid":                  {strconv.FormatUint(uint64(appID), 10)},
-		"series":                 {"1"},
-		"tradability_preference": {tradability},
-	}
+	req := struct {
+		SessionID             string `url:"sessionid"`
+		AppID                 uint32 `url:"appid"`
+		Series                int    `url:"series"`
+		TradabilityPreference int    `url:"tradability_preference"`
+	}{comm.SessionID(community.BaseURL), appID, 1, tradability}
 
 	type response struct {
 		PurchaseEResult     int    `json:"purchase_eresult"`
@@ -677,7 +613,7 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 		PurchaseResult      any    `json:"purchase_result"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "tradingcards/ajaxcreatebooster", req)
 	if err != nil {
 		return nil, err
 	}
@@ -686,9 +622,20 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 		return nil, fmt.Errorf("steam purchase error: eresult=%d", resp.PurchaseEResult)
 	}
 
-	total, _ := strconv.Atoi(resp.GooAmount)
-	tradable, _ := strconv.Atoi(resp.TradableGooAmount)
-	untradable, _ := strconv.Atoi(resp.UntradableGooAmount)
+	total, err := strconv.Atoi(resp.GooAmount)
+	if err != nil {
+		return nil, err
+	}
+
+	tradable, err := strconv.Atoi(resp.TradableGooAmount)
+	if err != nil {
+		return nil, err
+	}
+
+	untradable, err := strconv.Atoi(resp.UntradableGooAmount)
+	if err != nil {
+		return nil, err
+	}
 
 	return &BoosterResult{
 		TotalGems:      total,
@@ -703,17 +650,16 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 // It returns the gift details or an error if validation fails.
 func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetails, error) {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return nil, module.ErrNotAuthenticated
 	}
 
-	path := fmt.Sprintf("gifts/%d/validateunpack", giftID)
-	req := url.Values{
-		"sessionid": {comm.SessionID(community.BaseURL)},
-	}
+	req := struct {
+		SessionID string `url:"sessionid"`
+	}{comm.SessionID(community.BaseURL)}
 
 	type response struct {
 		Success   int    `json:"success"`
@@ -723,7 +669,9 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 		Owned     bool   `json:"owned"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "gifts/{giftID}/validateunpack", req,
+		aoni.WithVar("giftID", giftID),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -746,24 +694,25 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 // It returns an error if unpacking fails.
 func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return module.ErrNotAuthenticated
 	}
 
-	path := fmt.Sprintf("gifts/%d/unpack", giftID)
-	req := url.Values{
-		"sessionid": {comm.SessionID(community.BaseURL)},
-	}
+	req := struct {
+		SessionID string `url:"sessionid"`
+	}{comm.SessionID(community.BaseURL)}
 
 	type response struct {
 		Success int    `json:"success"`
 		Message string `json:"message"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "gifts/{giftID}/unpack", req,
+		aoni.WithVar("giftID", giftID),
+	)
 	if err != nil {
 		return err
 	}
@@ -780,30 +729,29 @@ func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 // It returns an error if exchange fails.
 func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denomOut, qtyIn, qtyOutExpected int) error {
 	m.mu.RLock()
-	comm := m.community
+	comm := m.marketClient
 	m.mu.RUnlock()
 
 	if comm == nil {
 		return module.ErrNotAuthenticated
 	}
 
-	path := "ajaxexchangegoo"
-	req := url.Values{
-		"sessionid":               {comm.SessionID(community.BaseURL)},
-		"appid":                   {"753"},
-		"assetid":                 {strconv.FormatUint(assetID, 10)},
-		"goo_denomination_in":     {strconv.Itoa(denomIn)},
-		"goo_amount_in":           {strconv.Itoa(qtyIn)},
-		"goo_denomination_out":    {strconv.Itoa(denomOut)},
-		"goo_amount_out_expected": {strconv.Itoa(qtyOutExpected)},
-	}
+	req := struct {
+		AppID                uint32 `url:"appid"`
+		AssetID              uint64 `url:"assetid"`
+		GooDenominationIn    int    `url:"goo_denomination_in"`
+		GooAmountIn          int    `url:"goo_amount_in"`
+		GooDenominationOut   int    `url:"goo_denomination_out"`
+		GooAmountOutExpected int    `url:"goo_amount_out_expected"`
+		SessionID            string `url:"sessionid"`
+	}{753, assetID, denomIn, qtyIn, denomOut, qtyOutExpected, comm.SessionID(community.BaseURL)}
 
 	type response struct {
 		Success int    `json:"success"`
 		Message string `json:"message"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, path, req)
+	resp, err := community.PostForm[response](ctx, comm, "ajaxexchangegoo", req)
 	if err != nil {
 		return err
 	}

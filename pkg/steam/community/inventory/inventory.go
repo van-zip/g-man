@@ -10,17 +10,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/lemon4ksan/aoni"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
-	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
 // GetUserInventoryContents recursively parses user inventory using community requester
@@ -32,7 +32,7 @@ import (
 func GetUserInventoryContents(
 	ctx context.Context,
 	c community.Requester,
-	userID uint64,
+	steamID uint64,
 	appID uint32,
 	contextID int64,
 	tradableOnly bool,
@@ -52,16 +52,15 @@ func GetUserInventoryContents(
 	pos := 1
 
 	for {
-		path := fmt.Sprintf("inventory/%d/%d/%d", userID, appID, contextID)
-
 		req := struct {
 			Language     string `url:"l"`
 			Count        int    `url:"count"`
 			StartAssetID string `url:"start_assetid,omitempty"`
 		}{Language: language, Count: 1000, StartAssetID: startAssetID}
 
-		resp, err := community.Get[inventoryResponse](ctx, c, path, req, service.WithHeader(
-			"Referer", fmt.Sprintf("https://steamcommunity.com/profiles/%d/inventory", userID)),
+		resp, err := community.Get[inventoryResponse](ctx, c, "inventory/{steamID}/{appID}/{contextID}", req,
+			aoni.WithVars("steamID", steamID, "appID", appID, "contextID", contextID),
+			aoni.WithHeader("Referer", fmt.Sprintf("https://steamcommunity.com/profiles/%d/inventory", steamID)),
 		)
 		if err != nil {
 			return nil, nil, 0, err
@@ -127,23 +126,29 @@ func GetUserInventoryContexts(
 	c community.Requester,
 	userID uint64,
 ) (map[string]*AppContext, error) {
-	path := fmt.Sprintf("profiles/%d/inventory", userID)
-
-	htmlBytes, err := community.GetHTML(ctx, c, path)
+	html, err := community.GetHTML(ctx, c, "profiles/{userID}/inventory",
+		aoni.WithVar("userID", userID),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: failed to fetch inventory page: %w", err)
 	}
+	defer html.Close()
 
-	if bytes.Contains(htmlBytes, []byte("This profile is private.")) {
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, html); err != nil {
+		return nil, err
+	}
+
+	if bytes.Contains(buf.Bytes(), []byte("This profile is private.")) {
 		return nil, errors.New("inventory: profile is private")
 	}
 
-	if bytes.Contains(htmlBytes, []byte("The inventory is currently private.")) ||
-		bytes.Contains(htmlBytes, []byte("inventory is currently private")) {
+	if bytes.Contains(buf.Bytes(), []byte("The inventory is currently private.")) ||
+		bytes.Contains(buf.Bytes(), []byte("inventory is currently private")) {
 		return nil, errors.New("inventory: inventory is private")
 	}
 
-	match := rxAppContextData.FindSubmatch(htmlBytes)
+	match := rxAppContextData.FindSubmatch(buf.Bytes())
 	if len(match) != 2 {
 		return nil, errors.New("inventory: malformed page (g_rgAppContextData not found)")
 	}
@@ -199,38 +204,36 @@ func GetInventoryHistory(
 	steamID id.ID,
 	opts HistoryOptions,
 ) (*TradeHistoryResult, error) {
-	// 1. Build request queries
-	query := url.Values{
-		"l": {"english"},
-	}
-
-	if opts.StartTime != nil {
-		query.Set("after_time", strconv.FormatInt(opts.StartTime.Unix(), 10))
-
-		if opts.StartTrade != nil {
-			query.Set("after_trade", strconv.FormatUint(*opts.StartTrade, 10))
-		}
-	}
+	params := struct {
+		Language   string     `json:"l"`
+		AfterTime  *time.Time `json:"after_time,omitempty"`
+		AfterTrade *uint64    `json:"after_trade,omitempty"`
+		Direction  int        `json:"prev"`
+	}{"english", opts.StartTime, opts.StartTrade, 0}
 
 	if opts.Direction == DirectionFuture {
-		query.Set("prev", "1")
+		params.Direction = 1
 	}
 
-	path := fmt.Sprintf("profiles/%d/inventoryhistory", steamID)
-
-	// Fetch HTML page
-	var htmlOpts []service.CallOption
-	if len(query) > 0 {
-		htmlOpts = append(htmlOpts, service.WithQueryParams(query))
-	}
-
-	htmlBytes, err := community.GetHTML(ctx, client, path, htmlOpts...)
+	html, err := community.GetHTML(ctx, client, "profiles/{steamID}/inventoryhistory",
+		aoni.WithVar("steamID", steamID),
+		aoni.WithQuery(params),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("history: failed to fetch inventory history page: %w", err)
 	}
+	defer html.Close()
 
-	// 2. Extract g_rgHistoryInventory JSON
-	matchInv := rxHistoryInventory.FindSubmatch(htmlBytes)
+	body := aoni.AsReplayable(html)
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, html); err != nil {
+		return nil, err
+	}
+
+	body.Reset()
+
+	matchInv := rxHistoryInventory.FindSubmatch(buf.Bytes())
 	if len(matchInv) != 2 {
 		return nil, errors.New("history: malformed page (g_rgHistoryInventory not found)")
 	}
@@ -241,7 +244,7 @@ func GetInventoryHistory(
 		return nil, fmt.Errorf("history: failed to parse history inventory JSON: %w", err)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(htmlBytes))
+	doc, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
 		return nil, fmt.Errorf("history: failed to parse HTML document: %w", err)
 	}
@@ -254,7 +257,6 @@ func GetInventoryHistory(
 		Trades: make([]TradeHistoryRow, 0),
 	}
 
-	// 3. Parse paging buttons
 	doc.Find(".inventory_history_nextbtn .pagebtn:not(.disabled)").Each(func(_ int, s *goquery.Selection) {
 		href, exists := s.Attr("href")
 		if !exists {
@@ -282,10 +284,9 @@ func GetInventoryHistory(
 		}
 	})
 
-	// 4. Compile Hover Map
 	hoverMap := make(map[string]hoverInfo)
 
-	hovers := rxHover.FindAllSubmatch(htmlBytes, -1)
+	hovers := rxHover.FindAllSubmatch(buf.Bytes(), -1)
 	for _, hover := range hovers {
 		if len(hover) != 6 {
 			continue
@@ -301,18 +302,15 @@ func GetInventoryHistory(
 		}
 	}
 
-	// 5. Parse Trade Rows
 	doc.Find(".tradehistoryrow").Each(func(_ int, s *goquery.Selection) {
 		row := TradeHistoryRow{
 			ItemsReceived: make([]EconItem, 0),
 			ItemsGiven:    make([]EconItem, 0),
 		}
 
-		// Check hold
 		holdText := s.Find("span:nth-of-type(2)").Text()
 		row.OnHold = strings.Contains(strings.ToLower(holdText), "trade on hold")
 
-		// Parse Time and Date
 		timeText := s.Find(".tradehistory_timestamp").Text()
 
 		time24, err := convertTimeTo24h(timeText)
@@ -325,7 +323,6 @@ func GetInventoryHistory(
 			}
 		}
 
-		// Partner info
 		partnerAnchor := s.Find(".tradehistory_event_description a")
 		row.PartnerName = partnerAnchor.Text()
 
@@ -345,7 +342,6 @@ func GetInventoryHistory(
 			}
 		}
 
-		// Parse Items
 		s.Find(".history_item").Each(func(_ int, itemSel *goquery.Selection) {
 			elID, exists := itemSel.Attr("id")
 			if !exists {

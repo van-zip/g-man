@@ -5,18 +5,15 @@
 package openid
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 
 	"github.com/PuerkitoBio/goquery"
-
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
 )
 
 var (
@@ -36,14 +33,10 @@ var (
 // Login performs an automated OpenID authorization flow on a third-party website
 // using active Steam session cookies.
 //
-// The function returns a configured [rest.Client] which contains a CookieJar populated
+// The function returns a configured [aoni.Client] which contains a CookieJar populated
 // with the target website's authorization cookies. This client can be used for
 // subsequent API requests to the third-party service.
-//
-// It returns [ErrNotSignedIn] if the provided Steam cookies are expired or invalid,
-// [ErrNoForm] if the hidden form is missing from the page, [ErrWrongHost] if the target
-// host does not match, or standard network errors on request failure.
-func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (*rest.Client, error) {
+func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (*aoni.Client, error) {
 	parsedTarget, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("openid: invalid target URL: %w", err)
@@ -56,25 +49,15 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 	jar.SetCookies(steamCommURL, steamCookies)
 	jar.SetCookies(steamStoreURL, steamCookies)
 
-	httpClient := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return nil // Ensure we follow redirects
-		},
-	}
+	client := aoni.DefaultClient.WithCookieJar(jar)
 
-	client := rest.NewClient(httpClient)
-
-	// Hit the target site's login URL. This should redirect us to Steam's OpenID page.
-	resp, err := client.Request(ctx, http.MethodGet, targetURL, nil, nil)
+	resp, err := client.Request(ctx, http.MethodGet, targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("openid: initial request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Case 1: The site didn't redirect to Steam at all.
-	// Most likely, the site's provided (or cached) cookies are already valid
-	// and we are in the authorized zone of the target service.
 	if resp.Request.URL.Host == parsedTarget.Host {
 		return client, nil
 	}
@@ -84,12 +67,7 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 		return nil, fmt.Errorf("%w: ended up at %s", ErrWrongHost, resp.Request.URL.Host)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("openid: failed to read response body: %w", err)
-	}
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(bodyBytes))
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("openid: failed to parse HTML: %w", err)
 	}
@@ -106,7 +84,6 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 
 	// Extract all hidden input fields from the form
 	formData := url.Values{}
-
 	form.Find("input").Each(func(i int, s *goquery.Selection) {
 		value, _ := s.Attr("value")
 		if name, exists := s.Attr("name"); exists && name != "" {
@@ -114,14 +91,11 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 		}
 	})
 
-	// Emulates a "Sign In" button press. On some Steam pages,
-	// this value is passed explicitly via the Submit button.
+	// Emulates a "Sign In" button press
 	if formData.Get("action") == "" {
 		formData.Set("action", "steam_openid_login")
 	}
 
-	// Steam can specify both absolute and relative actions (e.g. "/openid/login")
-	// Therefore, we resolve the path relative to the current page address.
 	currentURL := resp.Request.URL
 	postURL := "https://steamcommunity.com/openid/login"
 
@@ -131,19 +105,13 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 		}
 	}
 
-	// Submit the form back to Steam. Steam will validate and redirect us
-	// back to the third-party site with the OpenID assertion payload.
-	formMod := func(req *http.Request) {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Referer", currentURL.String())
-	}
-
-	postResp, err := client.Request(ctx, http.MethodPost, postURL, []byte(formData.Encode()), nil, formMod)
+	_, err = aoni.PostForm[url.Values, aoni.NoResponse](
+		ctx, client, postURL, formData,
+		aoni.WithHeader("Referer", currentURL.String()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("openid: form submission failed: %w", err)
 	}
-	defer postResp.Body.Close()
 
-	// The third-party site's cookies are now securely stored in client's CookieJar.
 	return client, nil
 }

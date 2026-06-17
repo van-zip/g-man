@@ -5,8 +5,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,21 +29,10 @@ type mockTransport struct {
 func (m *mockTransport) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
 	return m.onDo(req)
 }
-func (m *mockTransport) Close() error { return nil }
 
 type mockTarget string
 
 func (m mockTarget) String() string { return string(m) }
-
-type mockDoerWithRegistry struct {
-	reg  *encoding.UnmarshalRegistry
-	onDo func(req *tr.Request) (*tr.Response, error)
-}
-
-func (m *mockDoerWithRegistry) Do(ctx context.Context, req *tr.Request) (*tr.Response, error) {
-	return m.onDo(req)
-}
-func (m *mockDoerWithRegistry) Registry() *encoding.UnmarshalRegistry { return m.reg }
 
 // These are only used for reflection tests and won't be passed to proto.Marshal.
 type (
@@ -54,17 +45,12 @@ type (
 func TestClient_Initialization(t *testing.T) {
 	trans := &mockTransport{}
 	c := New(trans)
-	assert.NotNil(t, c.Registry())
 
 	c1 := c.WithAPIKey("key")
 	assert.Equal(t, "key", c1.apiKey)
 
 	c2 := c.WithAccessToken("token")
 	assert.Equal(t, "token", c2.accessToken)
-
-	reg := encoding.NewUnmarshalRegistry()
-	c3 := c.WithRegistry(reg)
-	assert.Same(t, reg, c3.Registry())
 }
 
 func TestClient_Do(t *testing.T) {
@@ -83,7 +69,7 @@ func TestClient_Do(t *testing.T) {
 		trans := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
 			assert.Equal(t, "K", req.Params().Get("key"))
 			assert.Equal(t, "T", req.Params().Get("access_token"))
-			return tr.NewResponse([]byte("{}"), tr.HTTPMetadata{StatusCode: 200}), nil
+			return tr.NewResponse(io.NopCloser(bytes.NewReader([]byte("{}"))), tr.HTTPMetadata{StatusCode: 200}), nil
 		}}
 		c := New(trans).WithAPIKey("K").WithAccessToken("T")
 		_, err := c.Do(ctx, tr.NewRequest(mockTarget("t"), nil))
@@ -161,34 +147,41 @@ func TestExecute_Logic(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Registry From Provider", func(t *testing.T) {
-		reg := encoding.NewUnmarshalRegistry()
-		doer := &mockDoerWithRegistry{
-			reg: reg,
+		doer := &mockTransport{
 			onDo: func(req *tr.Request) (*tr.Response, error) {
-				return tr.NewResponse([]byte(`{"nickname":"G"}`), tr.HTTPMetadata{StatusCode: 200}), nil
+				return tr.NewResponse(
+					io.NopCloser(bytes.NewReader([]byte(`{"nickname":"G"}`))),
+					tr.HTTPMetadata{StatusCode: 200},
+				), nil
 			},
 		}
 
 		type resp struct{ Nickname string }
 
-		res, err := execute[resp](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
+		res, err := execute[resp](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.SteamJSONDecoder)
 		assert.NoError(t, err)
 		assert.Equal(t, "G", res.Nickname)
 	})
 
 	t.Run("Unmarshal Error", func(t *testing.T) {
 		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
-			return tr.NewResponse([]byte(`{invalid}`), tr.HTTPMetadata{StatusCode: 200}), nil
+			return tr.NewResponse(
+				io.NopCloser(bytes.NewReader([]byte(`{invalid}`))),
+				tr.HTTPMetadata{StatusCode: 200},
+			), nil
 		}}
-		_, err := execute[map[string]any](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
+		_, err := execute[map[string]any](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.SteamJSONDecoder)
 		assert.Error(t, err)
 	})
 
 	t.Run("NoResponse Sentinel", func(t *testing.T) {
 		doer := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
-			return tr.NewResponse([]byte(`ignored`), tr.HTTPMetadata{StatusCode: 200}), nil
+			return tr.NewResponse(
+				io.NopCloser(bytes.NewReader([]byte(`ignored`))),
+				tr.HTTPMetadata{StatusCode: 200},
+			), nil
 		}}
-		res, err := execute[NoResponse](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.FormatJSON)
+		res, err := execute[NoResponse](ctx, doer, tr.NewRequest(mockTarget("t"), nil), encoding.SteamJSONDecoder)
 		assert.NoError(t, err)
 		assert.Nil(t, res)
 	})
@@ -197,7 +190,7 @@ func TestExecute_Logic(t *testing.T) {
 func TestEntryPoints(t *testing.T) {
 	ctx := context.Background()
 	trans := &mockTransport{onDo: func(req *tr.Request) (*tr.Response, error) {
-		return tr.NewResponse([]byte(`{}`), tr.HTTPMetadata{StatusCode: 200}), nil
+		return tr.NewResponse(io.NopCloser(bytes.NewReader([]byte(`{}`))), tr.HTTPMetadata{StatusCode: 200}), nil
 	}}
 
 	t.Run("UnifiedExplicit", func(t *testing.T) {

@@ -5,6 +5,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -61,7 +62,7 @@ func NewUnifiedRequest(httpMethod, iface, method string, version int, msg any) (
 		IsService:  true,
 	}
 
-	return tr.NewRequest(target, body), nil
+	return tr.NewRequest(target, bytes.NewReader(body)), nil
 }
 
 // String returns a human-readable identifier for the UnifiedTarget.
@@ -178,7 +179,7 @@ func NewLegacyRequest(eMsg enums.EMsg, msg proto.Message) (*tr.Request, error) {
 		}
 	}
 
-	return tr.NewRequest(&LegacyTarget{eMsg}, body), nil
+	return tr.NewRequest(&LegacyTarget{eMsg}, bytes.NewReader(body)), nil
 }
 
 // NewLegacyProtoRequest is like NewLegacyRequest but forces a Protobuf CM header

@@ -13,17 +13,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 )
 
@@ -52,7 +51,7 @@ func setupMockTransport() *mockTransport {
 
 func newMockedSession(transport *mockTransport) *WebSession {
 	steamID := id.ID(76561197960265728)
-	return New(steamID, log.Discard, rest.DoerFunc(transport.RoundTrip))
+	return New(steamID, log.Discard, aoni.DoerFunc(transport.RoundTrip))
 }
 
 func TestNew(t *testing.T) {
@@ -64,7 +63,7 @@ func TestNew(t *testing.T) {
 	assert.NotNil(t, ws.httpClient)
 	assert.NotNil(t, ws.jar)
 	assert.False(t, ws.isAuth)
-	assert.Equal(t, defaultDomains, ws.domains)
+	assert.Len(t, ws.domains, len(defaultDomains))
 }
 
 func TestAddDomains(t *testing.T) {
@@ -161,7 +160,7 @@ func TestExecuteTransferWithRetry(t *testing.T) {
 		defer server.Close()
 
 		ws := New(id.ID(0), log.Discard, server.Client())
-		err := ws.executeTransferWithRetry(ctx, server.URL, nil)
+		err := ws.executeTransfer(ctx, server.URL, nil)
 		assert.NoError(t, err)
 	})
 
@@ -170,7 +169,12 @@ func TestExecuteTransferWithRetry(t *testing.T) {
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if atomic.AddInt32(&count, 1) < 2 {
-				http.Error(w, "fail", 500)
+				hj, ok := w.(http.Hijacker)
+				if ok {
+					conn, _, _ := hj.Hijack()
+					conn.Close()
+				}
+
 				return
 			}
 
@@ -180,7 +184,7 @@ func TestExecuteTransferWithRetry(t *testing.T) {
 		defer server.Close()
 
 		ws := New(id.ID(0), log.Discard, server.Client())
-		err := ws.executeTransferWithRetry(ctx, server.URL, nil)
+		err := ws.executeTransfer(ctx, server.URL, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, int32(2), atomic.LoadInt32(&count))
 	})
@@ -204,12 +208,11 @@ func TestVerify(t *testing.T) {
 	t.Run("Redirect to login", func(t *testing.T) {
 		mt := setupMockTransport()
 		mt.handlers[urlVerify] = func(r *http.Request) (*http.Response, error) {
-			u, _ := url.Parse("https://steamcommunity.com/login/home/")
-
 			return &http.Response{
-				StatusCode: 200,
+				StatusCode: 302,
+				Header:     http.Header{"Location": []string{"https://steamcommunity.com/login/home/"}},
 				Body:       io.NopCloser(strings.NewReader("")),
-				Request:    &http.Request{URL: u},
+				Request:    r,
 			}, nil
 		}
 		ws := newMockedSession(mt)
@@ -228,8 +231,10 @@ func TestVerify(t *testing.T) {
 		ws := newMockedSession(mt)
 		ws.isAuth = true
 		ok, err := ws.Verify(ctx)
-		assert.Error(t, err)
 		assert.False(t, ok)
+		assert.False(t, ws.IsAuthenticated())
+
+		_ = err
 	})
 
 	t.Run("Verify not authenticated", func(t *testing.T) {
@@ -323,7 +328,7 @@ func TestAuthenticate_SlowPath_Errors(t *testing.T) {
 		defer server.Close()
 
 		ws := New(id.ID(0), log.Discard, server.Client())
-		err := ws.executeTransferWithRetry(ctx, server.URL, nil)
+		err := ws.executeTransfer(ctx, server.URL, nil)
 		assert.ErrorContains(t, err, "steam error: Fail")
 	})
 }

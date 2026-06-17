@@ -18,10 +18,43 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/lemon4ksan/aoni"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 )
+
+// WithAvatarUpload assembles a Steam-specific multipart avatar upload form.
+// It ensures that the field name is "avatar" and the filename has the correct extension.
+func WithAvatarUpload(fields map[string]string, filename string, image []byte) aoni.RequestModifier {
+	return func(req *http.Request) {
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+
+		for k, v := range fields {
+			if err := writer.WriteField(k, v); err != nil {
+				return
+			}
+		}
+
+		part, err := writer.CreateFormFile("avatar", filename)
+		if err != nil {
+			return
+		}
+
+		if _, err := part.Write(image); err != nil {
+			return
+		}
+
+		if err := writer.Close(); err != nil {
+			return
+		}
+
+		req.Body = io.NopCloser(body)
+		req.ContentLength = int64(body.Len())
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+	}
+}
 
 // Settings represents customizable profile details.
 //
@@ -104,14 +137,16 @@ type PrivacySettings struct {
 // It returns an error if the request fails, if the edit page cannot be parsed,
 // or if Steam rejects the updated parameters with an error description.
 func EditProfile(ctx context.Context, client community.Requester, steamID id.ID, settings Settings) error {
-	path := fmt.Sprintf("profiles/%d/edit/info", steamID)
-
-	htmlBytes, err := community.GetHTML(ctx, client, path)
+	html, err := community.GetHTML(
+		ctx, client, "profiles/{steamID}/edit/info",
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return fmt.Errorf("profile: failed to fetch edit page: %w", err)
 	}
+	defer html.Close()
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(htmlBytes))
+	doc, err := goquery.NewDocumentFromReader(html)
 	if err != nil {
 		return fmt.Errorf("profile: failed to parse HTML: %w", err)
 	}
@@ -186,14 +221,15 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 		"json":            {"1"},
 	}
 
-	savePath := fmt.Sprintf("profiles/%d/edit", steamID)
-
 	type saveResponse struct {
 		Success int    `json:"success"`
 		ErrMsg  string `json:"errmsg"`
 	}
 
-	resp, err := community.PostForm[saveResponse](ctx, client, savePath, form)
+	resp, err := community.PostForm[saveResponse](
+		ctx, client, "profiles/{steamID}/edit", form,
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return fmt.Errorf("profile: failed to post profile save: %w", err)
 	}
@@ -220,14 +256,16 @@ func UpdatePrivacySettings(
 	steamID id.ID,
 	settings PrivacySettings,
 ) error {
-	path := fmt.Sprintf("profiles/%d/edit/settings", steamID)
-
-	htmlBytes, err := community.GetHTML(ctx, client, path)
+	html, err := community.GetHTML(
+		ctx, client, "profiles/{steamID}/edit/settings",
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return fmt.Errorf("profile: failed to fetch settings page: %w", err)
 	}
+	defer html.Close()
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(htmlBytes))
+	doc, err := goquery.NewDocumentFromReader(html)
 	if err != nil {
 		return fmt.Errorf("profile: failed to parse HTML: %w", err)
 	}
@@ -297,19 +335,20 @@ func UpdatePrivacySettings(
 		return fmt.Errorf("profile: failed to marshal privacy settings: %w", err)
 	}
 
-	form := url.Values{
-		"sessionid":          {client.SessionID(community.BaseURL)},
-		"Privacy":            {string(privacyJSON)},
-		"eCommentPermission": {strconv.Itoa(comments)},
-	}
-
-	savePath := fmt.Sprintf("profiles/%d/ajaxsetprivacy", steamID)
+	form := struct {
+		SessionID          string `url:"sessionid"`
+		Privacy            string `url:"Privacy"`
+		ECommentPermission int    `url:"eCommentPermission"`
+	}{client.SessionID(community.BaseURL), string(privacyJSON), comments}
 
 	type privacyResponse struct {
 		Success int `json:"success"`
 	}
 
-	resp, err := community.PostForm[privacyResponse](ctx, client, savePath, form)
+	resp, err := community.PostForm[privacyResponse](
+		ctx, client, "profiles/{steamID}/ajaxsetprivacy", form,
+		aoni.WithVar("steamID", steamID),
+	)
 	if err != nil {
 		return fmt.Errorf("profile: failed to post privacy settings: %w", err)
 	}
@@ -349,63 +388,32 @@ func UploadAvatar(
 		return "", fmt.Errorf("profile: unsupported content-type: %s", contentType)
 	}
 
-	var body bytes.Buffer
-
-	writer := multipart.NewWriter(&body)
-
-	_ = writer.WriteField("MAX_FILE_SIZE", strconv.Itoa(len(image)))
-	_ = writer.WriteField("type", "player_avatar_image")
-	_ = writer.WriteField("sId", strconv.FormatUint(uint64(steamID), 10))
-	_ = writer.WriteField("sessionid", client.SessionID(community.BaseURL))
-	_ = writer.WriteField("doSub", "1")
-	_ = writer.WriteField("json", "1")
-
-	part, err := writer.CreateFormFile("avatar", filename)
-	if err != nil {
-		return "", fmt.Errorf("profile: failed to create form file: %w", err)
+	fields := map[string]string{
+		"MAX_FILE_SIZE": strconv.Itoa(len(image)),
+		"type":          "player_avatar_image",
+		"sId":           strconv.FormatUint(uint64(steamID), 10),
+		"sessionid":     client.SessionID(community.BaseURL),
+		"doSub":         "1",
+		"json":          "1",
 	}
 
-	if _, err := part.Write(image); err != nil {
-		return "", fmt.Errorf("profile: failed to write image bytes: %w", err)
-	}
-
-	_ = writer.Close()
-
-	type uploadResponse struct {
+	type upload struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Hash    string `json:"hash"`
 	}
 
-	// We utilize the underlying Requester directly to execute the POST with multipart/form-data
-	resp, err := client.Request(
-		ctx,
-		http.MethodPost,
-		"actions/FileUploader",
-		body.Bytes(),
-		nil,
-		func(req *http.Request) {
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("Accept", "application/json, text/javascript; q=0.01")
-		},
+	resp, err := aoni.PostJSON[io.Reader, upload](
+		ctx, client, "actions/FileUploader", nil,
+		WithAvatarUpload(fields, filename, image),
+		aoni.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
 	)
 	if err != nil {
 		return "", fmt.Errorf("profile: upload request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	rawBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("profile: failed to read upload response: %w", err)
-	}
-
-	var result uploadResponse
-	if err := json.Unmarshal(rawBody, &result); err != nil {
-		return "", fmt.Errorf("profile: failed to unmarshal upload response: %w", err)
-	}
-
-	if !result.Success {
-		errMsg := result.Message
+	if !resp.Success {
+		errMsg := resp.Message
 		if errMsg == "" {
 			errMsg = "upload was not successful"
 		}
@@ -413,5 +421,5 @@ func UploadAvatar(
 		return "", fmt.Errorf("profile: upload failed: %s", errMsg)
 	}
 
-	return result.Hash, nil
+	return resp.Hash, nil
 }

@@ -128,7 +128,6 @@ Infrastructure packages utilized throughout the project.
 | **[crypto](crypto/)** | Encryption and decryption helpers (Symmetric/Asymmetric, Steam mobile signatures). |
 | **[jobs](jobs/)** | Thread-safe asynchronous job scheduler and worker pool manager. |
 | **[log](log/)** | Contextual, level-structured logging engine. |
-| **[rest](rest/)** | Retrying HTTP client featuring exponential backoff. |
 | **[storage](storage/)** | Persistent storage interfaces featuring standard JSON and memory adapters. |
 | **[command](command/)** | Thread-safe command line registration and routing system. |
 

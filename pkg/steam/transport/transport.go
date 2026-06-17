@@ -6,9 +6,12 @@ package transport
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
+
+	"github.com/lemon4ksan/aoni"
 )
 
 // Transport is the core interface that unifies different network implementations.
@@ -30,21 +33,34 @@ type Target interface {
 // to build and send a message.
 type Request struct {
 	target       Target
-	body         []byte
+	body         io.Reader
 	params       url.Values
 	headers      http.Header
 	routingAppID uint32
 	forceProto   bool
+	mods         []aoni.RequestModifier
+	decoder      aoni.Decoder
 }
 
 // NewRequest creates a new Request with a target and payload.
-func NewRequest(target Target, body []byte) *Request {
+func NewRequest(target Target, body io.Reader) *Request {
 	return &Request{
 		target:  target,
 		body:    body,
 		params:  make(url.Values),
 		headers: make(http.Header),
 	}
+}
+
+// SetDecoder sets the decoder for this Request.
+func (r *Request) SetDecoder(d aoni.Decoder) {
+	r.decoder = d
+}
+
+// WithModifier adds a request modifier to the Request.
+func (r *Request) WithModifier(mods ...aoni.RequestModifier) *Request {
+	r.mods = append(r.mods, mods...)
+	return r
 }
 
 // WithParam adds a key-value parameter (e.g., a URL query string).
@@ -70,11 +86,25 @@ func (r *Request) WithHeader(key, value string) *Request {
 	return r
 }
 
+// Modifiers returns the list of request modifiers for this Request.
+func (r *Request) Modifiers() []aoni.RequestModifier {
+	return r.mods
+}
+
+// Decoder returns the decoder for this Request, or the default if not set.
+func (r *Request) Decoder(def aoni.Decoder) aoni.Decoder {
+	if r.decoder == nil {
+		return def
+	}
+
+	return r.decoder
+}
+
 // Target returns the request destination.
 func (r *Request) Target() Target { return r.target }
 
 // Body returns the raw binary payload of the request.
-func (r *Request) Body() []byte { return r.body }
+func (r *Request) Body() io.Reader { return r.body }
 
 // Params returns the query parameters or arguments for the request.
 func (r *Request) Params() url.Values { return r.params }
@@ -109,13 +139,13 @@ func (r *Request) IsForceProto() bool { return r.forceProto }
 // container for the body and transport-specific metadata.
 type Response struct {
 	// Body is the raw response payload from the server.
-	Body []byte
+	Body io.ReadCloser
 	// metadata holds transport-specific information (e.g., HTTP status, EResult).
 	metadata any
 }
 
 // NewResponse creates a new Response with a body and associated metadata.
-func NewResponse(body []byte, meta any) *Response {
+func NewResponse(body io.ReadCloser, meta any) *Response {
 	return &Response{
 		Body:     body,
 		metadata: meta,

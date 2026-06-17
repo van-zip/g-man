@@ -5,16 +5,18 @@
 package module
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
@@ -53,7 +55,7 @@ func NewInitContext() *InitContext {
 func (m *InitContext) Bus() *bus.Bus                { return m.eventBus }
 func (m *InitContext) Logger() log.Logger           { return m.logger }
 func (m *InitContext) Service() service.Doer        { return m.mockService }
-func (m *InitContext) Rest() rest.Requester         { return m.mockService }
+func (m *InitContext) Rest() aoni.Requester         { return m.mockService }
 func (m *InitContext) Storage() storage.Provider    { return m.storage }
 func (m *InitContext) MockService() *requester.Mock { return m.mockService }
 
@@ -220,7 +222,7 @@ func ProtoResponse(msg proto.Message) (*tr.Response, error) {
 		return nil, err
 	}
 
-	return tr.NewResponse(b, tr.SocketMetadata{Result: enums.EResult_OK}), nil
+	return tr.NewResponse(io.NopCloser(bytes.NewReader(b)), tr.SocketMetadata{Result: enums.EResult_OK}), nil
 }
 
 func JSONResponse(msg any) (*tr.Response, error) {
@@ -229,5 +231,5 @@ func JSONResponse(msg any) (*tr.Response, error) {
 		return nil, err
 	}
 
-	return tr.NewResponse(b, tr.HTTPMetadata{StatusCode: 200}), nil
+	return tr.NewResponse(io.NopCloser(bytes.NewReader(b)), tr.HTTPMetadata{StatusCode: 200}), nil
 }

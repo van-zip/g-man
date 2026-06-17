@@ -5,10 +5,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/url"
 	"slices"
@@ -16,11 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
 	"golang.org/x/time/rate"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
@@ -359,8 +361,8 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 		m.community,
 		"tradeoffer/new/send",
 		payload,
-		service.WithHeader("Referer", referer),
-		service.WithHeader("Origin", "https://steamcommunity.com"),
+		aoni.WithHeader("Referer", referer),
+		aoni.WithHeader("Origin", "https://steamcommunity.com"),
 	)
 	if err != nil {
 		return 0, err
@@ -675,13 +677,20 @@ func (m *Manager) GetEscrowDuration(ctx context.Context, offerID uint64) (proces
 		return processor.Details{}, processor.ErrCommunityNotReady
 	}
 
-	resp, err := community.GetHTML(ctx, c, fmt.Sprintf("tradeoffer/%d/", offerID))
+	body, err := community.GetHTML(ctx, c, "tradeoffer/{offerID}/",
+		aoni.WithVar("offerID", offerID),
+	)
 	if err != nil {
 		return processor.Details{}, fmt.Errorf("failed to fetch offer page: %w", err)
 	}
 
-	theirMatches := processor.RxTheir.FindStringSubmatch(string(resp))
-	myMatches := processor.RxMy.FindStringSubmatch(string(resp))
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, body); err != nil {
+		return processor.Details{}, err
+	}
+
+	theirMatches := processor.RxTheir.FindStringSubmatch(buf.String())
+	myMatches := processor.RxMy.FindStringSubmatch(buf.String())
 
 	if len(theirMatches) < 2 || len(myMatches) < 2 {
 		return processor.Details{}, processor.ErrEscrowNotFound
@@ -1039,8 +1048,8 @@ type rawDescription struct {
 	MarketName     string                `json:"market_name"`
 	MarketHashName string                `json:"market_hash_name"`
 	IconURL        string                `json:"icon_url"`
-	Tradable       rest.BoolInt          `json:"tradable"`
-	Marketable     rest.BoolInt          `json:"marketable"`
+	Tradable       aoni.BoolInt          `json:"tradable"`
+	Marketable     aoni.BoolInt          `json:"marketable"`
 	Descriptions   []trading.Description `json:"descriptions"`
 	Tags           []trading.Tag         `json:"tags"`
 	Actions        []trading.Action      `json:"actions"`
@@ -1215,8 +1224,8 @@ type rawAssetClassDescription struct {
 	IconURL        string               `json:"icon_url"`
 	Descriptions   flexibleDescriptions `json:"descriptions"`
 	Tags           flexibleTags         `json:"tags"`
-	Tradable       rest.BoolInt         `json:"tradable"`
-	Marketable     rest.BoolInt         `json:"marketable"`
+	Tradable       aoni.BoolInt         `json:"tradable"`
+	Marketable     aoni.BoolInt         `json:"marketable"`
 }
 
 func (m *Manager) enrichOfferDescriptions(ctx context.Context, offer *trading.TradeOffer) error {

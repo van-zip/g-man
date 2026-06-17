@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -21,9 +22,7 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
-	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
@@ -206,11 +205,11 @@ func TestSessionManager_CustomFactories(t *testing.T) {
 	mc.On("GetOrRegisterAPIKey", mock.Anything, mock.Anything).Return("key_12345", nil).Maybe()
 
 	cfg := Config{
-		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession {
+		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession {
 			webCalled = true
 			return mw
 		},
-		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient {
+		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient {
 			commCalled = true
 			return mc
 		},

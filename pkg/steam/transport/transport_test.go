@@ -7,6 +7,7 @@ package transport
 import (
 	"io"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,14 +33,15 @@ func (m mockEHeader) SerializeTo(w io.Writer) error { return nil }
 
 func TestRequest_FluentAPI(t *testing.T) {
 	target := mockTarget{name: "dest"}
-	req := NewRequest(target, []byte("body"))
+	req := NewRequest(target, strings.NewReader("body"))
 
 	req.WithParam("a", "1").
 		WithParams(url.Values{"b": {"2"}, "c": {"3"}}).
 		WithHeader("X-Test", "true").
 		WithParam("access_token", "secret")
 
-	assert.Equal(t, "body", string(req.Body()))
+	body, _ := io.ReadAll(req.Body())
+	assert.Equal(t, "body", string(body))
 	assert.Equal(t, target, req.Target())
 	assert.Equal(t, "1", req.Params().Get("a"))
 	assert.Equal(t, "2", req.Params().Get("b"))

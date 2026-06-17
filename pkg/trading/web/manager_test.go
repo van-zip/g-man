@@ -5,9 +5,11 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"sync"
@@ -384,7 +386,10 @@ func TestManager_AutoCancellation(t *testing.T) {
 				cancelID, _ = strconv.ParseUint(idStr, 10, 64)
 				mu.Unlock()
 
-				return tr.NewResponse([]byte("{}"), tr.HTTPMetadata{StatusCode: 200}), nil
+				return tr.NewResponse(
+					io.NopCloser(bytes.NewReader([]byte("{}"))),
+					tr.HTTPMetadata{StatusCode: 200},
+				), nil
 			}
 
 			return nil, nil
@@ -451,7 +456,10 @@ func TestManager_AutoCancellation(t *testing.T) {
 				cancelID, _ = strconv.ParseUint(idStr, 10, 64)
 				mu.Unlock()
 
-				return tr.NewResponse([]byte("{}"), tr.HTTPMetadata{StatusCode: 200}), nil
+				return tr.NewResponse(
+					io.NopCloser(bytes.NewReader([]byte("{}"))),
+					tr.HTTPMetadata{StatusCode: 200},
+				), nil
 			}
 
 			return nil, nil

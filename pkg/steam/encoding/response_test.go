@@ -7,15 +7,11 @@ package encoding
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
-
-	"github.com/lemon4ksan/g-man/pkg/rest"
 )
 
 func UnmarshalResponse(data []byte, target any, format ResponseFormat) error {
@@ -33,13 +29,13 @@ func UnmarshalResponse(data []byte, target any, format ResponseFormat) error {
 		return fmt.Errorf("%w: FormatRaw requires *[]byte as output type, got %T", ErrFormat, target)
 
 	case FormatProtobuf:
-		return UnmarshalProtobuf(data, target)
+		return ProtobufDecoder(bytes.NewReader(data), target)
 	case FormatJSON:
-		return UnmarshalJSON(data, target)
+		return SteamJSONDecoder(bytes.NewReader(data), target)
 	case FormatVDF:
-		return UnmarshalVDFText(data, target)
-	case FormatBinaryKV:
-		return UnmarshalBinaryKV(data, target)
+		return VDFDecoder(bytes.NewReader(data), target)
+	case FormatBinaryVDF:
+		return BinaryVDFDecoder(bytes.NewReader(data), target)
 	default:
 		return fmt.Errorf("%w: unsupported format %v", ErrFormat, format)
 	}
@@ -182,19 +178,19 @@ func TestEmptyResponse(t *testing.T) {
 }
 
 func TestUnmarshalProtobuf_WrongType(t *testing.T) {
-	err := UnmarshalProtobuf([]byte("{}"), "not a proto message")
+	err := ProtobufDecoder(bytes.NewReader([]byte("{}")), "not a proto message")
 	if err == nil {
 		t.Error("expected error for non-proto target")
 	}
 }
 
 func TestUnmarshalVDFText_Invalid(t *testing.T) {
-	err := UnmarshalVDFText([]byte("invalid vdf {"), &struct{}{})
+	err := VDFDecoder(bytes.NewReader([]byte("invalid vdf {")), &struct{}{})
 	if err == nil {
 		t.Error("expected error for invalid VDF text")
 	}
 
-	err = UnmarshalVDFText([]byte(`"Player" { "Health" "100" }`), struct{}{})
+	err = VDFDecoder(bytes.NewReader([]byte(`"Player" { "Health" "100" }`)), struct{}{})
 	if err == nil {
 		t.Error("expected error for invalid VDF text")
 	}
@@ -216,7 +212,7 @@ func TestUnmarshalResponse_BinaryKV(t *testing.T) {
 		} `mapstructure:"data"`
 	}
 
-	err := UnmarshalResponse(buf.Bytes(), &target, FormatBinaryKV)
+	err := UnmarshalResponse(buf.Bytes(), &target, FormatBinaryVDF)
 	if err != nil {
 		t.Fatalf("BinaryKV unmarshal failed: %v", err)
 	}
@@ -249,76 +245,11 @@ func TestReadWideString_ZeroTerminator(t *testing.T) {
 	}
 }
 
-func TestUnmarshalRegistry(t *testing.T) {
-	r := NewUnmarshalRegistry()
-
-	t.Run("Standard Registry Unmarshal", func(t *testing.T) {
-		data := []byte(`{"response":{"item":"test"}}`)
-
-		var target struct {
-			Item string `json:"item"`
-		}
-
-		err := r.Unmarshal(data, &target, FormatJSON)
-		if err != nil {
-			t.Fatalf("registry unmarshal failed: %v", err)
-		}
-
-		if target.Item != "test" {
-			t.Errorf("expected test, got %s", target.Item)
-		}
-	})
-
-	t.Run("Empty data returns nil", func(t *testing.T) {
-		err := r.Unmarshal([]byte{}, nil, FormatJSON)
-		if err != nil {
-			t.Error("expected nil error for empty data")
-		}
-	})
-
-	t.Run("Unregistered format", func(t *testing.T) {
-		err := r.Unmarshal([]byte("data"), nil, ResponseFormat(999))
-		if !errors.Is(err, ErrFormat) {
-			t.Errorf("expected ErrFormat, got %v", err)
-		}
-	})
-
-	t.Run("Custom Registration", func(t *testing.T) {
-		customFormat := ResponseFormat(100)
-		r.Register(customFormat, rest.DecoderFunc(func(r io.Reader, target any) error {
-			data, _ := io.ReadAll(r)
-			ptr := target.(*string)
-			*ptr = "custom_" + string(data)
-
-			return nil
-		}))
-
-		var res string
-
-		err := r.Unmarshal([]byte("val"), &res, customFormat)
-		if err != nil || res != "custom_val" {
-			t.Errorf("custom decoder failed: %v, res: %s", err, res)
-		}
-	})
-}
-
-func TestUnmarshalProtobuf_Binary(t *testing.T) {
-	msg := &emptypb.Empty{}
-	data, _ := proto.Marshal(msg)
-
-	target := &emptypb.Empty{}
-
-	err := UnmarshalProtobuf(data, target)
-	if err != nil {
-		t.Fatalf("binary protobuf unmarshal failed: %v", err)
-	}
-}
-
 func TestUnmarshalJSON_EdgeCases(t *testing.T) {
 	t.Run("Invalid JSON", func(t *testing.T) {
 		var target map[string]any
 
-		err := UnmarshalJSON([]byte(`{invalid}`), &target)
+		err := SteamJSONDecoder(bytes.NewReader([]byte(`{invalid}`)), &target)
 		if err == nil {
 			t.Error("expected error for invalid JSON")
 		}
@@ -329,7 +260,7 @@ func TestUnmarshalJSON_EdgeCases(t *testing.T) {
 
 		var target int
 
-		err := UnmarshalJSON(data, &target)
+		err := SteamJSONDecoder(bytes.NewReader(data), &target)
 		if err != nil {
 			t.Fatalf("should handle non-object response: %v", err)
 		}
@@ -342,14 +273,14 @@ func TestUnmarshalJSON_EdgeCases(t *testing.T) {
 
 func TestUnmarshalBinaryKV_Errors(t *testing.T) {
 	t.Run("Invalid Header/Empty", func(t *testing.T) {
-		err := UnmarshalBinaryKV([]byte{0xFF}, &struct{}{})
+		err := BinaryVDFDecoder(bytes.NewReader([]byte{0xFF}), &struct{}{})
 		if err == nil {
 			t.Error("expected error for invalid binary KV data")
 		}
 	})
 
 	t.Run("Not an object root", func(t *testing.T) {
-		err := UnmarshalBinaryKV([]byte{kvTypeInt32}, &struct{}{})
+		err := BinaryVDFDecoder(bytes.NewReader([]byte{kvTypeInt32}), &struct{}{})
 		if err == nil {
 			t.Error("expected error for malformed binary KV")
 		}
@@ -368,27 +299,11 @@ func TestUnmarshalBinaryKV_Errors(t *testing.T) {
 		buf.WriteByte(kvTypeEnd)
 		buf.WriteByte(kvTypeEnd)
 
-		err := UnmarshalBinaryKV(buf.Bytes(), struct{}{})
+		err := BinaryVDFDecoder(buf, struct{}{})
 		if err == nil {
 			t.Error("expected error for non pointer target")
 		}
 	})
-}
-
-func TestUnmarshalRaw_PointerCheck(t *testing.T) {
-	data := []byte("hello")
-
-	var target []byte
-
-	err := UnmarshalRaw(data, &target)
-	if err != nil || string(target) != "hello" {
-		t.Errorf("UnmarshalRaw failed: %v", err)
-	}
-
-	err = UnmarshalRaw(data, target)
-	if !errors.Is(err, ErrFormat) {
-		t.Error("expected ErrFormat for non-pointer target")
-	}
 }
 
 func TestBVDFParser_SpecificTypes(t *testing.T) {
@@ -403,7 +318,7 @@ func TestBVDFParser_SpecificTypes(t *testing.T) {
 		buf.WriteByte(kvTypeEnd)
 
 		var target string
-		if err := UnmarshalBinaryKV(buf.Bytes(), &target); err == nil {
+		if err := BinaryVDFDecoder(buf, &target); err == nil {
 			t.Error("expected mapstructure error")
 		}
 	})

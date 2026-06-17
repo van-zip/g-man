@@ -13,14 +13,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/bus"
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth/websession"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
-	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
@@ -48,10 +48,10 @@ type communityClient interface {
 }
 
 // WebSessionFactory constructs a webSession instance.
-type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession
+type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession
 
 // CommunityClientFactory constructs a communityClient instance.
-type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient
+type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient
 
 // SessionManager manages the session state of the client.
 //
@@ -68,14 +68,13 @@ type SessionManager struct {
 	storage   storage.Provider
 	device    *auth.DeviceConfig
 	bus       *bus.Bus
-	http      rest.HTTPDoer // Global HTTP client
+	http      aoni.HTTPDoer // Global HTTP client
 
 	webFactory       WebSessionFactory
 	communityFactory CommunityClientFactory
 
 	unified   *service.Client // WebAPI (HTTP)
 	socketAPI *service.Client // CM (TCP/WS)
-	registry  *encoding.UnmarshalRegistry
 
 	verifyTicker *time.Ticker
 	closed       atomic.Bool
@@ -103,7 +102,6 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 		storage:      cfg.Storage,
 		device:       device,
 		verifyTicker: time.NewTicker(5 * time.Minute),
-		registry:     cfg.Registry,
 		http:         cfg.HTTP,
 	}
 	c.refreshCond = sync.NewCond(&c.refreshMu)
@@ -114,25 +112,24 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 
 	c.webFactory = cfg.WebFactory
 	if c.webFactory == nil {
-		c.webFactory = func(steamID id.ID, logger log.Logger, baseDoer rest.HTTPDoer) webSession {
+		c.webFactory = func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession {
 			return websession.New(steamID, logger, baseDoer)
 		}
 	}
 
 	c.communityFactory = cfg.CommunityFactory
 	if c.communityFactory == nil {
-		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger, registry *encoding.UnmarshalRegistry) communityClient {
+		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient {
 			return community.NewClient(
 				httpClient,
 				sessionID,
 				community.WithLogger(logger),
-				community.WithRegistry(registry),
 			)
 		}
 	}
 
 	webTransport := tr.NewHTTPTransport(cfg.HTTP, service.WebAPIBase)
-	c.unified = service.New(webTransport, service.WithRegistry(cfg.Registry))
+	c.unified = service.New(webTransport)
 
 	c.auth = auth.NewAuthenticator(
 		sock,
@@ -143,7 +140,7 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 	)
 
 	socketTransport := tr.NewSocketTransport(sock)
-	c.socketAPI = service.New(socketTransport, service.WithRegistry(cfg.Registry))
+	c.socketAPI = service.New(socketTransport)
 
 	return c
 }
@@ -189,7 +186,6 @@ func (c *SessionManager) LogOn(
 			c.web.HTTP(),
 			c.web.SessionID,
 			c.logger,
-			c.registry,
 		)
 	}
 

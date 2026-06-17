@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -49,8 +48,7 @@ func TestGetUserInventoryContents(t *testing.T) {
 		}
 
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-			expectedPath := fmt.Sprintf("inventory/%d/%d/%d", userID, appID, contextID)
-			assert.Contains(t, path, expectedPath)
+			assert.Equal(t, "inventory/{steamID}/{appID}/{contextID}", path)
 
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -228,8 +226,8 @@ func TestGetUserInventoryContexts(t *testing.T) {
 		`
 
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-			expectedPath := fmt.Sprintf("profiles/%d/inventory", userID)
-			assert.Contains(t, path, expectedPath)
+			expectedPath := "profiles/{userID}/inventory"
+			assert.Equal(t, path, expectedPath)
 
 			return &http.Response{
 				StatusCode: http.StatusOK,

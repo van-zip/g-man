@@ -13,10 +13,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lemon4ksan/aoni"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/bus"
-	"github.com/lemon4ksan/g-man/pkg/rest"
 	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
@@ -48,13 +48,6 @@ type Client struct {
 	transport   tr.Transport
 	apiKey      string
 	accessToken string
-	registry    *encoding.UnmarshalRegistry
-}
-
-// Registry returns the underlying registry of decoders.
-// Implements [api.RegistryProvider].
-func (c *Client) Registry() *encoding.UnmarshalRegistry {
-	return c.registry
 }
 
 // APIKey returns the underlying API key.
@@ -67,19 +60,9 @@ func (c *Client) AccessToken() string {
 	return c.accessToken
 }
 
-// WithRegistry sets a custom unmarshal registry for the client.
-func WithRegistry(r *encoding.UnmarshalRegistry) Option {
-	return func(c *Client) {
-		c.registry = r
-	}
-}
-
 // New initializes a new Service Client.
 func New(tr tr.Transport, opts ...Option) *Client {
-	c := &Client{
-		transport: tr,
-		registry:  encoding.NewUnmarshalRegistry(),
-	}
+	c := &Client{transport: tr}
 
 	for _, opt := range opts {
 		opt(c)
@@ -101,13 +84,6 @@ func (c *Client) WithAccessToken(token string) *Client {
 	clone := *c
 	clone.accessToken = token
 
-	return &clone
-}
-
-// WithRegistry returns a copy of the client with a custom unmarshal registry.
-func (c *Client) WithRegistry(r *encoding.UnmarshalRegistry) *Client {
-	clone := *c
-	clone.registry = r
 	return &clone
 }
 
@@ -195,7 +171,7 @@ func UnifiedExplicit[Resp any](
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
+	return execute[Resp](ctx, d, req, encoding.ProtobufDecoder, opts...)
 }
 
 // WebAPI executes a standard JSON-based WebAPI request.
@@ -210,7 +186,7 @@ func WebAPI[Resp any](
 	req := NewWebAPIRequest(httpMethod, iface, method, version)
 
 	if reqMsg != nil {
-		params, err := rest.StructToValues(reqMsg)
+		params, err := aoni.StructToValues(reqMsg)
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +194,7 @@ func WebAPI[Resp any](
 		req.WithParams(params)
 	}
 
-	return execute[Resp](ctx, d, req, encoding.FormatJSON, opts...)
+	return execute[Resp](ctx, d, req, encoding.SteamJSONDecoder, opts...)
 }
 
 // Legacy executes a low-level Protobuf request based on an EMsg.
@@ -238,7 +214,7 @@ func Legacy[Resp any](
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
+	return execute[Resp](ctx, d, req, encoding.ProtobufDecoder, opts...)
 }
 
 // LegacyProto is like Legacy but forces a Protobuf CM header on the outer Steam
@@ -256,39 +232,18 @@ func LegacyProto[Resp any](
 		return nil, err
 	}
 
-	return execute[Resp](ctx, d, req, encoding.FormatProtobuf, opts...)
-}
-
-// WithRoutingAppID returns a CallOption that sets the routing AppID in the
-// outer CM packet's proto header. Required when sending to EMsg_ClientToGC so
-// Steam knows which Game Coordinator to forward the message to.
-func WithRoutingAppID(appID uint32) CallOption {
-	return func(req *tr.Request, _ *CallConfig) {
-		req.WithRoutingAppID(appID)
-	}
+	return execute[Resp](ctx, d, req, encoding.ProtobufDecoder, opts...)
 }
 
 func execute[Resp any](
 	ctx context.Context,
 	d Doer,
 	req *tr.Request,
-	def encoding.ResponseFormat,
+	defDecoder aoni.Decoder,
 	opts ...CallOption,
 ) (*Resp, error) {
-	type registryProvider interface {
-		Registry() *encoding.UnmarshalRegistry
-	}
-
-	cfg := &CallConfig{Format: def}
-
-	if rp, ok := d.(registryProvider); ok {
-		cfg.Registry = rp.Registry()
-	} else {
-		cfg.Registry = encoding.NewUnmarshalRegistry()
-	}
-
 	for _, opt := range opts {
-		opt(req, cfg)
+		opt(req)
 	}
 
 	if reflect.TypeFor[Resp]() == reflect.TypeFor[NoResponse]() {
@@ -299,13 +254,14 @@ func execute[Resp any](
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	if reflect.TypeFor[Resp]() == reflect.TypeFor[NoResponse]() {
 		return nil, nil
 	}
 
 	result := new(Resp)
-	if err := cfg.Registry.Unmarshal(resp.Body, result, cfg.Format); err != nil {
+	if err := req.Decoder(defDecoder).Decode(resp.Body, result); err != nil {
 		return nil, err
 	}
 

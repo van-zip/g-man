@@ -5,8 +5,12 @@
 package service
 
 import (
+	"io"
 	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
@@ -25,33 +29,23 @@ func (m *mockHTTPTarget) SetVersion(v int)       { m.Version = v }
 func TestCallOptions_Detailed(t *testing.T) {
 	target := &mockHTTPTarget{URL: "http://api.steampowered.com"}
 	req := tr.NewRequest(target, nil)
-	cfg := &CallConfig{}
 
 	t.Run("WithHeader", func(t *testing.T) {
-		WithHeader("X-Custom-Header", "G-Man-Secret")(req, cfg)
+		WithHeader("X-Custom-Header", "G-Man-Secret")(req)
 
 		if req.Header().Get("X-Custom-Header") != "G-Man-Secret" {
 			t.Error("WithHeader failed to set header")
 		}
 	})
 
-	t.Run("WithCustomRegistry", func(t *testing.T) {
-		customReg := &encoding.UnmarshalRegistry{}
-		WithCustomRegistry(customReg)(req, cfg)
-
-		if cfg.Registry != customReg {
-			t.Error("WithCustomRegistry failed to set registry")
-		}
-	})
-
 	t.Run("WithHTTPMethod - Compatibility check", func(t *testing.T) {
 		reqNoSetter := tr.NewRequest(nil, nil)
-		WithHTTPMethod("POST")(reqNoSetter, cfg)
+		WithHTTPMethod("POST")(reqNoSetter)
 	})
 
 	t.Run("WithVersion - Compatibility check", func(t *testing.T) {
 		reqNoSetter := tr.NewRequest(nil, nil)
-		WithVersion(2)(reqNoSetter, cfg)
+		WithVersion(2)(reqNoSetter)
 	})
 }
 
@@ -124,7 +118,7 @@ func TestHttpTarget_Methods(t *testing.T) {
 func TestNewHttpRequest_Creation(t *testing.T) {
 	method := "DELETE"
 	url := "http://steam.com/delete"
-	body := []byte("payload")
+	body := strings.NewReader("payload")
 
 	req := NewHTTPRequest(method, url, body)
 
@@ -141,13 +135,14 @@ func TestNewHttpRequest_Creation(t *testing.T) {
 		t.Errorf("expected %s, got %s", method, target.Method)
 	}
 
-	if string(req.Body()) != "payload" {
-		t.Errorf("expected payload, got %s", string(req.Body()))
+	bodyBytes, _ := io.ReadAll(req.Body())
+	if string(bodyBytes) != "payload" {
+		t.Errorf("expected payload, got %s", string(bodyBytes))
 	}
 }
 
 func TestNewHttpRequest(t *testing.T) {
-	req := NewHTTPRequest("POST", "http://example.com/api", []byte("body"))
+	req := NewHTTPRequest("POST", "http://example.com/api", strings.NewReader("body"))
 
 	target, ok := req.Target().(HTTPTarget)
 	if !ok {
@@ -162,17 +157,16 @@ func TestNewHttpRequest(t *testing.T) {
 func TestOptions_NonCompatibleTarget(t *testing.T) {
 	req := NewHTTPRequest("GET", "http://a.b", nil)
 
-	WithVersion(2)(req, &CallConfig{})
-	WithHTTPMethod("POST")(req, &CallConfig{})
+	WithVersion(2)(req)
+	WithHTTPMethod("POST")(req)
 }
 
 func TestCallOptions(t *testing.T) {
 	target := &mockHTTPTarget{URL: "test"}
 	req := tr.NewRequest(target, nil)
-	cfg := &CallConfig{}
 
 	t.Run("WithHTTPMethod", func(t *testing.T) {
-		WithHTTPMethod("PUT")(req, cfg)
+		WithHTTPMethod("PUT")(req)
 
 		if target.HTTPMethod != "PUT" {
 			t.Error("WithHTTPMethod failed")
@@ -180,25 +174,17 @@ func TestCallOptions(t *testing.T) {
 	})
 
 	t.Run("WithVersion", func(t *testing.T) {
-		WithVersion(5)(req, cfg)
+		WithVersion(5)(req)
 
 		if target.Version != 5 {
 			t.Error("WithVersion failed")
 		}
 	})
 
-	t.Run("WithFormat", func(t *testing.T) {
-		WithFormat(encoding.FormatVDF)(req, cfg)
-
-		if cfg.Format != encoding.FormatVDF {
-			t.Error("WithFormat failed")
-		}
-	})
-
 	t.Run("QueryParams", func(t *testing.T) {
-		WithQueryParam("a", "1")(req, cfg)
-		WithQueryParams(url.Values{"b": {"2"}})(req, cfg)
-		WithOverrideAPIKey("secret")(req, cfg)
+		WithQueryParam("a", "1")(req)
+		WithQueryParams(url.Values{"b": {"2"}})(req)
+		WithOverrideAPIKey("secret")(req)
 
 		params := req.Params()
 		if params.Get("a") != "1" || params.Get("b") != "2" || params.Get("key") != "secret" {
@@ -208,14 +194,12 @@ func TestCallOptions(t *testing.T) {
 }
 
 func TestResponseFormat_Values(t *testing.T) {
-	formats := []encoding.ResponseFormat{
-		encoding.FormatUnknown, encoding.FormatRaw, encoding.FormatProtobuf,
-		encoding.FormatJSON, encoding.FormatVDF, encoding.FormatBinaryKV,
-	}
-
-	for i, f := range formats {
-		if int(f) != i {
-			t.Errorf("Format enum mismatch at index %d", i)
-		}
-	}
+	assert.Equal(t, encoding.ResponseFormat(0), encoding.FormatUnknown)
+	assert.Equal(t, encoding.ResponseFormat(1), encoding.FormatRaw)
+	assert.Equal(t, encoding.ResponseFormat(2), encoding.FormatJSON)
+	assert.Equal(t, encoding.ResponseFormat(3), encoding.FormatProtobuf)
+	assert.Equal(t, encoding.ResponseFormat(4), encoding.FormatXML)
+	assert.Equal(t, encoding.ResponseFormat(5), encoding.FormatYAML)
+	assert.Equal(t, encoding.ResponseFormat(6), encoding.FormatVDF)
+	assert.Equal(t, encoding.ResponseFormat(7), encoding.FormatBinaryVDF)
 }

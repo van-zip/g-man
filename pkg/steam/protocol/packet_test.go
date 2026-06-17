@@ -6,6 +6,8 @@ package protocol_test
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"testing"
 
@@ -232,14 +234,15 @@ func TestPacket_SerializeTo_HeaderError(t *testing.T) {
 }
 
 func TestTransportMappingRegistry(t *testing.T) {
-	// 1. Check default mappings
+	randBytes := make([]byte, 8)
+	_, _ = rand.Read(randBytes)
+	uniqueKey := "CUSTOM_" + hex.EncodeToString(randBytes)
+
 	assert.Equal(t, protocol.TransportTCP, protocol.MapConnectionToTransport("TCP"))
 	assert.Equal(t, protocol.TransportWS, protocol.MapConnectionToTransport("WS"))
 
-	// 2. Check fallback for unregistered transport
-	assert.Equal(t, protocol.TransportType("CUSTOM"), protocol.MapConnectionToTransport("CUSTOM"))
+	assert.Equal(t, protocol.TransportType(uniqueKey), protocol.MapConnectionToTransport(uniqueKey))
 
-	// 3. Register custom mapping and verify OCP
-	protocol.RegisterTransportMapping("CUSTOM", protocol.TransportType("WEB"))
-	assert.Equal(t, protocol.TransportType("WEB"), protocol.MapConnectionToTransport("CUSTOM"))
+	protocol.RegisterTransportMapping(uniqueKey, protocol.TransportType("WEB"))
+	assert.Equal(t, protocol.TransportType("WEB"), protocol.MapConnectionToTransport(uniqueKey))
 }

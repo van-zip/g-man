@@ -5,9 +5,11 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -72,13 +74,21 @@ func (t *SocketTransport) Do(ctx context.Context, req *Request) (*Response, erro
 
 	isAuth := sess.IsAuthenticated()
 
-	// Build payload: use DynamicRawProto for messages that require a Protobuf CM
-	// header but have no Unified Service target name (e.g. EMsg_ClientToGC).
+	var bodyBytes []byte
+	if req.Body() != nil {
+		var err error
+
+		bodyBytes, err = io.ReadAll(req.Body())
+		if err != nil {
+			return nil, fmt.Errorf("socket_transport: failed to read request body: %w", err)
+		}
+	}
+
 	var builder socket.PayloadBuilder
 	if req.IsForceProto() {
-		builder = socket.DynamicRawProto(target.EMsg(isAuth), req.Body(), req.RoutingAppID())
+		builder = socket.DynamicRawProto(target.EMsg(isAuth), bodyBytes, req.RoutingAppID())
 	} else {
-		builder = socket.DynamicRaw(target.EMsg(isAuth), target.ObjectName(), req.Body(), req.RoutingAppID())
+		builder = socket.DynamicRaw(target.EMsg(isAuth), target.ObjectName(), bodyBytes, req.RoutingAppID())
 	}
 
 	if req.Params().Get("__no_response") == "true" {
@@ -90,7 +100,7 @@ func (t *SocketTransport) Do(ctx context.Context, req *Request) (*Response, erro
 			return nil, fmt.Errorf("socket_transport send failed: %w", err)
 		}
 
-		return NewResponse(nil, SocketMetadata{
+		return NewResponse(io.NopCloser(bytes.NewReader(nil)), SocketMetadata{
 			Result: enums.EResult_OK,
 		}), nil
 	}
@@ -115,7 +125,7 @@ func (t *SocketTransport) Do(ctx context.Context, req *Request) (*Response, erro
 		sourceJobID = p.GetSourceJobID()
 	}
 
-	return NewResponse(p.Payload, SocketMetadata{
+	return NewResponse(io.NopCloser(bytes.NewReader(p.Payload)), SocketMetadata{
 		Result:      result,
 		SourceJobID: sourceJobID,
 		Header:      p.Header,

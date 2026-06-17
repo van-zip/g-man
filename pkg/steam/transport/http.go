@@ -12,7 +12,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
 
@@ -34,7 +35,7 @@ type HTTPMetadata struct {
 //
 // Create new instances of HTTPTransport using [NewHTTPTransport].
 type HTTPTransport struct {
-	client *rest.Client
+	client *aoni.Client
 }
 
 // HTTPTarget is an extension of the Target interface for destinations that can be
@@ -46,10 +47,10 @@ type HTTPTarget interface {
 }
 
 // NewHTTPTransport creates a new HTTP transport layer.
-// It uses the provided rest.HTTPDoer for executing requests.
-func NewHTTPTransport(doer rest.HTTPDoer, baseURL string) *HTTPTransport {
+// It uses the provided aoni.HTTPDoer for executing requests.
+func NewHTTPTransport(doer aoni.HTTPDoer, baseURL string) *HTTPTransport {
 	return &HTTPTransport{
-		client: rest.NewClient(doer).
+		client: aoni.NewClient(doer).
 			WithBaseURL(baseURL).
 			WithUserAgent(HTTPUserAgent),
 	}
@@ -67,13 +68,22 @@ func (t *HTTPTransport) Do(ctx context.Context, req *Request) (*Response, error)
 
 	params := req.Params()
 
-	// Steam's modern WebAPI expects the Protobuf payload to be base64-encoded in a form field.
-	if len(req.Body()) > 0 {
-		params.Set("input_protobuf_encoded", base64.StdEncoding.EncodeToString(req.Body()))
+	var bodyBytes []byte
+	if req.Body() != nil {
+		var err error
+
+		bodyBytes, err = io.ReadAll(req.Body())
+		if err != nil {
+			return nil, fmt.Errorf("http: failed to read request body: %w", err)
+		}
 	}
 
-	// Create a modifier to pass our abstract headers to the concrete http.Request.
-	mods := []rest.RequestModifier{
+	if len(bodyBytes) > 0 {
+		params.Set("input_protobuf_encoded", base64.StdEncoding.EncodeToString(bodyBytes))
+	}
+
+	mods := append([]aoni.RequestModifier{
+		aoni.WithQuery(params),
 		func(r *http.Request) {
 			for key, values := range req.Header() {
 				for _, val := range values {
@@ -83,20 +93,14 @@ func (t *HTTPTransport) Do(ctx context.Context, req *Request) (*Response, error)
 
 			r.Header.Set("Accept", "text/html,*/*;q=0.9")
 		},
-	}
+	}, req.Modifiers()...)
 
-	httpResp, err := t.client.Request(ctx, target.HTTPMethod(), target.HTTPPath(), nil, params, mods...)
+	httpResp, err := t.client.Request(ctx, target.HTTPMethod(), target.HTTPPath(), mods...) //nolint:bodyclose
 	if err != nil {
 		return nil, err
 	}
-	defer httpResp.Body.Close()
 
-	body, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("http: failed to read response: %w", err)
-	}
-
-	return NewResponse(body, HTTPMetadata{
+	return NewResponse(httpResp.Body, HTTPMetadata{
 		Result:     t.parseEResult(httpResp),
 		Header:     httpResp.Header,
 		StatusCode: httpResp.StatusCode,

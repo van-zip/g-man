@@ -5,17 +5,16 @@
 package encoding
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/andygrunwald/vdf"
+	"github.com/lemon4ksan/aoni"
 	"github.com/mitchellh/mapstructure"
-
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrFormat is returned when the response doesn't
@@ -30,120 +29,19 @@ const (
 	FormatUnknown ResponseFormat = iota
 	// FormatRaw returns the response body as-is without parsing.
 	FormatRaw
-	// FormatProtobuf parses binary or JSON-encoded Protobuf messages.
-	FormatProtobuf
 	// FormatJSON parses standard JSON, automatically unwrapping the "response" field if present.
 	FormatJSON
+	// FormatProtobuf parses binary or JSON-encoded Protobuf messages.
+	FormatProtobuf
+	// FormatXML parses XML text format.
+	FormatXML
+	// FormatYAML parses YAML text format.
+	FormatYAML
 	// FormatVDF parses KeyValues/VDF text format.
 	FormatVDF
-	// FormatBinaryKV parses Binary KeyValues, which is a Valve-proprietary format
-	FormatBinaryKV
+	// FormatBinaryVDF parses Binary KeyValues, which is a Valve-proprietary format
+	FormatBinaryVDF
 )
-
-// RegistryProvider defines the contract for components that maintain an UnmarshalRegistry.
-type RegistryProvider interface {
-	// Registry returns the underlying UnmarshalRegistry.
-	Registry() *UnmarshalRegistry
-}
-
-// UnmarshalRegistry is a thread-safe registry of decoders.
-//
-// Create and initialize new instances of the registry using the [NewUnmarshalRegistry] constructor.
-type UnmarshalRegistry struct {
-	mu       sync.RWMutex
-	decoders map[ResponseFormat]rest.Decoder
-}
-
-// NewUnmarshalRegistry creates and initializes a new registry
-// with standard decoders (JSON, Protobuf, VDF, BinaryKV, Raw).
-func NewUnmarshalRegistry() *UnmarshalRegistry {
-	r := &UnmarshalRegistry{
-		decoders: make(map[ResponseFormat]rest.Decoder),
-	}
-
-	r.Register(FormatRaw, rest.RawDecoder)
-	r.Register(FormatProtobuf, rest.ProtobufDecoder)
-	r.Register(FormatJSON, SteamJSONDecoder)
-	r.Register(FormatVDF, VDFDecoder)
-	r.Register(FormatBinaryKV, BinaryVDFDecoder)
-
-	return r
-}
-
-// Register registers a new decoding function for the specified format.
-func (r *UnmarshalRegistry) Register(format ResponseFormat, d rest.Decoder) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.decoders[format] = d
-}
-
-// Unmarshal searches the registry for a suitable decoder and runs it.
-//
-// If the data slice is empty, it returns nil immediately without executing any decoders.
-// If no decoder is registered for the specified format, it returns [ErrFormat].
-func (r *UnmarshalRegistry) Unmarshal(data []byte, target any, format ResponseFormat) error {
-	if len(data) == 0 {
-		return nil
-	}
-
-	r.mu.RLock()
-	fn, ok := r.decoders[format]
-	r.mu.RUnlock()
-
-	if !ok {
-		return fmt.Errorf("%w: unsupported or unregistered format %v", ErrFormat, format)
-	}
-
-	return fn.Decode(bytes.NewReader(data), target)
-}
-
-// Helper functions for backward compatibility and testing
-
-// UnmarshalRaw implements the standard UnmarshalerFunc for the FormatRaw format.
-func UnmarshalRaw(data []byte, target any) error {
-	if err := rest.RawDecoder.Decode(bytes.NewReader(data), target); err != nil {
-		return fmt.Errorf("%w: %w", ErrFormat, err)
-	}
-
-	return nil
-}
-
-// UnmarshalProtobuf decodes Protobuf data.
-func UnmarshalProtobuf(data []byte, target any) error {
-	if err := rest.ProtobufDecoder.Decode(bytes.NewReader(data), target); err != nil {
-		return fmt.Errorf("%w: %w", ErrFormat, err)
-	}
-
-	return nil
-}
-
-// UnmarshalJSON decodes JSON data.
-func UnmarshalJSON(data []byte, target any) error {
-	if err := SteamJSONDecoder.Decode(bytes.NewReader(data), target); err != nil {
-		return fmt.Errorf("%w: %w", ErrFormat, err)
-	}
-
-	return nil
-}
-
-// UnmarshalVDFText parses Valve Data Format (KeyValues) text.
-func UnmarshalVDFText(data []byte, target any) error {
-	if err := VDFDecoder.Decode(bytes.NewReader(data), target); err != nil {
-		return fmt.Errorf("%w: %w", ErrFormat, err)
-	}
-
-	return nil
-}
-
-// UnmarshalBinaryKV parses a byte array in Binary KeyValues format.
-func UnmarshalBinaryKV(data []byte, target any) error {
-	if err := BinaryVDFDecoder.Decode(bytes.NewReader(data), target); err != nil {
-		return fmt.Errorf("%w: %w", ErrFormat, err)
-	}
-
-	return nil
-}
 
 // UnmarshalBinaryKVOffset parses a byte array in Binary KeyValues format starting from a specific offset and updates the offset.
 func UnmarshalBinaryKVOffset(data []byte, offset *int, target any) error {
@@ -175,11 +73,11 @@ func UnmarshalBinaryKVOffset(data []byte, offset *int, target any) error {
 	return decoder.Decode(parsed)
 }
 
-// rest.Decoder implementations
+// aoni.Decoder implementations
 
-// SteamJSONDecoder wraps rest.JSONDecoder to automatically unwrap the "response" field
+// SteamJSONDecoder wraps aoni.JSONDecoder to automatically unwrap the "response" field
 // common in Steam Web API.
-var SteamJSONDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
+var SteamJSONDecoder = aoni.DecoderFunc(func(r io.Reader, target any) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -195,8 +93,30 @@ var SteamJSONDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
 	return json.Unmarshal(data, target)
 })
 
+// ProtobufDecoder parses Protobuf payloads into a [proto.Message].
+// It automatically detects whether the input data is JSON-encoded Protobuf
+// or binary wire format. The target argument must satisfy [proto.Message].
+// Returns an error if target does not satisfy [proto.Message] or if decoding fails.
+var ProtobufDecoder = aoni.DecoderFunc(func(r io.Reader, target any) error {
+	pm, ok := target.(proto.Message)
+	if !ok {
+		return errors.New("aoni: target is not a proto.Message")
+	}
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	if len(data) > 0 && data[0] == '{' {
+		return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(data, pm)
+	}
+
+	return proto.Unmarshal(data, pm)
+})
+
 // VDFDecoder parses Valve Data Format (KeyValues) text.
-var VDFDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
+var VDFDecoder = aoni.DecoderFunc(func(r io.Reader, target any) error {
 	p := vdf.NewParser(r)
 
 	m, err := p.Parse()
@@ -223,7 +143,7 @@ var VDFDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
 })
 
 // BinaryVDFDecoder parses Valve Binary KeyValues format.
-var BinaryVDFDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
+var BinaryVDFDecoder = aoni.DecoderFunc(func(r io.Reader, target any) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -254,3 +174,15 @@ var BinaryVDFDecoder = rest.DecoderFunc(func(r io.Reader, target any) error {
 
 	return decoder.Decode(parsed)
 })
+
+// AsJSON returns a [RequestModifier] that configures the client to use [SteamJSONDecoder].
+func AsJSON() aoni.RequestModifier { return aoni.WithDecoder(SteamJSONDecoder) }
+
+// AsProtobuf returns a [RequestModifier] that configures the client to use [ProtobufDecoder].
+func AsProtobuf() aoni.RequestModifier { return aoni.WithDecoder(ProtobufDecoder) }
+
+// AsVDF returns a [RequestModifier] that configures the client to use [VDFDecoder].
+func AsVDF() aoni.RequestModifier { return aoni.WithDecoder(VDFDecoder) }
+
+// AsBinaryVDF returns a [RequestModifier] that configures the client to use [BinaryVDFDecoder].
+func AsBinaryVDF() aoni.RequestModifier { return aoni.WithDecoder(BinaryVDFDecoder) }

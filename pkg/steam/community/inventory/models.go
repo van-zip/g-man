@@ -7,7 +7,8 @@ package inventory
 import (
 	"time"
 
-	"github.com/lemon4ksan/g-man/pkg/rest"
+	"github.com/lemon4ksan/aoni"
+
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 )
 
@@ -75,11 +76,11 @@ type CEconItem struct {
 }
 
 type inventoryResponse struct {
-	Success      rest.BoolInt  `json:"success"`
+	Success      aoni.BoolInt  `json:"success"`
 	Error        string        `json:"error"`
 	Assets       []Asset       `json:"assets"`
 	Descriptions []Description `json:"descriptions"`
-	MoreItems    rest.BoolInt  `json:"more_items"`
+	MoreItems    aoni.BoolInt  `json:"more_items"`
 	LastAssetID  string        `json:"last_assetid"`
 	TotalCount   int           `json:"total_inventory_count"`
 }

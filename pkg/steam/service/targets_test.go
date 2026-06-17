@@ -6,6 +6,7 @@ package service
 
 import (
 	"encoding/json"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,7 +94,9 @@ func TestNewUnifiedRequest(t *testing.T) {
 	t.Run("Nil Message", func(t *testing.T) {
 		req, err := NewUnifiedRequest("POST", "I", "M", 1, nil)
 		require.NoError(t, err)
-		assert.Nil(t, req.Body())
+
+		bodyBytes, _ := io.ReadAll(req.Body())
+		assert.Empty(t, bodyBytes)
 	})
 
 	t.Run("Proto Message", func(t *testing.T) {
@@ -102,14 +105,17 @@ func TestNewUnifiedRequest(t *testing.T) {
 		require.NoError(t, err)
 
 		expected, _ := proto.Marshal(msg)
-		assert.Equal(t, expected, req.Body())
+		actual, _ := io.ReadAll(req.Body())
+		assert.Equal(t, expected, actual)
 	})
 
 	t.Run("Byte Slice", func(t *testing.T) {
 		raw := []byte{0xDE, 0xAD}
 		req, err := NewUnifiedRequest("POST", "I", "M", 1, raw)
 		require.NoError(t, err)
-		assert.Equal(t, raw, req.Body())
+
+		actual, _ := io.ReadAll(req.Body())
+		assert.Equal(t, raw, actual)
 	})
 
 	t.Run("JSON Struct", func(t *testing.T) {
@@ -118,7 +124,8 @@ func TestNewUnifiedRequest(t *testing.T) {
 		require.NoError(t, err)
 
 		expected, _ := json.Marshal(data)
-		assert.Equal(t, expected, req.Body())
+		actual, _ := io.ReadAll(req.Body())
+		assert.Equal(t, expected, actual)
 	})
 
 	t.Run("JSON Error", func(t *testing.T) {
@@ -160,12 +167,15 @@ func TestLegacyTarget(t *testing.T) {
 		assert.Empty(t, target.ObjectName())
 
 		expected, _ := proto.Marshal(msg)
-		assert.Equal(t, expected, req.Body())
+		actual, _ := io.ReadAll(req.Body())
+		assert.Equal(t, expected, actual)
 	})
 
 	t.Run("NewLegacyRequest Nil Message", func(t *testing.T) {
 		req, err := NewLegacyRequest(enums.EMsg_ClientLogon, nil)
 		require.NoError(t, err)
-		assert.Nil(t, req.Body())
+
+		bodyBytes, _ := io.ReadAll(req.Body())
+		assert.Empty(t, bodyBytes)
 	})
 }

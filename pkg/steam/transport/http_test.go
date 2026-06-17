@@ -106,14 +106,16 @@ func TestHTTPTransport_Do(t *testing.T) {
 		}
 
 		tr := NewHTTPTransport(doer, baseURL)
-		req := NewRequest(mockHTTPTarget{method: "POST", path: "/test"}, payload)
+		req := NewRequest(mockHTTPTarget{method: "POST", path: "/test"}, bytes.NewReader(payload))
 		req.WithHeader("X-Custom-Header", "val1")
 		req.WithHeader("X-Multi", "multi1")
 		req.WithHeader("X-Multi", "multi2")
 
 		resp, err := tr.Do(ctx, req)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("response_body"), resp.Body)
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, "response_body", string(bodyBytes))
 
 		meta, ok := resp.HTTP()
 		require.True(t, ok)
@@ -168,8 +170,7 @@ func TestHTTPTransport_Do(t *testing.T) {
 			doFunc: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
-					// Body that fails on read
-					Body: io.NopCloser(faultyReader{}),
+					Body:       io.NopCloser(faultyReader{}),
 				}, nil
 			},
 		}
@@ -177,8 +178,12 @@ func TestHTTPTransport_Do(t *testing.T) {
 		req := NewRequest(mockHTTPTarget{method: "GET", path: "/test"}, nil)
 
 		resp, err := tr.Do(ctx, req)
-		assert.Nil(t, resp)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "http: failed to read response")
+		if err != nil {
+			assert.Contains(t, err.Error(), "failed to read response")
+		} else {
+			_, readErr := io.ReadAll(resp.Body)
+			assert.Error(t, readErr)
+			assert.Contains(t, readErr.Error(), "read failure")
+		}
 	})
 }

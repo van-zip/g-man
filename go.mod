@@ -2,8 +2,6 @@ module github.com/lemon4ksan/g-man
 
 go 1.25.4
 
-replace github.com/lemon4ksan/aoni => ./../aoni
-
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/andygrunwald/vdf v1.1.0

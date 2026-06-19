@@ -52,13 +52,14 @@ const (
 type WebSession struct {
 	mu sync.RWMutex
 
-	steamID    id.ID
-	baseDoer   aoni.HTTPDoer
-	httpClient *http.Client
-	jar        http.CookieJar
-	logger     log.Logger
-	isAuth     bool
-	domains    []*url.URL
+	steamID      id.ID
+	baseDoer     aoni.HTTPDoer
+	httpClient   *http.Client
+	jar          http.CookieJar
+	logger       log.Logger
+	isAuth       bool
+	domains      []*url.URL
+	retryBackoff time.Duration
 }
 
 type doerRoundTripper struct {
@@ -79,9 +80,10 @@ func New(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) *WebSession {
 	}
 
 	ws := &WebSession{
-		steamID:  steamID,
-		baseDoer: baseDoer,
-		logger:   logger.With(log.Module("websession")),
+		steamID:      steamID,
+		baseDoer:     baseDoer,
+		logger:       logger.With(log.Module("websession")),
+		retryBackoff: time.Second,
 	}
 
 	for _, d := range defaultDomains {
@@ -108,9 +110,16 @@ func (s *WebSession) Do(req *http.Request) (*http.Response, error) {
 // REST returns a new [aoni.Client] instance configured to use this session.
 func (s *WebSession) REST() *aoni.Client {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	backoff := s.retryBackoff
+	s.mu.RUnlock()
 
-	retrier := aoni.RetryMiddleware(aoni.RetryOptions{MaxRetries: 3}, aoni.RetryOnErr())
+	retrier := aoni.RetryMiddleware(aoni.RetryOptions{
+		MaxRetries: 3,
+		Backoff:    backoff,
+	}, aoni.RetryOnErr())
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return aoni.NewClient(aoni.Chain(s, retrier))
 }

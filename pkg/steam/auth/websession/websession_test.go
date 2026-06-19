@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
@@ -280,6 +281,8 @@ func TestAuthenticate_SlowPath_Errors(t *testing.T) {
 			}, nil
 		}
 		ws := newMockedSession(mt)
+		ws.retryBackoff = time.Millisecond
+
 		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "rt", "")
 		assert.ErrorContains(t, err, "finalize login error code: 42")
 	})
@@ -290,6 +293,8 @@ func TestAuthenticate_SlowPath_Errors(t *testing.T) {
 			return nil, errors.New("network failure")
 		}
 		ws := newMockedSession(mt)
+		ws.retryBackoff = time.Millisecond
+
 		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "rt", "")
 		assert.ErrorContains(t, err, "finalize login failed")
 	})
@@ -314,6 +319,8 @@ func TestAuthenticate_SlowPath_Errors(t *testing.T) {
 			return nil, errors.New("perma-fail")
 		}
 		ws := newMockedSession(mt)
+		ws.retryBackoff = time.Millisecond
+
 		err := ws.Authenticate(ctx, pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_WebBrowser, "rt", "")
 		assert.ErrorContains(t, err, "perma-fail")
 	})
@@ -328,6 +335,8 @@ func TestAuthenticate_SlowPath_Errors(t *testing.T) {
 		defer server.Close()
 
 		ws := New(id.ID(0), log.Discard, server.Client())
+		ws.retryBackoff = time.Millisecond
+
 		err := ws.executeTransfer(ctx, server.URL, nil)
 		assert.ErrorContains(t, err, "steam error: Fail")
 	})

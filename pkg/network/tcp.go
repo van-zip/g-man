@@ -24,10 +24,6 @@ const (
 	// ConnTypeTCP is the connection type for TCP connections.
 	ConnTypeTCP = "TCP"
 
-	// ReadTimeout is the maximum duration to wait for incoming data
-	// before the connection is timed out and closed.
-	ReadTimeout = 60 * time.Second
-
 	// WriteTimeout is the default duration to wait for a write operation
 	// to complete before timing out.
 	WriteTimeout = 5 * time.Second
@@ -216,14 +212,6 @@ func (t *TCP) readLoop() {
 	reader := bufio.NewReaderSize(t.conn, 64*1024)
 
 	for {
-		if err := t.conn.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
-			if !isIgnorableError(err) {
-				sendErr(NewError(OpDeadline, ConnTypeTCP, err))
-			}
-
-			return
-		}
-
 		payload, err := t.framer.ReadFrame(reader)
 		if err != nil {
 			if !isIgnorableError(err) {
@@ -241,9 +229,6 @@ func (t *TCP) readLoop() {
 			payload, err = cipher.Decrypt(payload)
 			if err != nil {
 				sendErr(NewError(OpDecrypt, ConnTypeTCP, err))
-
-				// Don't return, as this might be a single corrupt packet.
-				// Depending on the protocol, you might want to continue or disconnect.
 				continue
 			}
 		}
@@ -271,7 +256,6 @@ func newProxyConn(ctx context.Context, proxyURL, endpoint string) (conn net.Conn
 	if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
 		conn, err = contextDialer.DialContext(ctx, "tcp", endpoint)
 	} else {
-		// Fallback for dialers that don't implement ContextDialer
 		conn, err = dialer.Dial("tcp", endpoint)
 	}
 

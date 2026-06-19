@@ -314,11 +314,15 @@ func (c *Connector) Close() error {
 
 // monitorConnection pipes events from the network connection into the connector.
 func (c *Connector) monitorConnection(conn network.Connection) {
+	msgChan := conn.Messages()
+	errChan := conn.Errors()
+
 	for {
 		select {
-		case msg, ok := <-conn.Messages():
+		case msg, ok := <-msgChan:
 			if !ok {
-				return
+				msgChan = nil
+				continue
 			}
 
 			inbound := &protocol.InboundMessage{
@@ -333,16 +337,18 @@ func (c *Connector) monitorConnection(conn network.Connection) {
 				return
 			}
 
-		case err, ok := <-conn.Errors():
+		case err, ok := <-errChan:
 			if !ok {
-				return
+				errChan = nil
+				continue
 			}
 
 			c.getLogger().Error("Transport error", log.Err(err))
 
 		case <-conn.Closed():
-			c.handleDisconnect()
+			c.handleDisconnect(conn)
 			return
+
 		case <-c.ctx.Done():
 			return
 		}
@@ -350,8 +356,14 @@ func (c *Connector) monitorConnection(conn network.Connection) {
 }
 
 // handleDisconnect coordinates reconnection when a transport is lost.
-func (c *Connector) handleDisconnect() {
+func (c *Connector) handleDisconnect(closedConn network.Connection) {
 	c.mu.Lock()
+
+	if c.conn != closedConn {
+		c.mu.Unlock()
+		return
+	}
+
 	c.conn = nil
 	policy := c.cfg.ReconnectPolicy
 
@@ -360,7 +372,6 @@ func (c *Connector) handleDisconnect() {
 		return
 	}
 
-	// Cancel any active reconnect loop first to avoid concurrency
 	if c.reconnectCancel != nil {
 		c.reconnectCancel()
 	}

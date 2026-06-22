@@ -27,8 +27,13 @@ type DeviceConfig struct {
 
 // DefaultDeviceConfig returns settings mimicking the official Steam Desktop Client on Windows.
 func DefaultDeviceConfig() DeviceConfig {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "DESKTOP-PC"
+	}
+
 	return DeviceConfig{
-		DeviceFriendlyName: "G-man Bot/1.0",
+		DeviceFriendlyName: hostname,
 		PlatformType:       pb.EAuthTokenPlatformType_k_EAuthTokenPlatformType_SteamClient,
 		OSType:             enums.EOSType_Windows10,
 		GamingDeviceType:   1,
@@ -126,10 +131,8 @@ func (l *LogOnDetails) Validate() error {
 // NewLogOnDetails creates a new structure with default fields.
 func NewLogOnDetails(account, password string) *LogOnDetails {
 	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "g-man"
-	} else {
-		hostname += " (g-man)"
+	if err != nil || hostname == "" {
+		hostname = "DESKTOP-PC"
 	}
 
 	return &LogOnDetails{

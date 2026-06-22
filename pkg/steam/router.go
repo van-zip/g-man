@@ -14,8 +14,11 @@ import (
 	tr "github.com/lemon4ksan/g-man/pkg/steam/transport"
 )
 
-type sessionRefresher interface {
+// SessionRefresher is the interface for refreshing the session.
+type SessionRefresher interface {
+	// Refresh refreshes the session using the provided context.
 	Refresh(ctx context.Context) error
+	// Clients returns the unified and socket API clients.
 	Clients() (unified, socketAPI *service.Client)
 }
 
@@ -37,13 +40,13 @@ type RouteMatcher func(req *tr.Request, socketConnected bool) TransportType
 // It routes requests over TCP/WebSockets or HTTP based on connectivity state.
 // Use [NewServiceRouter] to create new instances of the router.
 type ServiceRouter struct {
-	session sessionRefresher
+	session SessionRefresher
 	socket  SocketProvider
 	matcher RouteMatcher
 }
 
 // NewServiceRouter creates a new service router.
-func NewServiceRouter(sess sessionRefresher, sock SocketProvider) *ServiceRouter {
+func NewServiceRouter(sess SessionRefresher, sock SocketProvider) *ServiceRouter {
 	return &ServiceRouter{
 		session: sess,
 		socket:  sock,

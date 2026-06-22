@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
@@ -93,6 +94,8 @@ type SocketProvider interface {
 
 // Config aggregates configurations for all core subsystems and standard modules.
 type Config struct {
+	// PersonaState defines the initial Steam persona state on logon.
+	PersonaState enums.EPersonaState
 	// Socket holds the socket connection parameters.
 	Socket socket.Config
 	// Storage defines the persistent storage provider for credentials.
@@ -107,9 +110,11 @@ type Config struct {
 	Bus *bus.Bus
 	// ProxyURL defines a global proxy URL affecting all traffic.
 	ProxyURL string
-	// WebFactory constructs a webSession instance.
+	// Authenticator is the injected authenticator used to log on to the Steam server.
+	Authenticator Authenticator
+	// WebFactory constructs a injected [WebSession] instance.
 	WebFactory WebSessionFactory
-	// CommunityFactory constructs a communityClient instance.
+	// CommunityFactory constructs a injected [CommunityClient] instance.
 	CommunityFactory CommunityClientFactory
 	// DisableSocket disables the socket transport layer, forcing WebAPI-only mode.
 	DisableSocket bool
@@ -118,7 +123,8 @@ type Config struct {
 // DefaultConfig returns the baseline configuration for core systems.
 func DefaultConfig() Config {
 	return Config{
-		Socket: socket.DefaultConfig(),
+		PersonaState: enums.EPersonaState_Online,
+		Socket:       socket.DefaultConfig(),
 	}
 }
 
@@ -174,9 +180,12 @@ func WithLogger(l log.Logger) Option {
 
 // WithModule adds a module to the client and initializes it immediately.
 func WithModule(m module.Module) Option {
-	return func(c *Client) {
-		_ = c.modules.Add(m)
-	}
+	return func(c *Client) { _ = c.modules.Add(m) }
+}
+
+// WithSocket sets the socket provider for the Steam client.
+func WithSocket(sock SocketProvider) Option {
+	return func(c *Client) { c.socket = sock }
 }
 
 // Client acts as the central hub connecting the cmSocket, Auth, WebSession, and Modules.
@@ -251,11 +260,10 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		initCtx:      c,
 		authCtx:      c,
 	}
+
 	generic.ApplyOptions(c, opts...)
 
-	if cfg.Socket.Connector.ProxyURL == "" {
-		cfg.Socket.Connector.ProxyURL = cfg.ProxyURL
-	}
+	cfg.Socket.Connector.ProxyURL = generic.Coalesce(cfg.Socket.Connector.ProxyURL, cfg.ProxyURL)
 
 	if cfg.DisableSocket {
 		c.socket = noopSocketProvider{}
@@ -298,14 +306,13 @@ func (c *Client) Run() error {
 func (c *Client) State() State { return c.fsm.CurrentState() }
 
 // Session returns the client's session manager.
-func (c *Client) Session() *SessionManager {
-	return c.session
-}
+func (c *Client) Session() *SessionManager { return c.session }
 
 // Router returns the client's service router.
-func (c *Client) Router() *ServiceRouter {
-	return c.router
-}
+func (c *Client) Router() *ServiceRouter { return c.router }
+
+// Module returns the registered Module with the given name.
+func (c *Client) Module(name string) module.Module { return c.modules.Get(name) }
 
 // RegisterModule adds a module to the client and initializes it immediately.
 func (c *Client) RegisterModule(m module.Module) {
@@ -314,11 +321,6 @@ func (c *Client) RegisterModule(m module.Module) {
 			log.String("name", m.Name()),
 			log.Err(err))
 	}
-}
-
-// Module returns the registered Module with the given name.
-func (c *Client) Module(name string) module.Module {
-	return c.modules.Get(name)
 }
 
 // RegisterPacketHandler is a shortcut to register a socket packet handler.
@@ -361,14 +363,10 @@ func (c *Client) Logger() log.Logger {
 func (c *Client) Rest() aoni.Requester { return c.rest }
 
 // Service returns the Doer interface for making API requests.
-func (c *Client) Service() service.Doer {
-	return c.router
-}
+func (c *Client) Service() service.Doer { return c.router }
 
 // Community returns the Steam Community requester. Returns nil if not authenticated.
-func (c *Client) Community() community.Requester {
-	return c.session.community
-}
+func (c *Client) Community() community.Requester { return c.session.community }
 
 // SteamID returns the logged-in SteamID.
 func (c *Client) SteamID() id.ID {
@@ -412,6 +410,14 @@ func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, de
 	}
 
 	c.enrichLogger(details.AccountName, details.SteamID)
+
+	// Send initial persona state on logon
+	statusReq := &pb.CMsgClientChangeStatus{
+		PersonaState: proto.Uint32(uint32(c.cfg.PersonaState)),
+	}
+	if err := c.socket.SendProto(ctx, enums.EMsg_ClientChangeStatus, statusReq); err != nil {
+		c.Logger().Warn("Failed to send initial persona status update", log.Err(err))
+	}
 
 	_ = c.fsm.Transition(context.Background(), EventAuthorize)
 

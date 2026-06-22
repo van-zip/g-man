@@ -212,6 +212,21 @@ func (m *Manager) RemoveFriend(ctx context.Context, steamID uint64) error {
 	return err
 }
 
+// SetPersona changes the bot's current Steam persona status (e.g. Online, Busy, Snooze) and/or profile name.
+// If name is empty, it changes only the status.
+func (m *Manager) SetPersona(ctx context.Context, state enums.EPersonaState, name string) error {
+	req := &pb.CMsgClientChangeStatus{
+		PersonaState: proto.Uint32(uint32(state)),
+	}
+	if name != "" {
+		req.PlayerName = proto.String(name)
+	}
+
+	_, err := service.LegacyProto[service.NoResponse](ctx, m.client, enums.EMsg_ClientChangeStatus, req)
+
+	return err
+}
+
 // InviteToGroups sends group invitations to a friend.
 // Standard HTTP 400 errors (already in group/already invited) are ignored.
 func (m *Manager) InviteToGroups(ctx context.Context, steamID id.ID, groupIDs []uint64) {

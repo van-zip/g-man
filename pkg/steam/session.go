@@ -31,28 +31,38 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/storage/memory"
 )
 
-type authenticator interface {
+// Authenticator is the interface for the authenticator.
+type Authenticator interface {
+	// LogOn logs on to the Steam server using the provided details.
 	LogOn(ctx context.Context, details *auth.LogOnDetails, server socket.CMServer) error
 }
 
-type webSession interface {
+// WebSession is the interface for the web session.
+type WebSession interface {
+	// HTTP returns the underlying HTTP client.
 	HTTP() *http.Client
+	// SessionID returns the session ID for the given base URL.
 	SessionID(baseURL string) string
+	// Verify verifies the session using the provided context.
 	Verify(ctx context.Context) (bool, error)
+	// Authenticate authenticates the session using the provided credentials.
 	Authenticate(ctx context.Context, platformType pb.EAuthTokenPlatformType, refreshToken, accessToken string) error
+	// IsAuthenticated returns whether the session is authenticated.
 	IsAuthenticated() bool
 }
 
-type communityClient interface {
+// CommunityClient is the interface for the community client.
+type CommunityClient interface {
 	community.Requester
+	// GetOrRegisterAPIKey gets or registers an API key for the given domain.
 	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
 }
 
 // WebSessionFactory constructs a webSession instance.
-type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession
+type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) WebSession
 
 // CommunityClientFactory constructs a communityClient instance.
-type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient
+type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) CommunityClient
 
 // SessionManager manages the session state of the client.
 //
@@ -61,9 +71,9 @@ type CommunityClientFactory func(httpClient *http.Client, sessionID func(string)
 type SessionManager struct {
 	mu sync.RWMutex
 
-	auth      authenticator
-	web       webSession
-	community communityClient
+	auth      Authenticator
+	web       WebSession
+	community CommunityClient
 	socket    SocketProvider
 	logger    log.Logger
 	storage   storage.Provider
@@ -111,14 +121,14 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 
 	c.webFactory = cfg.WebFactory
 	if c.webFactory == nil {
-		c.webFactory = func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession {
+		c.webFactory = func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) WebSession {
 			return websession.New(steamID, logger, baseDoer)
 		}
 	}
 
 	c.communityFactory = cfg.CommunityFactory
 	if c.communityFactory == nil {
-		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient {
+		c.communityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) CommunityClient {
 			return community.NewClient(
 				httpClient,
 				sessionID,
@@ -130,13 +140,16 @@ func NewSessionManager(cfg Config, bus *bus.Bus, logger log.Logger, sock SocketP
 	webTransport := tr.NewHTTPTransport(cfg.HTTP, service.WebAPIBase)
 	c.unified = service.New(webTransport)
 
-	c.auth = auth.NewAuthenticator(
-		sock,
-		auth.NewAuthenticationService(c.unified, device),
-		bus,
-		auth.WithLogger(c.logger),
-		auth.WithStorage(auth.NewKVStore(c.storage.KV("auth"))),
-	)
+	c.auth = cfg.Authenticator
+	if c.auth == nil {
+		c.auth = auth.NewAuthenticator(
+			sock,
+			auth.NewAuthenticationService(c.unified, device),
+			bus,
+			auth.WithLogger(c.logger),
+			auth.WithStorage(auth.NewKVStore(c.storage.KV("auth"))),
+		)
+	}
 
 	socketTransport := tr.NewSocketTransport(sock)
 	c.socketAPI = service.New(socketTransport)

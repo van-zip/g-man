@@ -205,11 +205,11 @@ func TestSessionManager_CustomFactories(t *testing.T) {
 	mc.On("GetOrRegisterAPIKey", mock.Anything, mock.Anything).Return("key_12345", nil).Maybe()
 
 	cfg := Config{
-		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) webSession {
+		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) WebSession {
 			webCalled = true
 			return mw
 		},
-		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) communityClient {
+		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) CommunityClient {
 			commCalled = true
 			return mc
 		},

@@ -206,6 +206,9 @@ func TestConnector_ReconnectLoop(t *testing.T) {
 		policy.MaxAttempts = 2
 		policy.InitialBackoff = time.Millisecond
 		policy.BackoffFactor = 1.0
+		policy.ServerSelector = func(servers []connector.CMServer) connector.CMServer {
+			return servers[0]
+		}
 
 		cfg := connector.Config{
 			Dialers:         dialers,
@@ -243,13 +246,6 @@ func TestConnector_ErrorsAndHelpers(t *testing.T) {
 	assert.False(t, connector.ErrUnsupportedType.IsRetriable())
 	assert.False(t, connector.ErrReconnectionFailed.IsRetriable())
 	assert.Equal(t, "connector: instance is permanently closed", connector.ErrClosed.Error())
-
-	// DefaultReconnectPolicy tests
-	policy := connector.DefaultReconnectPolicy()
-	assert.Equal(t, connector.CMServer{}, policy.ServerSelector(nil))
-
-	servers := []connector.CMServer{{Endpoint: "ep1"}, {Endpoint: "ep2"}}
-	assert.Equal(t, "ep1", policy.ServerSelector(servers).Endpoint)
 
 	// Accessors
 	c := connector.New(connector.DefaultConfig(), log.Discard)

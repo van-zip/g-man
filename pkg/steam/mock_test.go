@@ -101,8 +101,10 @@ func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 
 type mockSocket struct{ mock.Mock }
 
-func (m *mockSocket) SetEncryptionKey(key []byte) bool                             { return false }
-func (m *mockSocket) UpdateLogger(logger log.Logger)                               {}
+func (m *mockSocket) SetEncryptionKey(key []byte) bool        { return false }
+func (m *mockSocket) UpdateLogger(logger log.Logger)          {}
+func (m *mockSocket) UpdateServers(servers []socket.CMServer) {}
+
 func (m *mockSocket) Connect(ctx context.Context, server connector.CMServer) error { return nil }
 
 func (m *mockSocket) SendProto(

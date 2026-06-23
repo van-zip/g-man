@@ -90,6 +90,7 @@ type SocketProvider interface {
 	Disconnect() error
 	Close() error
 	UpdateLogger(logger log.Logger)
+	UpdateServers(servers []socket.CMServer)
 }
 
 // Config aggregates configurations for all core subsystems and standard modules.
@@ -528,6 +529,7 @@ func (noopSocketProvider) RegisterServiceHandler(method string, handler socket.H
 func (noopSocketProvider) StartHeartbeat(time.Duration) error {
 	return errors.New("socket transport disabled")
 }
-func (noopSocketProvider) Disconnect() error       { return nil }
-func (noopSocketProvider) Close() error            { return nil }
-func (noopSocketProvider) UpdateLogger(log.Logger) {}
+func (noopSocketProvider) Disconnect() error               { return nil }
+func (noopSocketProvider) Close() error                    { return nil }
+func (noopSocketProvider) UpdateLogger(log.Logger)         {}
+func (noopSocketProvider) UpdateServers([]socket.CMServer) {}

@@ -128,8 +128,9 @@ type Socket struct {
 	session  Session
 
 	// Lifecycle
-	closeOnce sync.Once
-	closed    atomic.Bool
+	closeOnce       sync.Once
+	closed          atomic.Bool
+	heartbeatCancel context.CancelFunc
 }
 
 // NewSocket initializes a new Steam Socket facade.
@@ -265,6 +266,15 @@ func (s *Socket) StartHeartbeat(interval time.Duration) error {
 		return ErrClosed
 	}
 
+	s.mu.Lock()
+	if s.heartbeatCancel != nil {
+		s.heartbeatCancel()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec
+	s.heartbeatCancel = cancel
+	s.mu.Unlock()
+
 	s.getLogger().Debug("Starting heartbeat loop", log.Duration("interval", interval))
 
 	go func() {
@@ -285,7 +295,7 @@ func (s *Socket) StartHeartbeat(interval time.Duration) error {
 					s.getLogger().Warn("Failed to send heartbeat", log.Err(err))
 				}
 
-			case <-s.conn.Done():
+			case <-ctx.Done():
 				s.getLogger().Debug("Heartbeat loop stopped")
 				return
 			}
@@ -307,6 +317,12 @@ func (s *Socket) Close() error {
 
 	s.closed.Store(true)
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		if s.heartbeatCancel != nil {
+			s.heartbeatCancel()
+		}
+
+		s.mu.Unlock()
 		errs = append(errs, s.conn.Close())
 		s.proc.Stop()
 		errs = append(errs, s.dispatch.Close())

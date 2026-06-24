@@ -16,7 +16,6 @@ import (
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/httpc"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 	"github.com/lemon4ksan/g-man/pkg/steam/socket/connector"
 )
@@ -79,7 +78,7 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 
 	// Enable sticky session support based on Steam session cookies
 	// This ensures that requests within a single session route through the same proxy
-	stickyRotator := proxyRotator.WithStickySessions(httpc.SteamStickyKey)
+	stickyRotator := proxyRotator.WithStickySessions(aoni.StickyKeyFromCookie("sessionid"))
 
 	// Create retry middleware: in case of a proxy network failure, the request automatically retries on another node
 	retryMiddleware := aoni.RetryMiddleware(aoni.RetryOptions{
@@ -88,7 +87,7 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 	}, aoni.ProxyRetryCondition(proxyRotator))
 
 	// Build the call chain: Base client -> Logging -> Retry layer -> Rotator
-	chainedDoer := aoni.Chain(stickyRotator, httpc.LoggingMiddleware(logger), retryMiddleware)
+	chainedDoer := aoni.Chain(stickyRotator, log.LoggingMiddleware(logger), retryMiddleware)
 
 	// Initialize the final REST client that will make the calls
 	httpClient := aoni.NewClient(chainedDoer)

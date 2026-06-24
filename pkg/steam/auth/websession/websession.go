@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -233,6 +234,17 @@ func (s *WebSession) Clear() {
 		Transport: &doerRoundTripper{doer: s.baseDoer},
 		Jar:       jar,
 		Timeout:   30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("steam: stopped after 10 redirects (redirect loop)")
+			}
+
+			if strings.Contains(req.URL.Path, "/login/home") {
+				return errors.New("websession: session expired (redirected to login)")
+			}
+
+			return nil
+		},
 	}
 	s.isAuth = false
 }
@@ -263,7 +275,7 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 		} `json:"transfer_info"`
 	}
 
-	res, err := aoni.PostJSON[map[string]string, finalizeResponse](ctx, s.REST(), urlFinalize, payload)
+	res, err := aoni.PostJSON[finalizeResponse](ctx, s.REST(), urlFinalize, payload)
 	if err != nil {
 		return fmt.Errorf("websession: finalize login failed: %w", err)
 	}
@@ -295,7 +307,7 @@ func (s *WebSession) executeTransfer(ctx context.Context, transferURL string, pa
 		Result enums.EResult `json:"result"`
 	}
 
-	res, err := aoni.PostJSON[map[string]string, transferResult](ctx, s.REST(), transferURL, params)
+	res, err := aoni.PostJSON[transferResult](ctx, s.REST(), transferURL, params)
 	if err != nil {
 		return err
 	}
@@ -318,7 +330,7 @@ func (s *WebSession) seedCookies(sessionID, secureValue string) {
 				Value:    sessionID,
 				Path:     "/",
 				Secure:   true,
-				HttpOnly: false,
+				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
 			},
 		}

@@ -59,6 +59,7 @@ func NewReadyClient(ctx context.Context, cfg Config, details *auth.LogOnDetails,
 	}
 
 	if err = c.ConnectAndLogin(ctx, srv, details); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 
@@ -433,6 +434,56 @@ func (c *Client) ConnectAndLogin(ctx context.Context, server socket.CMServer, de
 // Disconnect closes the CM connection but keeps the client running.
 func (c *Client) Disconnect() error {
 	return c.session.Disconnect()
+}
+
+// Reconnect attempts to re-authenticate with Steam using stored credentials.
+// It is called automatically when the session is lost.
+func (c *Client) Reconnect(ctx context.Context) error {
+	if c.State() == StateClosed {
+		return module.ErrClosed
+	}
+
+	c.Logger().Info("Attempting automatic reconnection...")
+
+	// Reconnect socket first
+	if err := c.session.Disconnect(); err != nil {
+		c.Logger().Warn("Disconnect failed during reconnect", log.Err(err))
+	}
+
+	// Discover a new CM server (fall back to stored server)
+	dir := directory.New(c.Service())
+
+	server, err := dir.GetOptimalCMServer(ctx)
+	if err != nil {
+		c.Logger().Warn("CM server discovery failed, using stored server", log.Err(err))
+		c.session.mu.RLock()
+		server = c.session.logonServer
+		c.session.mu.RUnlock()
+	}
+
+	// Update stored server for future reconnections
+	c.session.mu.Lock()
+	c.session.logonServer = server
+	c.session.mu.Unlock()
+
+	// Re-login with stored credentials
+	if err := c.session.Reconnect(ctx); err != nil {
+		return fmt.Errorf("reconnect failed: %w", err)
+	}
+
+	// Send persona state after reconnection
+	statusReq := &pb.CMsgClientChangeStatus{
+		PersonaState: proto.Uint32(uint32(c.cfg.PersonaState)),
+	}
+	if err := c.socket.SendProto(ctx, enums.EMsg_ClientChangeStatus, statusReq); err != nil {
+		c.Logger().Warn("Failed to send persona status after reconnect", log.Err(err))
+	}
+
+	_ = c.fsm.Transition(context.Background(), EventAuthorize)
+
+	c.Logger().Info("Reconnection successful")
+
+	return nil
 }
 
 // Close shuts down the client, stops all modules, and releases resources.

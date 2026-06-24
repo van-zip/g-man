@@ -134,13 +134,12 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 	}
 
 	req := struct {
-		SessionID string `url:"sessionid"`
 		AppID     uint32 `url:"appid"`
 		ContextID int64  `url:"contextid"`
 		AssetID   uint64 `url:"assetid"`
 		Amount    int    `url:"amount"`
 		Price     int    `url:"price"`
-	}{comm.SessionID(community.BaseURL), opts.AppID, opts.ContextID, opts.AssetID, opts.Amount, opts.Price}
+	}{opts.AppID, opts.ContextID, opts.AssetID, opts.Amount, opts.Price}
 
 	resp, err := community.PostForm[CreateSellOrderResponse](ctx, comm, "market/sellitem", req,
 		aoni.WithHeader("Referer", fmt.Sprintf("%sprofiles/%d/inventory?modal=1&market=1", community.BaseURL, myID)),
@@ -174,7 +173,6 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 	totalCents := opts.Price * opts.Amount
 
 	req := struct {
-		SessionID      string       `url:"sessionid"`
 		AppID          uint32       `url:"appid"`
 		Currency       CurrencyCode `url:"currency"`
 		MarketHashName string       `url:"market_hash_name"`
@@ -183,7 +181,6 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 		BillingState   string       `url:"billing_state"`
 		SaveMyAddress  string       `url:"save_my_address"`
 	}{
-		SessionID:      comm.SessionID(community.BaseURL),
 		AppID:          opts.AppID,
 		Currency:       m.config.Currency,
 		MarketHashName: opts.MarketHashName,
@@ -208,6 +205,10 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 	return resp, nil
 }
 
+type marketCancelResponse struct {
+	Success bool `json:"success"`
+}
+
 // CancelBuyOrder cancels an existing active buy order.
 //
 // It returns an error if the request fails or is rejected by Steam Community.
@@ -221,13 +222,19 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 	}
 
 	req := struct {
-		SessionID  string `url:"sessionid"`
 		BuyOrderID uint64 `url:"buy_orderid"`
-	}{comm.SessionID(community.BaseURL), buyOrderID}
+	}{buyOrderID}
 
-	_, err := community.PostForm[aoni.NoResponse](ctx, comm, "market/cancelbuyorder", req)
+	resp, err := community.PostForm[marketCancelResponse](ctx, comm, "market/cancelbuyorder", req)
+	if err != nil {
+		return err
+	}
 
-	return err
+	if !resp.Success {
+		return errors.New("market: cancel buy order request unsuccessful")
+	}
+
+	return nil
 }
 
 // CancelSellOrder removes an item from sale on the market.
@@ -242,15 +249,18 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 		return module.ErrNotAuthenticated
 	}
 
-	req := struct {
-		SessionID string `url:"sessionid"`
-	}{comm.SessionID(community.BaseURL)}
-
-	_, err := community.PostForm[aoni.NoResponse](ctx, comm, "market/removelisting/{listingID}", req,
+	resp, err := community.PostForm[marketCancelResponse](ctx, comm, "market/removelisting/{listingID}", nil,
 		aoni.WithVar("listingID", listingID),
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	if !resp.Success {
+		return errors.New("market: cancel sell order request unsuccessful")
+	}
+
+	return nil
 }
 
 // Search searches for items on the marketplace.
@@ -415,12 +425,11 @@ func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) 
 		return nil, module.ErrNotAuthenticated
 	}
 
-	req := url.Values{
-		"sessionid": {comm.SessionID(community.BaseURL)},
-		"appid":     {strconv.FormatUint(uint64(appID), 10)},
-		"contextid": {"6"},
-		"assetid":   {strconv.FormatUint(assetID, 10)},
-	}
+	req := struct {
+		AppID     uint32 `url:"appid"`
+		ContextID int64  `url:"contextid"`
+		AssetID   uint64 `url:"assetid"`
+	}{appID, 6, assetID}
 
 	type response struct {
 		Success  int    `json:"success"`
@@ -463,13 +472,12 @@ func (m *Market) TurnItemIntoGems(
 		return nil, module.ErrNotAuthenticated
 	}
 
-	req := url.Values{
-		"sessionid":          {comm.SessionID(community.BaseURL)},
-		"appid":              {strconv.FormatUint(uint64(appID), 10)},
-		"contextid":          {"6"},
-		"assetid":            {strconv.FormatUint(assetID, 10)},
-		"goo_value_expected": {strconv.Itoa(expectedGemsValue)},
-	}
+	req := struct {
+		AppID            uint32 `url:"appid"`
+		ContextID        int64  `url:"contextid"`
+		AssetID          uint64 `url:"assetid"`
+		GooValueExpected int    `url:"goo_value_expected"`
+	}{appID, 6, assetID, expectedGemsValue}
 
 	type response struct {
 		Success          int    `json:"success"`
@@ -508,11 +516,10 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 		return nil, module.ErrNotAuthenticated
 	}
 
-	req := url.Values{
-		"sessionid":       {comm.SessionID(community.BaseURL)},
-		"appid":           {strconv.FormatUint(uint64(appID), 10)},
-		"communityitemid": {strconv.FormatUint(assetID, 10)},
-	}
+	req := struct {
+		AppID         uint32 `url:"appid"`
+		CommunityItem uint64 `url:"communityitemid"`
+	}{appID, assetID}
 
 	type response struct {
 		Success int    `json:"success"`
@@ -599,11 +606,10 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 	}
 
 	req := struct {
-		SessionID             string `url:"sessionid"`
 		AppID                 uint32 `url:"appid"`
 		Series                int    `url:"series"`
 		TradabilityPreference int    `url:"tradability_preference"`
-	}{comm.SessionID(community.BaseURL), appID, 1, tradability}
+	}{appID, 1, tradability}
 
 	type response struct {
 		PurchaseEResult     int    `json:"purchase_eresult"`
@@ -657,10 +663,6 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 		return nil, module.ErrNotAuthenticated
 	}
 
-	req := struct {
-		SessionID string `url:"sessionid"`
-	}{comm.SessionID(community.BaseURL)}
-
 	type response struct {
 		Success   int    `json:"success"`
 		Message   string `json:"message"`
@@ -669,7 +671,8 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 		Owned     bool   `json:"owned"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, "gifts/{giftID}/validateunpack", req,
+	resp, err := community.PostForm[response](
+		ctx, comm, "gifts/{giftID}/validateunpack", nil,
 		aoni.WithVar("giftID", giftID),
 	)
 	if err != nil {
@@ -701,16 +704,13 @@ func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 		return module.ErrNotAuthenticated
 	}
 
-	req := struct {
-		SessionID string `url:"sessionid"`
-	}{comm.SessionID(community.BaseURL)}
-
 	type response struct {
 		Success int    `json:"success"`
 		Message string `json:"message"`
 	}
 
-	resp, err := community.PostForm[response](ctx, comm, "gifts/{giftID}/unpack", req,
+	resp, err := community.PostForm[response](
+		ctx, comm, "gifts/{giftID}/unpack", nil,
 		aoni.WithVar("giftID", giftID),
 	)
 	if err != nil {
@@ -743,8 +743,7 @@ func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denom
 		GooAmountIn          int    `url:"goo_amount_in"`
 		GooDenominationOut   int    `url:"goo_denomination_out"`
 		GooAmountOutExpected int    `url:"goo_amount_out_expected"`
-		SessionID            string `url:"sessionid"`
-	}{753, assetID, denomIn, qtyIn, denomOut, qtyOutExpected, comm.SessionID(community.BaseURL)}
+	}{753, assetID, denomIn, qtyIn, denomOut, qtyOutExpected}
 
 	type response struct {
 		Success int    `json:"success"`

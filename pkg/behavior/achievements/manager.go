@@ -132,6 +132,11 @@ func (m *Manager) unlockRandom(ctx context.Context, unlocked map[uint32]bool) {
 	}
 
 	r := m.config.AchievementPool[m.rng.Intn(len(m.config.AchievementPool))]
+
+	if len(r) < 2 {
+		return
+	}
+
 	id := r[0] + uint32(m.rng.Intn(int(r[1]-r[0]+1)))
 
 	if unlocked[id] {

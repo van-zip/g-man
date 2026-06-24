@@ -171,6 +171,9 @@ type Manager struct {
 	receivedOffers map[uint64]trading.OfferState
 	lastSeenOffers map[uint64]time.Time
 
+	// Auto-cancel deduplication
+	cancellingOffers sync.Map
+
 	rateLimiter *rate.Limiter
 	trigger     chan struct{}
 	fsm         *kata.FSM[State, Event]
@@ -355,7 +358,6 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 	}
 
 	jsonObj, _ := json.Marshal(tradeOfferObj)
-	sessionID := m.community.SessionID(community.BaseURL)
 
 	type createParams struct {
 		TradeOfferAccessToken string `json:"trade_offer_access_token"`
@@ -369,16 +371,13 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 	}
 
 	payload := struct {
-		SessionID    string `url:"sessionid"`
 		ServerID     int    `url:"serverid"`
 		PartnerID    id.ID  `url:"partner"`
 		Message      string `url:"tradeoffermessage"`
 		JSON         string `url:"json_tradeoffer"`
 		CreateParams string `url:"trade_offer_create_params,omitempty"`
 		CounteredID  uint64 `url:"tradeofferid_countered,omitempty"`
-	}{
-		sessionID, 1, p.PartnerID, p.Message, string(jsonObj), paramsStr, p.CounteredID,
-	}
+	}{1, p.PartnerID, p.Message, string(jsonObj), paramsStr, p.CounteredID}
 
 	type sendResponse struct {
 		TradeOfferID string `json:"tradeofferid"`
@@ -411,7 +410,10 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 		})
 	}
 
-	id, _ := strconv.ParseUint(resp.TradeOfferID, 10, 64)
+	id, err := strconv.ParseUint(resp.TradeOfferID, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid trade offer ID in response: %w", err)
+	}
 
 	return id, nil
 }
@@ -435,17 +437,10 @@ func (m *Manager) AcceptOffer(ctx context.Context, offerID uint64) error {
 		return errors.New("trade: community client not authenticated or initialized")
 	}
 
-	sessionID := comm.SessionID(community.BaseURL)
-
 	req := struct {
-		SessionID    string `url:"sessionid"`
 		ServerID     int    `url:"serverid"`
 		TradeOfferID uint64 `url:"tradeofferid"`
-	}{
-		SessionID:    sessionID,
-		ServerID:     1,
-		TradeOfferID: offerID,
-	}
+	}{1, offerID}
 
 	type acceptResponse struct {
 		TradeID                 string `json:"tradeid"`
@@ -647,7 +642,7 @@ func (m *Manager) GetOffer(ctx context.Context, offerID uint64) (*trading.TradeO
 	return resp.Offer, nil
 }
 
-// GetPartnerInventory fetches the inventory of a trade partner for the current game (TF2).
+// GetPartnerInventory fetches the inventory of a trade partner for the configured game.
 func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*trading.Item, error) {
 	m.mu.RLock()
 	c := m.community
@@ -670,9 +665,18 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 		return nil, err
 	}
 
-	result := make([]*trading.Item, len(inv))
-	for i, it := range inv {
-		assetID, _ := strconv.ParseUint(it.Asset.AssetID, 10, 64)
+	result := make([]*trading.Item, 0, len(inv))
+	for _, it := range inv {
+		assetID, err := strconv.ParseUint(it.Asset.AssetID, 10, 64)
+		if err != nil {
+			m.Logger.Warn("Invalid asset ID in partner inventory, skipping item",
+				log.String("asset_id", it.Asset.AssetID),
+				log.Err(err),
+			)
+
+			continue
+		}
+
 		classID, _ := strconv.ParseUint(it.Asset.ClassID, 10, 64)
 		instanceID, _ := strconv.ParseUint(it.Asset.InstanceID, 10, 64)
 		amount, _ := strconv.ParseInt(it.Asset.Amount, 10, 64)
@@ -701,9 +705,9 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 			}
 		}
 
-		result[i] = &trading.Item{
-			AppID:          440,
-			ContextID:      2,
+		result = append(result, &trading.Item{
+			AppID:          m.config.AppID,
+			ContextID:      m.config.ContextID,
 			AssetID:        assetID,
 			ClassID:        classID,
 			InstanceID:     instanceID,
@@ -713,7 +717,7 @@ func (m *Manager) GetPartnerInventory(ctx context.Context, partnerID id.ID) ([]*
 			Tradable:       it.Description.Tradable == 1,
 			Descriptions:   descs,
 			Tags:           tags,
-		}
+		})
 	}
 
 	_ = m.enrichItemsDescriptions(ctx, result)
@@ -872,12 +876,18 @@ func (m *Manager) doPoll(ctx context.Context) {
 			for _, off := range activeSent {
 				age := time.Since(off.UpdatedAt())
 				if age >= m.config.CancelTime {
+					if _, loaded := m.cancellingOffers.LoadOrStore(off.ID, true); loaded {
+						continue
+					}
+
 					m.Logger.Info("Auto-cancelling active sent offer due to CancelTime timeout",
 						log.Uint64("offer_id", off.ID),
 						log.Duration("age", age),
 					)
 
 					go func(id uint64) {
+						defer m.cancellingOffers.Delete(id)
+
 						if err := m.CancelOffer(ctx, id); err != nil {
 							m.Logger.Error("Failed to auto-cancel offer", log.Uint64("offer_id", id), log.Err(err))
 						}
@@ -901,17 +911,25 @@ func (m *Manager) doPoll(ctx context.Context) {
 			}
 
 			if oldest != nil {
-				m.Logger.Info("Auto-cancelling oldest active sent offer due to limit",
-					log.Uint64("offer_id", oldest.ID),
-					log.Int("active_count", len(activeSent)),
-					log.Int("limit", m.config.CancelOfferCount),
-				)
+				if _, loaded := m.cancellingOffers.LoadOrStore(oldest.ID, true); !loaded {
+					m.Logger.Info("Auto-cancelling oldest active sent offer due to limit",
+						log.Uint64("offer_id", oldest.ID),
+						log.Int("active_count", len(activeSent)),
+						log.Int("limit", m.config.CancelOfferCount),
+					)
 
-				go func(id uint64) {
-					if err := m.CancelOffer(ctx, id); err != nil {
-						m.Logger.Error("Failed to auto-cancel oldest offer", log.Uint64("offer_id", id), log.Err(err))
-					}
-				}(oldest.ID)
+					go func(id uint64) {
+						defer m.cancellingOffers.Delete(id)
+
+						if err := m.CancelOffer(ctx, id); err != nil {
+							m.Logger.Error(
+								"Failed to auto-cancel oldest offer",
+								log.Uint64("offer_id", id),
+								log.Err(err),
+							)
+						}
+					}(oldest.ID)
+				}
 			}
 		}
 	}
@@ -1326,6 +1344,8 @@ func (m *Manager) enrichItemsDescriptions(ctx context.Context, items []*trading.
 	var uncachedKeys []descKey
 	for _, k := range missingKeys {
 		if desc, ok := m.descCache.Get(k); ok {
+			resolvedDescs[k] = desc
+		} else if desc, ok := m.descCache.Get(descKey{ClassID: k.ClassID, InstanceID: 0}); ok {
 			resolvedDescs[k] = desc
 		} else {
 			uncachedKeys = append(uncachedKeys, k)

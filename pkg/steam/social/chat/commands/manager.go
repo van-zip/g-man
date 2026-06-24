@@ -17,7 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/lemon4ksan/miyako/sync/limiter"
 	"golang.org/x/time/rate"
 
 	"github.com/lemon4ksan/g-man/pkg/command"
@@ -138,8 +140,7 @@ type Manager struct {
 	trusted   map[uint64]bool
 
 	// Per-user rate limiting
-	limiterMu sync.RWMutex
-	limiters  map[uint64]*rate.Limiter
+	limiter *limiter.KeyedLimiter[uint64]
 }
 
 // NewManager creates a new instance of the command manager.
@@ -157,10 +158,10 @@ func NewManager() *Manager {
 	})
 
 	return &Manager{
-		Base:     module.New(ModuleName),
-		engine:   engine,
-		trusted:  make(map[uint64]bool),
-		limiters: make(map[uint64]*rate.Limiter),
+		Base:    module.New(ModuleName),
+		engine:  engine,
+		trusted: make(map[uint64]bool),
+		limiter: limiter.NewKeyedLimiter[uint64](rate.Limit(2), 5, 1*time.Hour),
 	}
 }
 
@@ -367,6 +368,11 @@ func (m *Manager) GetCommand(cmd string) (Command, bool) {
 	}, true
 }
 
+// Close closes the rate limiter and performs any necessary cleanup.
+func (m *Manager) Close() error {
+	return m.limiter.Close()
+}
+
 // eventLoop handles event-driven command parsing by subscribing to chat.MessageEvent.
 func (m *Manager) eventLoop(ctx context.Context) {
 	sub := m.Bus.Subscribe(&chat.MessageEvent{})
@@ -411,13 +417,14 @@ func (m *Manager) eventLoop(ctx context.Context) {
 
 			// Apply per-user rate limiting (bypass for trusted administrators)
 			if !trusted {
-				limiter := m.getLimiter(mev.SenderID)
-				if !limiter.Allow() {
+				allowed, err := m.limiter.Allow(mev.SenderID)
+				if err != nil || !allowed {
 					m.Logger.WarnContext(
 						mev.Context(),
-						"Rate limit exceeded for user",
+						"Rate limit exceeded or error occurred for user",
 						log.String("command", cmdName),
 						log.Uint64("sender", mev.SenderID),
+						log.Err(err),
 					)
 
 					if m.chat != nil {
@@ -554,30 +561,6 @@ type helpInfo struct {
 	ArgsSchema  []ArgSchema
 	Description string
 	Aliases     []string
-}
-
-// getLimiter retrieves or creates a per-user rate limiter.
-func (m *Manager) getLimiter(senderID uint64) *rate.Limiter {
-	m.limiterMu.RLock()
-	limiter, exists := m.limiters[senderID]
-	m.limiterMu.RUnlock()
-
-	if exists {
-		return limiter
-	}
-
-	m.limiterMu.Lock()
-	defer m.limiterMu.Unlock()
-
-	// Double-check under write lock
-	limiter, exists = m.limiters[senderID]
-	if !exists {
-		// Default: 2 tokens per second, with a burst buffer of 5
-		limiter = rate.NewLimiter(rate.Limit(2), 5)
-		m.limiters[senderID] = limiter
-	}
-
-	return limiter
 }
 
 func parseCommandLine(line string) []string {

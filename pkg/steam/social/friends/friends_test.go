@@ -262,7 +262,7 @@ func TestManager_AcceptFriendRequestWeb(t *testing.T) {
 
 		params := comm.GetLastCallParams()
 		assert.Equal(t, "1", params.Get("accept_invite"))
-		assert.Equal(t, comm.MockSessionID, params.Get("sessionID"))
+		assert.Equal(t, comm.MockSessionID, params.Get("sessionid"))
 		assert.Equal(t, FriendID1.String(), params.Get("steamid"))
 	})
 
@@ -308,7 +308,7 @@ func TestManager_BlockCommunication(t *testing.T) {
 		require.NoError(t, err)
 
 		params := comm.GetLastCallParams()
-		assert.Equal(t, comm.MockSessionID, params.Get("sessionID"))
+		assert.Equal(t, comm.MockSessionID, params.Get("sessionid"))
 		assert.Equal(t, FriendID1.String(), params.Get("steamid"))
 	})
 

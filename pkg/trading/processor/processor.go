@@ -7,6 +7,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/lemon4ksan/miyako/generic"
@@ -50,6 +51,9 @@ type Processor struct {
 	// Tracking busy items using striped per-key locking
 	itemLocks *keylock.KeyMutex[uint64]
 	busyItems map[uint64]uint64 // assetID -> offerID
+
+	// Deduplication: prevents the same offer from being enqueued twice
+	processing sync.Map
 }
 
 // New creates a new Processor instance with the provided execution, decision,
@@ -87,11 +91,24 @@ func (p *Processor) Start(ctx context.Context) {
 // Enqueue adds the trade offer to the internal queue for sequential processing.
 //
 // If the internal queue buffer is full, writing to the queue blocks the caller.
+// Duplicate offers (same ID) are silently ignored.
 func (p *Processor) Enqueue(offer *trading.TradeOffer) {
-	p.queue <- offer
+	if _, loaded := p.processing.LoadOrStore(offer.ID, true); loaded {
+		return
+	}
+
+	select {
+	case p.queue <- offer:
+		p.logger.Debug("Offer enqueued for processing", log.Uint64("offerID", offer.ID))
+	default:
+		p.logger.Warn("Offer queue full, dropping offer", log.Uint64("offerID", offer.ID))
+		p.processing.Delete(offer.ID)
+	}
 }
 
 func (p *Processor) handleOffer(ctx context.Context, offer *trading.TradeOffer) {
+	defer p.processing.Delete(offer.ID)
+
 	start := time.Now()
 
 	// Generate a unique CorrelationID for this trade offer reasoning execution

@@ -384,6 +384,9 @@ func (a *Authenticator) LogOn(ctx context.Context, details *LogOnDetails, server
 
 	if resultErr == nil {
 		_ = a.fsm.Transition(context.Background(), EventSuccess)
+
+		details.Wipe()
+
 		return nil
 	}
 

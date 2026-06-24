@@ -128,6 +128,14 @@ func (l *LogOnDetails) Validate() error {
 	return nil
 }
 
+// Wipe clears sensitive fields from the LogOnDetails to prevent credentials
+// from lingering in memory after authentication is complete.
+func (l *LogOnDetails) Wipe() {
+	l.Password = ""
+	l.AuthCode = ""
+	l.TwoFactorCode = ""
+}
+
 // NewLogOnDetails creates a new structure with default fields.
 func NewLogOnDetails(account, password string) *LogOnDetails {
 	hostname, err := os.Hostname()

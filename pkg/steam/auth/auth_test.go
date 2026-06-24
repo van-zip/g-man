@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/miyako/bus"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/protobuf/proto"
@@ -476,4 +477,60 @@ func (m *MockStore) GetMachineID(ctx context.Context, a string) ([]byte, error) 
 
 func (m *MockStore) Clear(ctx context.Context, a string) error {
 	return m.Called(ctx, a).Error(0)
+}
+
+func TestLogOnDetails_Wipe(t *testing.T) {
+	details := &LogOnDetails{
+		AccountName:   "testuser",
+		Password:      "secretpassword",
+		RefreshToken:  "refresh_token_123",
+		AccessToken:   "access_token_456",
+		AuthCode:      "ABC123",
+		TwoFactorCode: "123456",
+		SteamID:       76561198000000001,
+	}
+
+	details.Wipe()
+
+	if details.Password != "" {
+		t.Errorf("expected Password to be empty after Wipe(), got %q", details.Password)
+	}
+
+	if details.AuthCode != "" {
+		t.Errorf("expected AuthCode to be empty after Wipe(), got %q", details.AuthCode)
+	}
+
+	if details.TwoFactorCode != "" {
+		t.Errorf("expected TwoFactorCode to be empty after Wipe(), got %q", details.TwoFactorCode)
+	}
+
+	if details.AccountName != "testuser" {
+		t.Errorf("expected AccountName to be preserved, got %q", details.AccountName)
+	}
+
+	if details.RefreshToken != "refresh_token_123" {
+		t.Errorf("expected RefreshToken to be preserved, got %q", details.RefreshToken)
+	}
+
+	if details.AccessToken != "access_token_456" {
+		t.Errorf("expected AccessToken to be preserved, got %q", details.AccessToken)
+	}
+
+	if details.SteamID != 76561198000000001 {
+		t.Errorf("expected SteamID to be preserved, got %d", details.SteamID)
+	}
+}
+
+func TestLogOnDetails_Wipe_EmptyFields(t *testing.T) {
+	details := &LogOnDetails{
+		AccountName: "testuser",
+	}
+
+	assert.NotPanics(t, func() {
+		details.Wipe()
+	})
+
+	if details.Password != "" {
+		t.Errorf("expected Password to remain empty, got %q", details.Password)
+	}
 }

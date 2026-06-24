@@ -141,10 +141,7 @@ func TestProcessor_SequentialExecution(t *testing.T) {
 
 	proc := New(executor, eng, notifMgr, reviewer, logger)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	proc.Start(ctx)
+	proc.Start(t.Context())
 
 	offer1 := &trading.TradeOffer{
 		ID:           1,
@@ -472,4 +469,84 @@ func TestProcessor_TransportTypePropagation(t *testing.T) {
 	transport, ok := protocol.GetTransportType(capturedCtx)
 	assert.True(t, ok)
 	assert.Equal(t, protocol.TransportWebAPI, transport)
+}
+
+func TestProcessor_Deduplication(t *testing.T) {
+	logger := log.New(log.DefaultConfig(log.LevelError))
+	executor := &mockExecutor{}
+
+	reviewChat := &mockReviewChat{}
+	notifChat := &mockNotifChat{reviewChat: reviewChat}
+	cfg := &mockConfigProvider{}
+	notifMgr := notifications.NewManager(notifChat, cfg, logger)
+	schema := &mockSchemaProvider{}
+	reviewer := review.New(schema, reviewChat, logger)
+
+	eng := engine.New()
+	eng.Use(func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			ctx.Accept(reason.AcceptDonation)
+			return nil
+		}
+	})
+
+	proc := New(executor, eng, notifMgr, reviewer, logger)
+
+	proc.Start(t.Context())
+
+	offer := &trading.TradeOffer{
+		ID:           12345,
+		OtherSteamID: id.ID(76561198000000001),
+		ItemsToGive: []*trading.Item{
+			{AssetID: 100, SKU: "5021;6"},
+		},
+	}
+
+	proc.Enqueue(offer)
+	proc.Enqueue(offer)
+	proc.Enqueue(offer)
+
+	time.Sleep(200 * time.Millisecond)
+
+	executor.mu.Lock()
+	assert.Equal(t, 1, len(executor.acceptedIDs), "offer should be processed only once")
+	executor.mu.Unlock()
+}
+
+func TestProcessor_QueueOverflow(t *testing.T) {
+	logger := log.New(log.DefaultConfig(log.LevelError))
+	executor := &mockExecutor{}
+
+	reviewChat := &mockReviewChat{}
+	notifChat := &mockNotifChat{reviewChat: reviewChat}
+	cfg := &mockConfigProvider{}
+	notifMgr := notifications.NewManager(notifChat, cfg, logger)
+	schema := &mockSchemaProvider{}
+	reviewer := review.New(schema, reviewChat, logger)
+
+	eng := engine.New()
+	eng.Use(func(next engine.Handler) engine.Handler {
+		return func(ctx *engine.TradeContext) error {
+			time.Sleep(100 * time.Millisecond)
+			ctx.Accept(reason.AcceptDonation)
+			return nil
+		}
+	})
+
+	proc := New(executor, eng, notifMgr, reviewer, logger)
+
+	proc.Start(t.Context())
+
+	for i := uint64(1); i <= 150; i++ {
+		proc.Enqueue(&trading.TradeOffer{
+			ID:           i,
+			OtherSteamID: id.ID(76561198000000000 + i),
+		})
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	executor.mu.Lock()
+	assert.LessOrEqual(t, len(executor.acceptedIDs), 100, "should not process more than queue capacity")
+	executor.mu.Unlock()
 }

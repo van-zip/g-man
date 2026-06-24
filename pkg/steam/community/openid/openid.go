@@ -105,7 +105,7 @@ func Login(ctx context.Context, targetURL string, steamCookies []*http.Cookie) (
 		}
 	}
 
-	_, err = aoni.PostForm[url.Values, aoni.NoResponse](
+	_, err = aoni.PostForm[aoni.NoResponse](
 		ctx, client, postURL, formData,
 		aoni.WithHeader("Referer", currentURL.String()),
 	)

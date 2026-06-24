@@ -156,7 +156,9 @@ func TestMarket_CancelSellOrder(t *testing.T) {
 
 	listingID := uint64(888888)
 	expectedPath := "https://steamcommunity.com/market/removelisting/888888"
-	mockComm.SetJSONResponse(expectedPath, http.StatusOK, struct{}{})
+	mockComm.SetJSONResponse(expectedPath, http.StatusOK, struct {
+		Success bool `json:"success"`
+	}{Success: true})
 
 	err := m.CancelSellOrder(t.Context(), listingID)
 	if err != nil {

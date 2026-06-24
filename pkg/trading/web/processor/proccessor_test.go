@@ -269,7 +269,11 @@ func TestProcessor_CounterAction(t *testing.T) {
 	p := New(mockMgr, mockBp, mockHdl, WithLogger(nil))
 	p.Start(context.Background())
 
-	p.Enqueue(&trading.TradeOffer{ID: 555, OtherSteamID: 12345})
+	p.Enqueue(&trading.TradeOffer{
+		ID:           555,
+		OtherSteamID: 12345,
+		ItemsToGive:  []*trading.Item{{AssetID: 100}},
+	})
 
 	waitForCondition(func() bool {
 		mockMgr.mu.Lock()
@@ -283,6 +287,15 @@ func TestProcessor_CounterAction(t *testing.T) {
 
 	if mockMgr.lastParams.Token != "xyz" {
 		t.Errorf("expected Token to be xyz, got %s", mockMgr.lastParams.Token)
+	}
+
+	lockCalls, unlockCalls := mockBp.GetCalls()
+	if lockCalls != 1 {
+		t.Errorf("expected LockItems to be called once, got %d", lockCalls)
+	}
+
+	if unlockCalls != 1 {
+		t.Errorf("expected UnlockItems to be called once after counter-offer, got %d", unlockCalls)
 	}
 }
 

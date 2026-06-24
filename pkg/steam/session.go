@@ -92,6 +92,10 @@ type SessionManager struct {
 
 	refreshSF *generic.SingleFlight[struct{}]
 
+	// Stored credentials for auto-reconnect
+	logonDetails *auth.LogOnDetails
+	logonServer  socket.CMServer
+
 	enrichedAccount string
 	enrichedSteamID id.ID
 }
@@ -175,6 +179,12 @@ func (c *SessionManager) LogOn(
 ) error {
 	c.enrichLogger(details.AccountName, details.SteamID)
 
+	// Store credentials for auto-reconnect
+	c.mu.Lock()
+	c.logonDetails = details
+	c.logonServer = server
+	c.mu.Unlock()
+
 	if err := c.auth.LogOn(ctx, details, server); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
@@ -217,6 +227,29 @@ func (c *SessionManager) LogOn(
 	c.mu.Unlock()
 
 	return nil
+}
+
+// Reconnect attempts to re-authenticate with Steam using stored credentials.
+// It is called automatically when the session is lost.
+func (c *SessionManager) Reconnect(ctx context.Context) error {
+	c.mu.RLock()
+	details := c.logonDetails
+	server := c.logonServer
+	c.mu.RUnlock()
+
+	if details == nil {
+		return errors.New("no stored credentials for reconnection")
+	}
+
+	c.getLogger().Info("Attempting automatic reconnection...")
+
+	// Clear web session state
+	c.mu.Lock()
+	c.web = nil
+	c.community = nil
+	c.mu.Unlock()
+
+	return c.LogOn(ctx, server, details)
 }
 
 // IsAuthenticated reports whether the current session is authenticated.
@@ -305,15 +338,19 @@ func (c *SessionManager) StartRefreshLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			goto shutdown
 		case <-c.verifyTicker.C:
-			if c.web != nil && c.web.IsAuthenticated() {
-				go func() {
-					isAlive, _ := c.web.Verify(ctx)
+			c.mu.RLock()
+			web := c.web
+			c.mu.RUnlock()
+
+			if web != nil && web.IsAuthenticated() {
+				go func(w WebSession) {
+					isAlive, _ := w.Verify(ctx)
 					if !isAlive && ctx.Err() == nil {
 						if err := c.Refresh(ctx); err != nil {
 							c.getLogger().Warn("Periodic session refresh failed", log.Err(err))
 						}
 					}
-				}()
+				}(web)
 			}
 		}
 	}

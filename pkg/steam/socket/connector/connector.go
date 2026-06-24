@@ -121,9 +121,10 @@ type ReconnectPolicy struct {
 }
 
 // DefaultReconnectPolicy provides a standard exponential backoff strategy.
+// MaxAttempts=0 means unlimited retries for 24/7 operation.
 func DefaultReconnectPolicy() ReconnectPolicy {
 	return ReconnectPolicy{
-		MaxAttempts:    10,
+		MaxAttempts:    0,
 		InitialBackoff: 1 * time.Second,
 		MaxBackoff:     30 * time.Second,
 		BackoffFactor:  2.0,
@@ -382,6 +383,7 @@ func (c *Connector) handleDisconnect(closedConn network.Connection) {
 }
 
 // reconnectLoop manages exponential backoff and server selection during outages.
+// MaxAttempts=0 means unlimited retries.
 func (c *Connector) reconnectLoop(ctx context.Context) {
 	c.mu.RLock()
 	policy := c.cfg.ReconnectPolicy
@@ -391,7 +393,7 @@ func (c *Connector) reconnectLoop(ctx context.Context) {
 
 	c.getLogger().Info("Reconnection loop started")
 
-	for att := 1; att <= policy.MaxAttempts; att++ {
+	for att := 1; policy.MaxAttempts == 0 || att <= policy.MaxAttempts; att++ {
 		select {
 		case <-ctx.Done():
 			return

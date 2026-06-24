@@ -153,7 +153,7 @@ func (m *Manager) Run(ctx context.Context) error {
 
 			if trigger {
 				// Proactively resolve confirmations
-				m.resolveConfirmations(ctx)
+				go m.resolveConfirmations(ctx)
 			}
 		}
 	}

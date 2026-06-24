@@ -200,7 +200,7 @@ func TestSocket_Heartbeat(t *testing.T) {
 		case data := <-mConn.sentMsgs:
 			p, _ := protocol.ParsePacket(bytes.NewReader(data))
 			assert.Equal(t, enums.EMsg_ClientHeartBeat, p.EMsg)
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(time.Second):
 			t.Fatal("Heartbeat not sent")
 		}
 

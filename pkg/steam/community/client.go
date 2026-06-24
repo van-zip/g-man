@@ -146,28 +146,23 @@ func (c *Client) Request(
 
 	resp, err := c.restClient.Request(ctx, method, path, mods...)
 	if err != nil {
+		if strings.Contains(err.Error(), "session expired") || strings.Contains(err.Error(), "redirect") {
+			c.logger.Warn("Session expired during redirect loop, triggering auto-refresh")
+
+			return nil, service.NewSteamAPIError(
+				"session expired during redirect loop",
+				http.StatusFound,
+				service.ErrSessionExpired,
+			)
+		}
+
 		return nil, err
 	}
 
-	var mBody interface{ Reset() }
-
-	curr := io.Closer(resp.Body)
-	for {
-		if rb, ok := curr.(interface{ Reset() }); ok {
-			mBody = rb
-			break
-		}
-
-		u, ok := curr.(interface{ Unwrap() io.Closer })
-		if !ok {
-			break
-		}
-
-		curr = u.Unwrap()
-	}
+	mBody, hasBuf := aoni.UnwrapTo[aoni.ReplayableBody](resp.Body)
 
 	var rawBody []byte
-	if mBody != nil {
+	if hasBuf {
 		limitReader := io.LimitReader(resp.Body, 100*1024)
 
 		rawBody, err = io.ReadAll(limitReader)
@@ -190,7 +185,7 @@ func (c *Client) Request(
 
 	if err := checkSteamErrors(resp.StatusCode, resp.Header, rawBody); err != nil {
 		_ = resp.Body.Close()
-		return resp, err
+		return nil, err
 	}
 
 	return resp, nil
@@ -456,10 +451,21 @@ func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	}
 
 	if statusCode >= http.StatusBadRequest {
-		return service.NewSteamAPIError(string(body), statusCode, nil)
+		return service.NewSteamAPIError(truncateBody(body, 500), statusCode, nil)
 	}
 
 	return nil
+}
+
+// truncateBody returns a truncated string representation of the body,
+// limited to maxLen characters to prevent leaking sensitive data in errors.
+func truncateBody(body []byte, maxLen int) string {
+	s := string(body)
+	if len(s) > maxLen {
+		return s[:maxLen] + "...[truncated]"
+	}
+
+	return s
 }
 
 type decoratedRequester struct {

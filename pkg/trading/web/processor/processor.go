@@ -216,10 +216,11 @@ func (p *Processor) processSingleOffer(ctx context.Context, off *trading.TradeOf
 		}
 	}
 
-	if decision.Action == trading.ActionDecline || decision.Action == trading.ActionSkip {
+	if decision.Action == trading.ActionDecline || decision.Action == trading.ActionSkip ||
+		decision.Action == trading.ActionCounter {
 		if len(ourItemIDs) > 0 {
 			p.backpack.UnlockItems(ourItemIDs)
-			l.Debug("Unlocked our items after decline/skip")
+			l.Debug("Unlocked our items after decline/skip/counter")
 		}
 	}
 

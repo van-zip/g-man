@@ -13,7 +13,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -202,23 +201,32 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 		customURL = *settings.CustomURL
 	}
 
-	form := url.Values{
-		"sessionID":       {client.SessionID(community.BaseURL)},
-		"type":            {"profileSave"},
-		"weblink_1_title": {""},
-		"weblink_1_url":   {""},
-		"weblink_2_title": {""},
-		"weblink_2_url":   {""},
-		"weblink_3_title": {""},
-		"weblink_3_url":   {""},
-		"personaName":     {name},
-		"real_name":       {realName},
-		"summary":         {summary},
-		"country":         {country},
-		"state":           {state},
-		"city":            {city},
-		"customURL":       {customURL},
-		"json":            {"1"},
+	req := struct {
+		Type          string `url:"type"`
+		Weblink1Title string `url:"weblink_1_title"`
+		Weblink1URL   string `url:"weblink_1_url"`
+		Weblink2Title string `url:"weblink_2_title"`
+		Weblink2URL   string `url:"weblink_2_url"`
+		Weblink3Title string `url:"weblink_3_title"`
+		Weblink3URL   string `url:"weblink_3_url"`
+		PersonaName   string `url:"personaName"`
+		RealName      string `url:"real_name"`
+		Summary       string `url:"summary"`
+		Country       string `url:"country"`
+		State         string `url:"state"`
+		City          string `url:"city"`
+		CustomURL     string `url:"customURL"`
+		JSON          int    `url:"json"`
+	}{
+		Type:        "profileSave",
+		PersonaName: name,
+		RealName:    realName,
+		Summary:     summary,
+		Country:     country,
+		State:       state,
+		City:        city,
+		CustomURL:   customURL,
+		JSON:        1,
 	}
 
 	type saveResponse struct {
@@ -227,7 +235,7 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 	}
 
 	resp, err := community.PostForm[saveResponse](
-		ctx, client, "profiles/{steamID}/edit", form,
+		ctx, client, "profiles/{steamID}/edit", req,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -336,10 +344,9 @@ func UpdatePrivacySettings(
 	}
 
 	form := struct {
-		SessionID          string `url:"sessionid"`
 		Privacy            string `url:"Privacy"`
 		ECommentPermission int    `url:"eCommentPermission"`
-	}{client.SessionID(community.BaseURL), string(privacyJSON), comments}
+	}{string(privacyJSON), comments}
 
 	type privacyResponse struct {
 		Success int `json:"success"`
@@ -403,7 +410,7 @@ func UploadAvatar(
 		Hash    string `json:"hash"`
 	}
 
-	resp, err := aoni.PostJSON[io.Reader, upload](
+	resp, err := aoni.PostJSON[upload](
 		ctx, client, "actions/FileUploader", nil,
 		WithAvatarUpload(fields, filename, image),
 		aoni.WithHeader("Accept", "application/json, text/javascript; q=0.01"),

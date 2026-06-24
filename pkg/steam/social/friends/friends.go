@@ -461,17 +461,16 @@ func (m *Manager) AcceptFriendRequestWeb(ctx context.Context, steamID id.ID) err
 		return errors.New("friends: community requester is not initialized")
 	}
 
-	form := url.Values{
-		"accept_invite": {"1"},
-		"sessionID":     {comm.SessionID(community.BaseURL)},
-		"steamid":       {strconv.FormatUint(uint64(steamID), 10)},
-	}
+	req := struct {
+		AcceptInvite int   `url:"accept_invite"`
+		SteamID      id.ID `url:"steamid"`
+	}{1, steamID}
 
 	type webResponse struct {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[webResponse](ctx, comm, "actions/AddFriendAjax", form)
+	resp, err := community.PostForm[webResponse](ctx, comm, "actions/AddFriendAjax", req)
 	if err != nil {
 		return fmt.Errorf("friends: web accept request failed: %w", err)
 	}
@@ -495,16 +494,15 @@ func (m *Manager) BlockCommunication(ctx context.Context, steamID id.ID) error {
 		return errors.New("friends: community requester is not initialized")
 	}
 
-	form := url.Values{
-		"sessionID": {comm.SessionID(community.BaseURL)},
-		"steamid":   {strconv.FormatUint(uint64(steamID), 10)},
-	}
+	req := struct {
+		SteamID id.ID `url:"steamid"`
+	}{steamID}
 
 	type webResponse struct {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[webResponse](ctx, comm, "actions/BlockUserAjax", form)
+	resp, err := community.PostForm[webResponse](ctx, comm, "actions/BlockUserAjax", req)
 	if err != nil {
 		return fmt.Errorf("friends: block user request failed: %w", err)
 	}
@@ -568,11 +566,10 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 		return "", errors.New("friends: community requester is not initialized")
 	}
 
-	form := url.Values{
-		"comment":   {message},
-		"count":     {"1"},
-		"sessionid": {comm.SessionID(community.BaseURL)},
-	}
+	req := struct {
+		Comment string `url:"comment"`
+		Count   int    `url:"count"`
+	}{message, 1}
 
 	type postCommentResponse struct {
 		Success      bool   `json:"success"`
@@ -581,7 +578,7 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 	}
 
 	resp, err := community.PostForm[postCommentResponse](ctx, comm,
-		"comment/Profile/post/{steamID}/-1", form,
+		"comment/Profile/post/{steamID}/-1", req,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -633,13 +630,12 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 		return errors.New("friends: community requester is not initialized")
 	}
 
-	form := url.Values{
-		"gidcomment": {commentID},
-		"start":      {"0"},
-		"count":      {"1"},
-		"sessionid":  {comm.SessionID(community.BaseURL)},
-		"feature2":   {"-1"},
-	}
+	req := struct {
+		GIDComment string `url:"gidcomment"`
+		Start      int    `url:"start"`
+		Count      int    `url:"count"`
+		Feature2   int    `url:"feature2"`
+	}{commentID, 0, 1, -1}
 
 	type deleteCommentResponse struct {
 		Success      bool   `json:"success"`
@@ -648,7 +644,7 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 	}
 
 	resp, err := community.PostForm[deleteCommentResponse](ctx, comm,
-		"comment/Profile/delete/{steamID}/-1", form,
+		"comment/Profile/delete/{steamID}/-1", req,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -684,12 +680,11 @@ func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, cou
 		return nil, 0, errors.New("friends: community requester is not initialized")
 	}
 
-	form := url.Values{
-		"start":     {strconv.Itoa(start)},
-		"count":     {strconv.Itoa(count)},
-		"feature2":  {"-1"},
-		"sessionid": {comm.SessionID(community.BaseURL)},
-	}
+	req := struct {
+		Start    int `url:"start"`
+		Count    int `url:"count"`
+		Feature2 int `url:"feature2"`
+	}{start, count, -1}
 
 	type renderCommentsResponse struct {
 		Success      bool   `json:"success"`
@@ -699,7 +694,7 @@ func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, cou
 	}
 
 	resp, err := community.PostForm[renderCommentsResponse](ctx, comm,
-		"comment/Profile/render/{steamID}/-1", form,
+		"comment/Profile/render/{steamID}/-1", req,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {

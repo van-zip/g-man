@@ -14,7 +14,6 @@ import (
 	"github.com/lemon4ksan/miyako/bus"
 	"github.com/lemon4ksan/miyako/generic"
 	"github.com/lemon4ksan/miyako/kata"
-	"github.com/lemon4ksan/miyako/sync/spinlock"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
@@ -180,7 +179,7 @@ type Base struct {
 	// Deps is a list of names of other modules that this module depends on.
 	Deps []string
 
-	mu *spinlock.SpinLock
+	mu *sync.Mutex
 }
 
 // New creates a new Base module with the given name.
@@ -198,7 +197,7 @@ func New(name string) Base {
 		Logger:  log.Discard,
 		Fsm:     fsm,
 		Wg:      new(sync.WaitGroup),
-		mu:      new(spinlock.SpinLock),
+		mu:      new(sync.Mutex),
 	}
 }
 
@@ -243,7 +242,7 @@ func (b *Base) Init(ctx InitContext) error {
 	}
 
 	if b.mu == nil {
-		b.mu = new(spinlock.SpinLock)
+		b.mu = new(sync.Mutex)
 	}
 
 	b.mu.Lock()
@@ -304,7 +303,7 @@ func (b *Base) Go(fn func(ctx context.Context)) {
 	}
 
 	if b.mu == nil {
-		b.mu = new(spinlock.SpinLock)
+		b.mu = new(sync.Mutex)
 	}
 
 	b.mu.Lock()

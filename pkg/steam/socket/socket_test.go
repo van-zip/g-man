@@ -49,7 +49,10 @@ func (m *mockConnection) Send(_ context.Context, d []byte) error {
 		return m.sendErr
 	}
 
-	m.sentMsgs <- d
+	cp := make([]byte, len(d))
+	copy(cp, d)
+
+	m.sentMsgs <- cp
 
 	return nil
 }
@@ -67,7 +70,7 @@ func setupMockSocket(t *testing.T) (*Socket, *mockConnection) {
 		},
 	}
 
-	s := NewSocket(cfg, log.Discard)
+	s := New(cfg, log.Discard)
 	t.Cleanup(func() { s.Close() })
 
 	return s, mConn

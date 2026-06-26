@@ -90,15 +90,15 @@ func SetupProxyClient(logger log.Logger, cmProxy string, webProxies []string) (*
 	chainedDoer := aoni.Chain(stickyRotator, log.LoggingMiddleware(logger), retryMiddleware)
 
 	// Initialize the final REST client that will make the calls
-	httpClient := aoni.NewClient(chainedDoer)
+	restClient := aoni.NewClient(chainedDoer)
 
 	// PART 3: Initialize the main Steam client
 	clientCfg := steam.DefaultConfig()
 	clientCfg.Socket = socketCfg
-	clientCfg.HTTP = chainedDoer // Our custom transport for all background HTTP tasks
-	clientCfg.REST = httpClient
+	// clientCfg.HTTP = chainedDoer // Our custom transport for all background HTTP tasks
+	// clientCfg.REST = restClient
 
-	client, err := steam.NewClient(clientCfg, steam.WithLogger(logger))
+	client, err := steam.NewClient(clientCfg, steam.WithLogger(logger), steam.WithREST(restClient))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create steam client: %w", err)
 	}

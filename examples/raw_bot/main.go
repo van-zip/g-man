@@ -113,22 +113,20 @@ func main() {
 
 	logger.Info("Starting G-man Generic Raw Trading Bot Example...")
 
-	// 1. Initialize the behavior orchestrator to manage background tasks
+	// Initialize the behavior orchestrator to manage background tasks
 	orchBus := bus.New()
 	orchestrator := behavior.NewOrchestrator(orchBus, logger)
-
-	// 2. Configure the Steam Client with necessary modules
-	cfg := steam.DefaultConfig()
-	cfg.Storage = jsonStorage
-	cfg.Bus = orchBus
 
 	// Setup Steam Guard configuration for automatic mobile confirmations
 	sharedSecret := os.Getenv("STEAM_SHARED_SECRET")
 	identitySecret := os.Getenv("STEAM_IDENTITY_SECRET")
 	deviceID := os.Getenv("STEAM_DEVICE_ID")
 
-	client, err := steam.NewClient(cfg,
+	client, err := steam.NewClient(
+		steam.DefaultConfig(),
 		steam.WithLogger(logger),
+		steam.WithStorage(jsonStorage),
+		steam.WithBus(orchBus),
 		apps.WithModule(),
 		gc.WithModule(),
 		guard.WithModule(guard.DefaultGuardConfig(sharedSecret, identitySecret, deviceID)),
@@ -253,9 +251,7 @@ func main() {
 	loginCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	dir := directory.New(client.Service())
-
-	server, err := dir.GetOptimalCMServer(loginCtx)
+	server, err := directory.New(client).GetOptimalCMServer(loginCtx)
 	if err != nil {
 		logger.Error("Failed to fetch CM server list", log.Err(err))
 		return

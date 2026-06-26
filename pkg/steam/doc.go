@@ -31,15 +31,14 @@
 //	)
 //
 //	func main() {
-//		ctx := context.Background()
+//		// Set up signal handling to gracefully shut down on interrupt
+//		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+//		defer cancel()
+//
 //		logger := log.New(log.DefaultConfig(log.LevelInfo))
 //
-//		// Build the standard configuration
-//		cfg := steam.DefaultConfig()
-//		cfg.Storage = memory.New()
-//
 //		// Create a new Steam client
-//		client, err := steam.NewClient(cfg, steam.WithLogger(logger))
+//		client, err := steam.NewClient(steam.DefaultConfig(), steam.WithLogger(logger))
 //		if err != nil {
 //			fmt.Println("Failed to create client:", err)
 //			return
@@ -51,5 +50,8 @@
 //			fmt.Println("Failed to run client:", err)
 //			return
 //		}
+//
+//		// Wait until the client is fully closed
+//		client.Wait()
 //	}
 package steam

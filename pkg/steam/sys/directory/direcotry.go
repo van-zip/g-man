@@ -19,19 +19,19 @@ import (
 // CMServer represents a Steam Connection Manager server endpoint with load metrics.
 type CMServer struct {
 	// Endpoint is the primary host and port address of the server.
-	Endpoint string
+	Endpoint string `json:"endpoint"`
 	// LegacyEndpoint is an alternative port or address format for older client protocols.
-	LegacyEndpoint string
+	LegacyEndpoint string `json:"legacy_endpoint"`
 	// Type defines the protocol transport type (such as "tcp" or "websockets").
-	Type string
+	Type string `json:"type"`
 	// DC is the data center identifier.
-	DC string
+	DC string `json:"dc"`
 	// Realm is the Steam server realm (such as "steamglobal").
-	Realm string
+	Realm string `json:"realm"`
 	// Load is the server load metric reported by Steam.
-	Load int
+	Load int `json:"load"`
 	// WtdLoad is the weighted load metric calculated by Steam.
-	WtdLoad float64
+	WtdLoad float64 `json:"wtd_load"`
 }
 
 // CMCfg holds parameters for filtering the CM server list.

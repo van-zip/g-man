@@ -22,7 +22,6 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 	"github.com/lemon4ksan/g-man/pkg/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
-	"github.com/lemon4ksan/g-man/pkg/steam/socket"
 	"github.com/lemon4ksan/g-man/pkg/steam/sys/directory"
 	"github.com/lemon4ksan/g-man/pkg/storage"
 	"github.com/lemon4ksan/g-man/pkg/storage/jsonfile"
@@ -58,17 +57,15 @@ type Bot struct {
 // NewBot creates and initializes a new bot instance using the provided configuration
 // and injected storage and logger dependencies.
 func NewBot(cfg Config, store storage.Provider, logger log.Logger) (*Bot, error) {
-	clientCfg := steam.DefaultConfig()
-	clientCfg.Storage = store
-
 	logger = logger.With(log.Module("bot"))
 
 	opts := []steam.Option{
 		steam.WithLogger(logger),
+		steam.WithStorage(store),
 		guard.WithModule(guard.DefaultGuardConfig(cfg.SharedSecret, cfg.IdentitySecret, cfg.DeviceID)),
 	}
 
-	client, err := steam.NewClient(clientCfg, opts...)
+	client, err := steam.NewClient(steam.DefaultConfig(), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("steam client initialization failed: %w", err)
 	}
@@ -92,7 +89,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		return fmt.Errorf("client run failed: %w", err)
 	}
 
-	server, err := b.discoverCMServer(ctx)
+	server, err := directory.New(b.client).GetOptimalCMServer(ctx)
 	if err != nil {
 		return fmt.Errorf("cm discovery failed: %w", err)
 	}
@@ -155,16 +152,6 @@ func (b *Bot) Close() {
 	}
 
 	b.logger.Info("Bot shut down successfully")
-}
-
-func (b *Bot) discoverCMServer(ctx context.Context) (socket.CMServer, error) {
-	dirCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	b.logger.Info("Discovering optimal Steam Connection Manager server...")
-	dir := directory.New(b.client.Service())
-
-	return dir.GetOptimalCMServer(dirCtx)
 }
 
 func (b *Bot) setupOrchestrator() {

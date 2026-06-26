@@ -115,7 +115,7 @@ func DefaultConfig() Config {
 //
 // It orchestrates the raw connection lifecycle via [connector.Connector], concurrent packet parsing
 // via [processor.Processor], and packet routing via [dispatcher.Dispatcher].
-// Create new instances of Socket using the [NewSocket] constructor.
+// Create new instances of Socket using the [New] constructor.
 type Socket struct {
 	cfg    Config
 	mu     sync.RWMutex
@@ -133,8 +133,8 @@ type Socket struct {
 	heartbeatCancel context.CancelFunc
 }
 
-// NewSocket initializes a new Steam Socket facade.
-func NewSocket(cfg Config, logger log.Logger) *Socket {
+// New initializes a new Steam Socket facade.
+func New(cfg Config, logger log.Logger) *Socket {
 	s := &Socket{
 		cfg:     cfg,
 		logger:  logger.With(log.Module("sock")),

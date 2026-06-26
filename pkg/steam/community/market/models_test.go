@@ -15,6 +15,8 @@ import (
 )
 
 func TestAsset_UnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
 	jsonData := `{
 		"appid": 730,
 		"contextid": "2",
@@ -31,7 +33,6 @@ func TestAsset_UnmarshalJSON(t *testing.T) {
 	err := json.Unmarshal([]byte(jsonData), &asset)
 	require.NoError(t, err)
 
-	// Verify conversions worked
 	assert.Equal(t, 730, asset.AppID)
 	assert.Equal(t, int64(2), int64(asset.ContextID))
 	assert.Equal(t, uint64(123456789), uint64(asset.ID))
@@ -42,8 +43,11 @@ func TestAsset_UnmarshalJSON(t *testing.T) {
 }
 
 func TestGraphPoints_UnmarshalJSON(t *testing.T) {
-	t.Run("Valid Data", func(t *testing.T) {
-		// Steam returns graph points as [price, volume, "description"]
+	t.Parallel()
+
+	t.Run("valid_data", func(t *testing.T) {
+		t.Parallel()
+
 		data := []byte(`[[10.5, 5, "5 sold at $10.50"], [11.0, 2, "2 sold at $11.00"]]`)
 
 		var gp GraphPoints
@@ -57,8 +61,9 @@ func TestGraphPoints_UnmarshalJSON(t *testing.T) {
 		assert.Equal(t, "5 sold at $10.50", gp[0].Description)
 	})
 
-	t.Run("Invalid Nested Length", func(t *testing.T) {
-		// One point only has 2 elements instead of 3, should be skipped per logic
+	t.Run("invalid_nested_length", func(t *testing.T) {
+		t.Parallel()
+
 		data := []byte(`[[10.5, 5, "desc"], [11.0, 2]]`)
 
 		var gp GraphPoints
@@ -66,27 +71,30 @@ func TestGraphPoints_UnmarshalJSON(t *testing.T) {
 		err := json.Unmarshal(data, &gp)
 		require.NoError(t, err)
 		assert.Len(t, gp, 2)
-		assert.Equal(t, 0.0, gp[1].Price) // Second element was "continued" and remains default
+		assert.Equal(t, 0.0, gp[1].Price)
 	})
 
-	t.Run("Malformed JSON", func(t *testing.T) {
+	t.Run("malformed_json", func(t *testing.T) {
+		t.Parallel()
+
 		var gp GraphPoints
 
 		err := json.Unmarshal([]byte(`{ "not": "an array" }`), &gp)
-		require.Error(t, err)
+		assert.Error(t, err)
 	})
 }
 
 func TestPriceSample_UnmarshalJSON(t *testing.T) {
-	t.Run("Valid Steam Format", func(t *testing.T) {
-		// Layout: "Jan 02 2006 15:04:05 GMT-0700" (29 chars)
-		// Slice: timeStr[:len-6]
-		// Required input length: 29 + 6 = 35 chars
-		timePart := "Jan 02 2026 15:04:05 GMT+0000" // 29 chars
-		padding := " +0000"                         // 6 chars (including leading space)
-		input := timePart + padding                 // Exactly 35 chars
+	t.Parallel()
 
-		data := []byte(fmt.Sprintf(`["%s", 12.34, "500"]`, input))
+	t.Run("valid_steam_format", func(t *testing.T) {
+		t.Parallel()
+
+		timePart := "Jan 02 2026 15:04:05 GMT+0000"
+		padding := " +0000"
+		input := timePart + padding
+
+		data := fmt.Appendf(nil, `["%s", 12.34, "500"]`, input)
 
 		var ps PriceSample
 
@@ -100,55 +108,53 @@ func TestPriceSample_UnmarshalJSON(t *testing.T) {
 		assert.True(t, ps.Timestamp.Equal(expected))
 	})
 
-	t.Run("Array Unmarshal Error", func(t *testing.T) {
-		var ps PriceSample
+	t.Run("unmarshal_errors", func(t *testing.T) {
+		t.Parallel()
 
-		err := json.Unmarshal([]byte(`{"not": "an array"}`), &ps)
-		require.Error(t, err)
-	})
+		const validTimeStr = "Jan 02 2026 15:04:05 GMT+0000 +0000"
 
-	t.Run("Timestamp Type Error", func(t *testing.T) {
-		var ps PriceSample
+		tests := []struct {
+			name string
+			data []byte
+		}{
+			{
+				name: "array_unmarshal_error",
+				data: []byte(`{"not": "an array"}`),
+			},
+			{
+				name: "timestamp_type_error",
+				data: []byte(`[123, 1.0, "1"]`),
+			},
+			{
+				name: "price_type_error",
+				data: fmt.Appendf(nil, `["%s", "not-a-float", "1"]`, validTimeStr),
+			},
+			{
+				name: "volume_type_error",
+				data: fmt.Appendf(nil, `["%s", 1.0, 123]`, validTimeStr),
+			},
+			{
+				name: "invalid_time_format",
+				data: fmt.Appendf(nil, `["%s", 1.0, "1"]`, "Invalid Date String Length 35!!!!"),
+			},
+		}
 
-		err := json.Unmarshal([]byte(`[123, 1.0, "1"]`), &ps)
-		require.Error(t, err)
-	})
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-	t.Run("Price Type Error", func(t *testing.T) {
-		// We use a valid timestamp but a string for price where a float is expected
-		timePart := "Jan 02 2026 15:04:05 GMT+0000 +0000"
-		data := []byte(fmt.Sprintf(`["%s", "not-a-float", "1"]`, timePart))
+				var ps PriceSample
 
-		var ps PriceSample
-
-		err := json.Unmarshal(data, &ps)
-		require.Error(t, err)
-	})
-
-	t.Run("Volume Type Error", func(t *testing.T) {
-		timePart := "Jan 02 2026 15:04:05 GMT+0000 +0000"
-		data := []byte(fmt.Sprintf(`["%s", 1.0, 123]`, timePart)) // 123 is int, expected string
-
-		var ps PriceSample
-
-		err := json.Unmarshal(data, &ps)
-		require.Error(t, err)
-	})
-
-	t.Run("Invalid Time Format", func(t *testing.T) {
-		// Correct length but invalid date content
-		badTime := "Invalid Date String Length 35!!!!"
-		data := []byte(fmt.Sprintf(`["%s", 1.0, "1"]`, badTime))
-
-		var ps PriceSample
-
-		err := json.Unmarshal(data, &ps)
-		require.Error(t, err)
+				err := json.Unmarshal(tt.data, &ps)
+				assert.Error(t, err)
+			})
+		}
 	})
 }
 
 func TestBuyOrderResponse_Unmarshal(t *testing.T) {
-	// Tests the struct tag `buy_orderid,string`
+	t.Parallel()
+
 	data := []byte(`{"success": true, "buy_orderid": "987654321"}`)
 
 	var resp CreateBuyOrderResponse
@@ -160,6 +166,8 @@ func TestBuyOrderResponse_Unmarshal(t *testing.T) {
 }
 
 func TestItemOrdersHistogramResponse_Unmarshal(t *testing.T) {
+	t.Parallel()
+
 	data := []byte(`{
 		"success": 1,
 		"sell_order_graph": [[100.0, 1, "1 unit"]]

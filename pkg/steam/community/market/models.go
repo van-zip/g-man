@@ -548,3 +548,49 @@ type GiftDetails struct {
 	// Owned is true if the user already owns the target package.
 	Owned bool
 }
+
+type gemValueResponse struct {
+	Success  int    `json:"success"`
+	Message  string `json:"message"`
+	GooValue string `json:"goo_value"`
+	StrTitle string `json:"strTitle"`
+}
+
+type grindGooResponse struct {
+	Success          int    `json:"success"`
+	Message          string `json:"message"`
+	GooValueReceived string `json:"goo_value_received "` // lol valve
+	GooValueTotal    string `json:"goo_value_total"`
+}
+
+type unpackBoosterResponse struct {
+	Success int    `json:"success"`
+	Message string `json:"message"`
+	RgItems []any  `json:"rgItems"`
+}
+
+type createBoosterResponse struct {
+	PurchaseEResult     int    `json:"purchase_eresult"`
+	GooAmount           string `json:"goo_amount"`
+	TradableGooAmount   string `json:"tradable_goo_amount"`
+	UntradableGooAmount string `json:"untradable_goo_amount"`
+	PurchaseResult      any    `json:"purchase_result"`
+}
+
+type giftDetailsResponse struct {
+	Success   int    `json:"success"`
+	Message   string `json:"message"`
+	PackageID string `json:"packageid"`
+	GiftName  string `json:"gift_name"`
+	Owned     bool   `json:"owned"`
+}
+
+type redeemGiftResponse struct {
+	Success int    `json:"success"`
+	Message string `json:"message"`
+}
+
+type gemExchangeResponse struct {
+	Success int    `json:"success"`
+	Message string `json:"message"`
+}

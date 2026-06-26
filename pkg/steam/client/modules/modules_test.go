@@ -91,7 +91,20 @@ func (sp *mockStateProvider) IsAuthorized() bool {
 	return sp.authed
 }
 
-func TestNew(t *testing.T) {
+// newTestManager is a helper to construct a Manager with standard test dependencies.
+func newTestManager(t *testing.T, sp modules.StateProvider) (*modules.Manager, module.InitContext, module.AuthContext) {
+	t.Helper()
+
+	initCtx := steammock.NewInitContext()
+	authCtx := steammock.NewAuthContext(id.ID(12345))
+	m := modules.New(sp, initCtx, authCtx)
+
+	return m, initCtx, authCtx
+}
+
+func TestNew_ValidInputs_CreatesManagerWithCorrectFields(t *testing.T) {
+	t.Parallel()
+
 	stateProv := &mockStateProvider{}
 	initCtx := steammock.NewInitContext()
 	authCtx := steammock.NewAuthContext(id.ID(12345))
@@ -106,10 +119,10 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, authCtx, m.AuthCtx())
 }
 
-func TestManager_Get(t *testing.T) {
-	initCtx := steammock.NewInitContext()
-	authCtx := steammock.NewAuthContext(id.ID(12345))
-	m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+func TestManager_Get_ExistingAndNonExistent_ReturnsExpectedModule(t *testing.T) {
+	t.Parallel()
+
+	m, _, _ := newTestManager(t, &mockStateProvider{})
 	mod := &testModule{name: "mod1"}
 
 	err := m.Add(mod)
@@ -119,10 +132,10 @@ func TestManager_Get(t *testing.T) {
 	assert.Nil(t, m.Get("non-existent"))
 }
 
-func TestManager_Add_And_All(t *testing.T) {
-	initCtx := steammock.NewInitContext()
-	authCtx := steammock.NewAuthContext(id.ID(12345))
-	m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+func TestManager_Add_MultipleModules_ManagesDuplicatesAndReturnsAll(t *testing.T) {
+	t.Parallel()
+
+	m, _, _ := newTestManager(t, &mockStateProvider{})
 
 	mod1 := &testModule{name: "mod1"}
 	mod2 := &testModule{name: "mod2"}
@@ -147,12 +160,12 @@ func TestManager_Add_And_All(t *testing.T) {
 	assert.Contains(t, all, module.Module(mod2))
 }
 
-func TestManager_Register(t *testing.T) {
-	initCtx := steammock.NewInitContext()
-	authCtx := steammock.NewAuthContext(id.ID(12345))
+func TestManager_Register_VariousStates_HandlesLifecycle(t *testing.T) {
+	t.Parallel()
 
-	t.Run("Already registered", func(t *testing.T) {
-		m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+	t.Run("already_registered", func(t *testing.T) {
+		t.Parallel()
+		m, _, _ := newTestManager(t, &mockStateProvider{})
 		mod := &testModule{name: "mod1"}
 
 		err := m.Add(mod)
@@ -162,9 +175,11 @@ func TestManager_Register(t *testing.T) {
 		assert.ErrorIs(t, err, modules.ErrDuplicate)
 	})
 
-	t.Run("Not running and not authorized", func(t *testing.T) {
+	t.Run("not_running_and_not_authorized", func(t *testing.T) {
+		t.Parallel()
+
 		sp := &mockStateProvider{running: false, authed: false}
-		m := modules.New(sp, initCtx, authCtx)
+		m, _, _ := newTestManager(t, sp)
 
 		initCalled := false
 		startCalled := false
@@ -186,15 +201,18 @@ func TestManager_Register(t *testing.T) {
 		assert.False(t, startCalled)
 	})
 
-	t.Run("Running and authorized", func(t *testing.T) {
-		sp := &mockStateProvider{running: true, authed: true}
-		m := modules.New(sp, initCtx, authCtx)
+	t.Run("running_and_authorized", func(t *testing.T) {
+		t.Parallel()
 
-		var initCalledWith module.InitContext
+		sp := &mockStateProvider{running: true, authed: true}
+		m, initCtx, authCtx := newTestManager(t, sp)
+
+		var (
+			initCalledWith        module.InitContext
+			startAuthedCalledWith module.AuthContext
+		)
 
 		startCalled := false
-
-		var startAuthedCalledWith module.AuthContext
 
 		mod := &testAuthModule{
 			testModule: testModule{
@@ -221,9 +239,11 @@ func TestManager_Register(t *testing.T) {
 		assert.Equal(t, authCtx, startAuthedCalledWith)
 	})
 
-	t.Run("Running but init fails", func(t *testing.T) {
+	t.Run("running_but_init_fails", func(t *testing.T) {
+		t.Parallel()
+
 		sp := &mockStateProvider{running: true, authed: false}
-		m := modules.New(sp, initCtx, authCtx)
+		m, _, _ := newTestManager(t, sp)
 
 		errFailed := errors.New("init-failed")
 		mod := &testModule{
@@ -242,9 +262,11 @@ func TestManager_Register(t *testing.T) {
 		assert.ErrorIs(t, errFailed, modErr.Err)
 	})
 
-	t.Run("Running but start fails", func(t *testing.T) {
+	t.Run("running_but_start_fails", func(t *testing.T) {
+		t.Parallel()
+
 		sp := &mockStateProvider{running: true, authed: false}
-		m := modules.New(sp, initCtx, authCtx)
+		m, _, _ := newTestManager(t, sp)
 
 		errFailed := errors.New("start-failed")
 		mod := &testModule{
@@ -266,9 +288,11 @@ func TestManager_Register(t *testing.T) {
 		assert.ErrorIs(t, errFailed, modErr.Err)
 	})
 
-	t.Run("Authorized but start authed fails", func(t *testing.T) {
+	t.Run("authorized_but_start_authed_fails", func(t *testing.T) {
+		t.Parallel()
+
 		sp := &mockStateProvider{running: false, authed: true}
-		m := modules.New(sp, initCtx, authCtx)
+		m, _, _ := newTestManager(t, sp)
 
 		errFailed := errors.New("auth-failed")
 		mod := &testAuthModule{
@@ -290,8 +314,12 @@ func TestManager_Register(t *testing.T) {
 	})
 }
 
-func TestManager_LifecycleAll(t *testing.T) {
-	t.Run("Lazy init orchestrator on all", func(t *testing.T) {
+func TestManager_LifecycleAll_VariousScenarios_RunsCorrectly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lazy_init_orchestrator_on_all", func(t *testing.T) {
+		t.Parallel()
+
 		m1 := modules.New(nil, nil, nil)
 		err := m1.InitAll(t.Context())
 		assert.NoError(t, err)
@@ -308,10 +336,9 @@ func TestManager_LifecycleAll(t *testing.T) {
 		assert.NotNil(t, m3.Orchestrator())
 	})
 
-	t.Run("Delegation and success", func(t *testing.T) {
-		initCtx := steammock.NewInitContext()
-		authCtx := steammock.NewAuthContext(id.ID(12345))
-		m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+	t.Run("delegation_and_success", func(t *testing.T) {
+		t.Parallel()
+		m, _, _ := newTestManager(t, &mockStateProvider{})
 
 		initCalled := false
 		startCalled := false
@@ -351,12 +378,10 @@ func TestManager_LifecycleAll(t *testing.T) {
 		assert.True(t, closeCalled)
 	})
 
-	t.Run("Error propagation", func(t *testing.T) {
-		initCtx := steammock.NewInitContext()
-		authCtx := steammock.NewAuthContext(id.ID(12345))
-
-		mInit := modules.New(&mockStateProvider{}, initCtx, authCtx)
-		mInit.Add(&testModule{
+	t.Run("error_propagation", func(t *testing.T) {
+		t.Parallel()
+		mInit, _, _ := newTestManager(t, &mockStateProvider{})
+		_ = mInit.Add(&testModule{
 			name: "mod-fail",
 			initFunc: func(ctx module.InitContext) error {
 				return errors.New("init-fail")
@@ -365,8 +390,8 @@ func TestManager_LifecycleAll(t *testing.T) {
 		err := mInit.InitAll(t.Context())
 		assert.Error(t, err)
 
-		mStart := modules.New(&mockStateProvider{}, initCtx, authCtx)
-		mStart.Add(&testModule{
+		mStart, _, _ := newTestManager(t, &mockStateProvider{})
+		_ = mStart.Add(&testModule{
 			name: "mod-fail",
 			startFunc: func(ctx context.Context) error {
 				return errors.New("start-fail")
@@ -377,8 +402,8 @@ func TestManager_LifecycleAll(t *testing.T) {
 		err = mStart.StartAll(t.Context())
 		assert.Error(t, err)
 
-		mStop := modules.New(&mockStateProvider{}, initCtx, authCtx)
-		mStop.Add(&testCloserModule{
+		mStop, _, _ := newTestManager(t, &mockStateProvider{})
+		_ = mStop.Add(&testCloserModule{
 			testModule: testModule{name: "mod-fail"},
 			closeFunc: func() error {
 				return errors.New("close-fail")
@@ -393,21 +418,22 @@ func TestManager_LifecycleAll(t *testing.T) {
 	})
 }
 
-func TestManager_StartAuthedAll(t *testing.T) {
-	initCtx := steammock.NewInitContext()
-	authCtx := steammock.NewAuthContext(id.ID(12345))
+func TestManager_StartAuthedAll_VariousScenarios_RunsExpected(t *testing.T) {
+	t.Parallel()
 
-	t.Run("No auth modules", func(t *testing.T) {
-		m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+	t.Run("no_auth_modules", func(t *testing.T) {
+		t.Parallel()
+		m, _, _ := newTestManager(t, &mockStateProvider{})
 		mod := &testModule{name: "mod1"}
-		m.Add(mod)
+		_ = m.Add(mod)
 
 		err := m.StartAuthedAll(t.Context())
 		assert.NoError(t, err)
 	})
 
-	t.Run("With auth modules - success", func(t *testing.T) {
-		m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+	t.Run("with_auth_modules_success", func(t *testing.T) {
+		t.Parallel()
+		m, _, authCtx := newTestManager(t, &mockStateProvider{})
 
 		called := false
 		mod := &testAuthModule{
@@ -420,15 +446,16 @@ func TestManager_StartAuthedAll(t *testing.T) {
 				return nil
 			},
 		}
-		m.Add(mod)
+		_ = m.Add(mod)
 
 		err := m.StartAuthedAll(t.Context())
 		assert.NoError(t, err)
 		assert.True(t, called)
 	})
 
-	t.Run("With auth modules - failure", func(t *testing.T) {
-		m := modules.New(&mockStateProvider{}, initCtx, authCtx)
+	t.Run("with_auth_modules_failure", func(t *testing.T) {
+		t.Parallel()
+		m, _, _ := newTestManager(t, &mockStateProvider{})
 
 		errFailed := errors.New("auth-fail")
 
@@ -438,7 +465,7 @@ func TestManager_StartAuthedAll(t *testing.T) {
 				return errFailed
 			},
 		}
-		m.Add(mod)
+		_ = m.Add(mod)
 
 		err := m.StartAuthedAll(t.Context())
 
@@ -450,20 +477,28 @@ func TestManager_StartAuthedAll(t *testing.T) {
 	})
 }
 
-func TestModuleAdapter(t *testing.T) {
-	t.Run("Name", func(t *testing.T) {
+func TestModuleAdapter_VariousStates_HandlesLifecycle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("name", func(t *testing.T) {
+		t.Parallel()
+
 		mod := &testModule{name: "adapter-test"}
 		adapter := &modules.ModuleAdapter{Mod: mod}
 		assert.Equal(t, "adapter-test", adapter.Name())
 	})
 
-	t.Run("Dependencies - non-dependent", func(t *testing.T) {
+	t.Run("dependencies_non_dependent", func(t *testing.T) {
+		t.Parallel()
+
 		mod := &testModule{name: "non-dep"}
 		adapter := &modules.ModuleAdapter{Mod: mod}
 		assert.Nil(t, adapter.Dependencies())
 	})
 
-	t.Run("Dependencies - dependent", func(t *testing.T) {
+	t.Run("dependencies_dependent", func(t *testing.T) {
+		t.Parallel()
+
 		mod := &testDependentModule{
 			testModule:   testModule{name: "dep"},
 			dependencies: []string{"dep1", "dep2"},
@@ -472,7 +507,9 @@ func TestModuleAdapter(t *testing.T) {
 		assert.Equal(t, []string{"dep1", "dep2"}, adapter.Dependencies())
 	})
 
-	t.Run("Init", func(t *testing.T) {
+	t.Run("init", func(t *testing.T) {
+		t.Parallel()
+
 		initCtx := steammock.NewInitContext()
 
 		var calledWith module.InitContext
@@ -490,7 +527,9 @@ func TestModuleAdapter(t *testing.T) {
 		assert.Equal(t, initCtx, calledWith)
 	})
 
-	t.Run("Start and Stop - closer module", func(t *testing.T) {
+	t.Run("start_and_stop_closer_module", func(t *testing.T) {
+		t.Parallel()
+
 		startCalled := false
 
 		var startCtx context.Context
@@ -522,7 +561,9 @@ func TestModuleAdapter(t *testing.T) {
 		assert.ErrorIs(t, startCtx.Err(), context.Canceled)
 	})
 
-	t.Run("Stop - non-closer module and no cancel", func(t *testing.T) {
+	t.Run("stop_non_closer_module_and_no_cancel", func(t *testing.T) {
+		t.Parallel()
+
 		mod := &testModule{name: "non-closer"}
 		adapter := &modules.ModuleAdapter{Mod: mod}
 

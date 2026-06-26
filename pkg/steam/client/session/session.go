@@ -97,18 +97,11 @@ type SocketProvider interface {
 	Close() error
 }
 
-// CommunityProvider defines the contract for interacting with Steam Community pages.
-type CommunityProvider interface {
-	community.Requester
-	// GetOrRegisterAPIKey retrieves the Steam WebAPI key, registering one for the domain if none exists.
-	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
-}
-
 // WebSessionFactory constructs a custom [WebSessionProvider] instance.
 type WebSessionFactory func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) WebSessionProvider
 
 // CommunityClientFactory constructs a custom [CommunityProvider] instance.
-type CommunityClientFactory func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) CommunityProvider
+type CommunityClientFactory func(httpClient *http.Client, sess community.SessionProvider, logger log.Logger) community.Requester
 
 // Config decouples configuration for [Session] from global client parameters.
 // Use [Config.ResolveDefaults] to initialize default fallback values.
@@ -181,8 +174,8 @@ func (cfg *Config) ResolveDefaults() {
 	}
 
 	if cfg.CommunityFactory == nil {
-		cfg.CommunityFactory = func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) CommunityProvider {
-			return community.NewClient(httpClient, sessionID, community.WithLogger(logger))
+		cfg.CommunityFactory = func(httpClient *http.Client, sess community.SessionProvider, logger log.Logger) community.Requester {
+			return community.NewClient(httpClient, sess, community.WithLogger(logger))
 		}
 	}
 }
@@ -195,7 +188,7 @@ type Session struct {
 
 	auth      AuthenticatorProvider
 	web       WebSessionProvider
-	community CommunityProvider
+	community community.Requester
 	socket    SocketProvider
 	logger    log.Logger
 	storage   storage.Provider
@@ -321,7 +314,7 @@ func (c *Session) Community() community.Requester {
 		web := c.Web()
 		c.mu.Lock()
 		if c.community == nil {
-			c.community = c.communityFactory(web.HTTP(), web.SessionID, c.logger)
+			c.community = c.communityFactory(web.HTTP(), web, c.logger)
 		}
 
 		comm = c.community
@@ -459,12 +452,7 @@ func (c *Session) GetOrRegisterAPIKey(ctx context.Context, name string) (string,
 		return "", ErrNoCommunityClient
 	}
 
-	prov, ok := comm.(CommunityProvider)
-	if !ok {
-		return "", errors.New("session: community client does not support CommunityProvider")
-	}
-
-	apiKey, err := prov.GetOrRegisterAPIKey(ctx, name)
+	apiKey, err := comm.GetOrRegisterAPIKey(ctx, name)
 	if err != nil {
 		return "", err
 	}

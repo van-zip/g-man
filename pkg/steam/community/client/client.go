@@ -44,14 +44,22 @@ var (
 	ErrAPITokenNotFound = errors.New(
 		"community: could not find api key or registration form (account might be limited)",
 	)
+	// ErrRedirectLoop is returned when a redirect loop is detected and the session expires.
+	ErrRedirectLoop = service.NewSteamAPIError(
+		"session expired during redirect loop",
+		http.StatusFound,
+		service.ErrSessionExpired,
+	)
 )
 
 // Requester defines the requirements for making Community requests.
-// It embeds [aoni.Requester] and adds Steam session management.
+// It embeds [aoni.Requester], adds Steam session management, and WebAPI key registration.
 type Requester interface {
 	aoni.Requester
 	// SessionID returns the current Steam session identifier for the given base URL.
 	SessionID(baseURL string) string
+	// GetOrRegisterAPIKey checks for the presence of a WebAPI key or registers a new one.
+	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
 }
 
 // SessionProvider defines how the community client retrieves active Steam session IDs.
@@ -59,7 +67,7 @@ type SessionProvider interface {
 	SessionID(baseURL string) string
 }
 
-// Option defines a functional configuration for the Client.
+// Option defines a functional configuration for the [Client].
 type Option = generic.Option[*Client]
 
 // WithLogger sets a custom logger for the client.
@@ -77,28 +85,25 @@ func WithREST(r aoni.Requester) Option {
 }
 
 // Client handles communication with Steam Community, backed by a generic REST client.
-//
-// It wraps a [aoni.Client] and automatically configures default headers such as
-// Origin and Referer, which are required by Steam. Use [New] to construct
-// new instances of the client.
+// It wraps a [aoni.Client] and automatically configures default headers like Origin and Referer.
 type Client struct {
-	restClient  aoni.Requester
-	sessionFunc func(string) string
-	logger      log.Logger
+	restClient aoni.Requester
+	session    SessionProvider
+	logger     log.Logger
 }
 
 // New creates a new Community Client.
 // It initializes a [aoni.Client] with the required default browser-like headers.
-func New(httpClient aoni.HTTPDoer, sessionFunc func(string) string, opts ...Option) *Client {
+func New(httpClient aoni.HTTPDoer, session SessionProvider, opts ...Option) *Client {
 	rc := aoni.NewClient(httpClient).
 		WithBaseURL(BaseURL).
 		WithOrigin(BaseURL).
 		WithMultiReadBody(10 * 1024 * 1024)
 
 	c := &Client{
-		restClient:  rc,
-		sessionFunc: sessionFunc,
-		logger:      log.Discard,
+		restClient: rc,
+		session:    session,
+		logger:     log.Discard,
 	}
 
 	for _, opt := range opts {
@@ -115,11 +120,11 @@ func (c *Client) Unwrap() aoni.Requester {
 
 // SessionID retrieves the session identifier for the specified URI.
 func (c *Client) SessionID(targetURI string) string {
-	if c.sessionFunc == nil {
+	if c.session == nil {
 		return ""
 	}
 
-	return c.sessionFunc(targetURI)
+	return c.session.SessionID(targetURI)
 }
 
 // Request implements [aoni.Requester]. It executes the HTTP request and deeply
@@ -136,14 +141,9 @@ func (c *Client) Request(
 
 	resp, err := c.restClient.Request(ctx, method, path, mods...)
 	if err != nil {
-		if strings.Contains(err.Error(), "session expired") || strings.Contains(err.Error(), "redirect") {
+		if IsSessionExpiredError(err) {
 			c.logger.Warn("Session expired during redirect loop, triggering auto-refresh")
-
-			return nil, service.NewSteamAPIError(
-				"session expired during redirect loop",
-				http.StatusFound,
-				service.ErrSessionExpired,
-			)
+			return nil, ErrRedirectLoop
 		}
 
 		return nil, err
@@ -173,7 +173,7 @@ func (c *Client) Request(
 		resp.Body = io.NopCloser(bytes.NewReader(rawBody))
 	}
 
-	if err := checkSteamErrors(resp.StatusCode, resp.Header, rawBody); err != nil {
+	if err := CheckSteamErrors(resp.StatusCode, resp.Header, rawBody); err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
@@ -251,7 +251,29 @@ func (c *Client) registerAPIKey(ctx context.Context, domain string) (string, err
 	return c.GetOrRegisterAPIKey(ctx, domain)
 }
 
-func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
+var (
+	patternSteamIDFalse = []byte("g_steamID = false;")
+	patternSteamIDZero  = []byte(`g_steamID = "0";`)
+	patternSignInTitle  = []byte("<title>Sign In</title>")
+)
+
+// IsSessionExpiredError returns true if the error indicates a session expired error.
+func IsSessionExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, service.ErrSessionExpired) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+
+	return strings.Contains(msg, "session expired") || strings.Contains(msg, "redirect")
+}
+
+// CheckSteamErrors checks the HTTP status code and body for Steam API errors.
+func CheckSteamErrors(statusCode int, header http.Header, body []byte) error {
 	if statusCode == http.StatusTooManyRequests {
 		return service.NewSteamAPIError("Rate limit exceeded", statusCode, service.ErrRateLimited)
 	}
@@ -274,9 +296,9 @@ func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	}
 
 	// Soft Auth Failure (Page loaded but user is guest)
-	if bytes.Contains(body, []byte("g_steamID = false;")) ||
-		bytes.Contains(body, []byte(`g_steamID = "0";`)) ||
-		bytes.Contains(body, []byte("<title>Sign In</title>")) {
+	if bytes.Contains(body, patternSteamIDFalse) ||
+		bytes.Contains(body, patternSteamIDZero) ||
+		bytes.Contains(body, patternSignInTitle) {
 		return service.NewSteamAPIError("Session expired", statusCode, service.ErrSessionExpired)
 	}
 
@@ -296,15 +318,15 @@ func checkSteamErrors(statusCode int, header http.Header, body []byte) error {
 	}
 
 	if statusCode >= http.StatusBadRequest {
-		return service.NewSteamAPIError(truncateBody(body, 500), statusCode, nil)
+		return service.NewSteamAPIError(TruncateBody(body, 500), statusCode, nil)
 	}
 
 	return nil
 }
 
-// truncateBody returns a truncated string representation of the body,
+// TruncateBody returns a truncated string representation of the body,
 // limited to maxLen characters to prevent leaking sensitive data in errors.
-func truncateBody(body []byte, maxLen int) string {
+func TruncateBody(body []byte, maxLen int) string {
 	s := string(body)
 	if len(s) > maxLen {
 		return s[:maxLen] + "...[truncated]"

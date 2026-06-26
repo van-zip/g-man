@@ -44,6 +44,8 @@ type ServiceMock struct {
 	OnRest      func(method, path string, body any) (*http.Response, error)
 	OnSessionID func(string) string
 
+	OnGetOrRegisterAPIKey func(ctx context.Context, domain string) (string, error)
+
 	ResponseErr  error
 	ResponseErrs map[string]error
 
@@ -153,6 +155,14 @@ func (m *ServiceMock) Request(
 		Header:     respData.Header,
 		Request:    dummyReq2,
 	}, nil
+}
+
+// GetOrRegisterAPIKey checks for the presence of a WebAPI key or registers a new one.
+func (m *ServiceMock) GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error) {
+	if m.OnGetOrRegisterAPIKey != nil {
+		return m.OnGetOrRegisterAPIKey(ctx, domain)
+	}
+	return "", nil
 }
 
 func (m *ServiceMock) SessionID(targetURI string) string {

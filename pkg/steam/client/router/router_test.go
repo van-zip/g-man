@@ -63,7 +63,27 @@ type testSocketTarget struct {
 	tr.SocketTarget
 }
 
-func TestNew(t *testing.T) {
+// newMockedRouter is a helper to construct a Router with pre-configured mock components.
+func newMockedRouter(
+	t *testing.T,
+	connected bool,
+) (*ServiceRouter, *testSessionRefresher, *testStateProvider, *testTransport, *testTransport) {
+	t.Helper()
+
+	state := &testStateProvider{connected: connected}
+	unifiedTrans := &testTransport{}
+	socketTrans := &testTransport{}
+
+	refresher := &testSessionRefresher{}
+
+	router := New(refresher, state)
+
+	return router, refresher, state, unifiedTrans, socketTrans
+}
+
+func TestNew_ValidInputs_InitializesCorrectly(t *testing.T) {
+	t.Parallel()
+
 	refresher := &testSessionRefresher{}
 	state := &testStateProvider{}
 
@@ -74,7 +94,9 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, state, router.state)
 }
 
-func TestServiceRouter_SetRouteMatcher(t *testing.T) {
+func TestServiceRouter_SetRouteMatcher_CustomMatcher_AppliesCorrectly(t *testing.T) {
+	t.Parallel()
+
 	router := New(&testSessionRefresher{}, &testStateProvider{})
 
 	router.SetRouteMatcher(nil)
@@ -91,56 +113,65 @@ func TestServiceRouter_SetRouteMatcher(t *testing.T) {
 	assert.True(t, customCalled)
 }
 
-func TestServiceRouter_DefaultRouteMatcher(t *testing.T) {
-	state := &testStateProvider{}
-	router := New(&testSessionRefresher{}, state)
+func TestServiceRouter_DefaultRouteMatcher_VariousStates_SelectsCorrectTransport(t *testing.T) {
+	t.Parallel()
 
-	reqSocket := tr.NewRequest(&testSocketTarget{}, nil)
-	reqWeb := tr.NewRequest(&testTarget{}, nil)
+	tests := []struct {
+		name      string
+		connected bool
+		target    tr.Target
+		want      TransportType
+	}{
+		{
+			name:      "socket_target_connected",
+			connected: true,
+			target:    &testSocketTarget{},
+			want:      TransportSocket,
+		},
+		{
+			name:      "socket_target_disconnected",
+			connected: false,
+			target:    &testSocketTarget{},
+			want:      TransportWebAPI,
+		},
+		{
+			name:      "web_target_connected",
+			connected: true,
+			target:    &testTarget{},
+			want:      TransportWebAPI,
+		},
+		{
+			name:      "web_target_disconnected",
+			connected: false,
+			target:    &testTarget{},
+			want:      TransportWebAPI,
+		},
+	}
 
-	t.Run("Socket target, connected", func(t *testing.T) {
-		state.connected = true
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		assert.Equal(t, TransportSocket, router.DefaultRouteMatcher(reqSocket))
-	})
+			state := &testStateProvider{connected: tt.connected}
+			router := New(&testSessionRefresher{}, state)
+			req := tr.NewRequest(tt.target, nil)
 
-	t.Run("Socket target, disconnected", func(t *testing.T) {
-		state.connected = false
-
-		assert.Equal(t, TransportWebAPI, router.DefaultRouteMatcher(reqSocket))
-	})
-
-	t.Run("Web target, connected", func(t *testing.T) {
-		state.connected = true
-
-		assert.Equal(t, TransportWebAPI, router.DefaultRouteMatcher(reqWeb))
-	})
-
-	t.Run("Web target, disconnected", func(t *testing.T) {
-		state.connected = false
-
-		assert.Equal(t, TransportWebAPI, router.DefaultRouteMatcher(reqWeb))
-	})
+			assert.Equal(t, tt.want, router.DefaultRouteMatcher(req))
+		})
+	}
 }
 
-func TestServiceRouter_Do_TransportSelection(t *testing.T) {
-	state := &testStateProvider{}
-	unifiedTrans := &testTransport{}
-	socketTrans := &testTransport{}
+func TestServiceRouter_Do_TransportSelection_VariousStates_RoutesCorrectly(t *testing.T) {
+	t.Parallel()
 
-	unified := service.New(unifiedTrans)
-	socketAPI := service.New(socketTrans)
+	t.Run("fallback_to_http_on_disconnected", func(t *testing.T) {
+		t.Parallel()
 
-	refresher := &testSessionRefresher{}
-	refresher.On("Unified").Return(unified)
-	refresher.On("Socket").Return(socketAPI)
+		router, refresher, _, unifiedTrans, _ := newMockedRouter(t, false)
+		unified := service.New(unifiedTrans)
+		refresher.On("Unified").Return(unified)
 
-	router := New(refresher, state)
-
-	t.Run("Fallback to HTTP when socket disconnected", func(t *testing.T) {
-		state.connected = false
 		req := tr.NewRequest(&testSocketTarget{}, nil)
-
 		unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), nil).Once()
 
 		_, err := router.Do(t.Context(), req)
@@ -148,10 +179,14 @@ func TestServiceRouter_Do_TransportSelection(t *testing.T) {
 		unifiedTrans.AssertExpectations(t)
 	})
 
-	t.Run("Route to Socket when connected", func(t *testing.T) {
-		state.connected = true
-		req := tr.NewRequest(&testSocketTarget{}, nil)
+	t.Run("route_to_socket_on_connected", func(t *testing.T) {
+		t.Parallel()
 
+		router, refresher, _, _, socketTrans := newMockedRouter(t, true)
+		socketAPI := service.New(socketTrans)
+		refresher.On("Socket").Return(socketAPI)
+
+		req := tr.NewRequest(&testSocketTarget{}, nil)
 		socketTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), nil).Once()
 
 		_, err := router.Do(t.Context(), req)
@@ -160,22 +195,20 @@ func TestServiceRouter_Do_TransportSelection(t *testing.T) {
 	})
 }
 
-func TestServiceRouter_Do_SilentRefresh(t *testing.T) {
-	state := &testStateProvider{connected: false}
-	unifiedTrans := &testTransport{}
-	unified := service.New(unifiedTrans)
+func TestServiceRouter_Do_SilentRefresh_WithSessionExpiration_RefreshesAndRetries(t *testing.T) {
+	t.Parallel()
 
-	refresher := &testSessionRefresher{}
-	refresher.On("Unified").Return(unified)
+	t.Run("success_on_second_attempt", func(t *testing.T) {
+		t.Parallel()
 
-	router := New(refresher, state)
-	req := tr.NewRequest(&testTarget{}, nil)
+		router, refresher, _, unifiedTrans, _ := newMockedRouter(t, false)
+		unified := service.New(unifiedTrans)
+		refresher.On("Unified").Return(unified)
 
-	t.Run("Silent Refresh - Success on second attempt", func(t *testing.T) {
+		req := tr.NewRequest(&testTarget{}, nil)
+
 		unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), service.ErrSessionExpired).Once()
-
-		refresher.On("Refresh", t.Context()).Return(nil).Once()
-
+		refresher.On("Refresh", mock.Anything).Return(nil).Once()
 		unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), nil).Once()
 
 		_, err := router.Do(t.Context(), req)
@@ -184,10 +217,17 @@ func TestServiceRouter_Do_SilentRefresh(t *testing.T) {
 		refresher.AssertExpectations(t)
 	})
 
-	t.Run("Silent Refresh - Refresh Fails", func(t *testing.T) {
-		unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), service.ErrSessionExpired).Once()
+	t.Run("refresh_fails", func(t *testing.T) {
+		t.Parallel()
 
-		refresher.On("Refresh", t.Context()).Return(errors.New("refresh failed")).Once()
+		router, refresher, _, unifiedTrans, _ := newMockedRouter(t, false)
+		unified := service.New(unifiedTrans)
+		refresher.On("Unified").Return(unified)
+
+		req := tr.NewRequest(&testTarget{}, nil)
+
+		unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), service.ErrSessionExpired).Once()
+		refresher.On("Refresh", mock.Anything).Return(errors.New("refresh failed")).Once()
 
 		_, err := router.Do(t.Context(), req)
 		assert.ErrorContains(t, err, "router: auto-refresh failed: refresh failed")
@@ -196,17 +236,14 @@ func TestServiceRouter_Do_SilentRefresh(t *testing.T) {
 	})
 }
 
-func TestServiceRouter_Do_GenericError(t *testing.T) {
-	state := &testStateProvider{connected: false}
-	unifiedTrans := &testTransport{}
-	unified := service.New(unifiedTrans)
+func TestServiceRouter_Do_TransportError_ReturnsError(t *testing.T) {
+	t.Parallel()
 
-	refresher := &testSessionRefresher{}
+	router, refresher, _, unifiedTrans, _ := newMockedRouter(t, false)
+	unified := service.New(unifiedTrans)
 	refresher.On("Unified").Return(unified)
 
-	router := New(refresher, state)
 	req := tr.NewRequest(&testTarget{}, nil)
-
 	unifiedTrans.On("Do", mock.Anything, req).Return((*tr.Response)(nil), errors.New("network error")).Once()
 
 	_, err := router.Do(t.Context(), req)
@@ -214,28 +251,46 @@ func TestServiceRouter_Do_GenericError(t *testing.T) {
 	unifiedTrans.AssertExpectations(t)
 }
 
-func TestServiceRouter_Do_NilClient(t *testing.T) {
-	state := &testStateProvider{connected: true}
-	refresher := &testSessionRefresher{}
-	router := New(refresher, state)
+func TestServiceRouter_Do_NilClient_ReturnsNoActiveClientError(t *testing.T) {
+	t.Parallel()
 
-	t.Run("Socket client is nil", func(t *testing.T) {
-		refresher.On("Socket").Return((*service.Client)(nil)).Once()
+	tests := []struct {
+		name      string
+		connected bool
+		setupMock func(refresher *testSessionRefresher)
+		target    tr.Target
+	}{
+		{
+			name:      "socket_client_is_nil",
+			connected: true,
+			setupMock: func(r *testSessionRefresher) {
+				r.On("Socket").Return((*service.Client)(nil)).Once()
+			},
+			target: &testSocketTarget{},
+		},
+		{
+			name:      "web_api_client_is_nil",
+			connected: false,
+			setupMock: func(r *testSessionRefresher) {
+				r.On("Unified").Return((*service.Client)(nil)).Once()
+			},
+			target: &testTarget{},
+		},
+	}
 
-		req := tr.NewRequest(&testSocketTarget{}, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		_, err := router.Do(t.Context(), req)
-		assert.ErrorIs(t, err, ErrNoActiveClient)
-	})
+			router, refresher, _, _, _ := newMockedRouter(t, tt.connected)
+			if tt.setupMock != nil {
+				tt.setupMock(refresher)
+			}
 
-	t.Run("WebAPI client is nil", func(t *testing.T) {
-		state.connected = false
+			req := tr.NewRequest(tt.target, nil)
 
-		refresher.On("Unified").Return((*service.Client)(nil)).Once()
-
-		req := tr.NewRequest(&testTarget{}, nil)
-
-		_, err := router.Do(t.Context(), req)
-		assert.ErrorIs(t, err, ErrNoActiveClient)
-	})
+			_, err := router.Do(t.Context(), req)
+			assert.ErrorIs(t, err, ErrNoActiveClient)
+		})
+	}
 }

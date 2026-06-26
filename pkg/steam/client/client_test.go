@@ -42,8 +42,46 @@ type mockTarget struct {
 func (mockTarget) HTTPPath() string   { return "/test" }
 func (mockTarget) HTTPMethod() string { return "GET" }
 
-func TestConfig_ResolveDefaults(t *testing.T) {
-	t.Run("ProxyURL copied", func(t *testing.T) {
+// newMockModule is a helper to construct a generic mocked Module.
+func newMockModule(t *testing.T, name string, initErr, startErr error) *steammock.Module {
+	t.Helper()
+
+	mod := new(steammock.Module)
+	mod.On("Name").Return(name)
+	mod.On("Init", mock.Anything).Return(initErr).Once()
+
+	if initErr == nil {
+		mod.On("Start", mock.Anything).Return(startErr).Once()
+	}
+
+	return mod
+}
+
+// newMockAuthModule is a helper to construct a generic mocked AuthModule.
+func newMockAuthModule(t *testing.T, name string, initErr, startErr, startAuthedErr error) *steammock.AuthModule {
+	t.Helper()
+
+	mod := new(steammock.AuthModule)
+	mod.On("Name").Return(name)
+	mod.On("Init", mock.Anything).Return(initErr).Once()
+
+	if initErr == nil {
+		mod.On("Start", mock.Anything).Return(startErr).Once()
+
+		if startErr == nil {
+			mod.On("StartAuthed", mock.Anything, mock.Anything).Return(startAuthedErr).Once()
+		}
+	}
+
+	return mod
+}
+
+func TestConfig_ResolveDefaults_VariousScenarios_BehavesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("proxy_url_copied", func(t *testing.T) {
+		t.Parallel()
+
 		cfg := client.Config{
 			ProxyURL: "http://my-proxy",
 		}
@@ -51,7 +89,9 @@ func TestConfig_ResolveDefaults(t *testing.T) {
 		assert.Equal(t, "http://my-proxy", cfg.Socket.Connector.ProxyURL)
 	})
 
-	t.Run("ProxyURL not overwritten", func(t *testing.T) {
+	t.Run("proxy_url_not_overwritten", func(t *testing.T) {
+		t.Parallel()
+
 		cfg := client.Config{
 			ProxyURL: "http://my-proxy",
 		}
@@ -61,7 +101,9 @@ func TestConfig_ResolveDefaults(t *testing.T) {
 	})
 }
 
-func TestClient_LifecycleState(t *testing.T) {
+func TestClient_LifecycleState_StateTransitions_MatchesExpected(t *testing.T) {
+	t.Parallel()
+
 	c, _ := client.New(client.Config{})
 
 	_ = c.Run()
@@ -73,24 +115,27 @@ func TestClient_LifecycleState(t *testing.T) {
 	c.Close()
 
 	assert.Equal(t, client.StateClosed, c.State())
-	assert.ErrorIs(t, c.ConnectAndLogin(context.Background(), socket.CMServer{}, nil), module.ErrClosed)
+	assert.ErrorIs(t, c.ConnectAndLogin(t.Context(), socket.CMServer{}, nil), module.ErrClosed)
 }
 
-func TestClient_Initialization(t *testing.T) {
+func TestClient_Initialization_VariousConfigs_InitializesCorrectly(t *testing.T) {
+	t.Parallel()
+
 	assert.NotNil(t, client.DefaultConfig().Socket)
 
-	t.Run("Default Storage Assignment", func(t *testing.T) {
+	t.Run("default_storage_assignment", func(t *testing.T) {
+		t.Parallel()
+
 		c, _ := client.New(client.Config{DisableSocket: true})
 		assert.NotNil(t, c.Storage())
 		c.Close()
 	})
 
-	t.Run("Options", func(t *testing.T) {
+	t.Run("options", func(t *testing.T) {
+		t.Parallel()
+
 		l := log.Discard
-		mod := new(steammock.Module)
-		mod.On("Name").Return("opt_mod")
-		mod.On("Init", mock.Anything).Return(nil).Once()
-		mod.On("Start", mock.Anything).Return(nil).Once()
+		mod := newMockModule(t, "opt_mod", nil, nil)
 
 		c, err := client.New(client.Config{DisableSocket: true}, client.WithLogger(l), client.WithModule(mod))
 		assert.NoError(t, err)
@@ -100,105 +145,137 @@ func TestClient_Initialization(t *testing.T) {
 	})
 }
 
-func TestClient_RunFailures(t *testing.T) {
-	t.Run("Init Fails", func(t *testing.T) {
-		mod := new(steammock.Module)
-		mod.On("Name").Return("bad_init")
-		mod.On("Init", mock.Anything).Return(errors.New("init fail")).Once()
+func TestClient_Run_VariousFailures_ReturnsError(t *testing.T) {
+	t.Parallel()
 
-		client, err := client.New(client.Config{}, client.WithModule(mod))
+	t.Run("init_fails", func(t *testing.T) {
+		t.Parallel()
+		mod := newMockModule(t, "bad_init", errors.New("init fail"), nil)
+
+		clientObj, err := client.New(client.Config{}, client.WithModule(mod))
 		assert.NoError(t, err)
-		assert.NotNil(t, client)
+		assert.NotNil(t, clientObj)
 
-		err = client.Run()
+		err = clientObj.Run()
 		assert.ErrorContains(t, err, "init fail")
 	})
 
-	t.Run("Start Fails", func(t *testing.T) {
-		mod := new(steammock.Module)
-		mod.On("Name").Return("bad_start")
-		mod.On("Init", mock.Anything).Return(nil).Once()
-		mod.On("Start", mock.Anything).Return(errors.New("start fail")).Once()
+	t.Run("start_fails", func(t *testing.T) {
+		t.Parallel()
+		mod := newMockModule(t, "bad_start", nil, errors.New("start fail"))
 
-		client, err := client.New(client.Config{}, client.WithModule(mod))
+		clientObj, err := client.New(client.Config{}, client.WithModule(mod))
 		assert.NoError(t, err)
-		assert.NotNil(t, client)
+		assert.NotNil(t, clientObj)
 
-		err = client.Run()
+		err = clientObj.Run()
 		assert.ErrorContains(t, err, "start fail")
 	})
 }
 
-func TestClient_StateString(t *testing.T) {
-	assert.Equal(t, "new", client.StateNew.String())
-	assert.Equal(t, "running", client.StateRunning.String())
-	assert.Equal(t, "closed", client.StateClosed.String())
-	assert.Equal(t, "unknown", client.State(999).String())
+func TestClient_StateString_VariousStates_ReturnsExpectedString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		state client.State
+		want  string
+	}{
+		{client.StateNew, "new"},
+		{client.StateRunning, "running"},
+		{client.StateClosed, "closed"},
+		{client.State(999), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.state.String())
+		})
+	}
 }
 
-func TestClient_SteamID(t *testing.T) {
-	c, m := steammock.SetupTestClient(t)
+func TestClient_SteamID_VariousSessionStates_ReturnsExpectedSteamID(t *testing.T) {
+	t.Parallel()
 
-	t.Run("Session exists", func(t *testing.T) {
+	t.Run("session_exists", func(t *testing.T) {
+		t.Parallel()
+		c, m := steammock.SetupTestClient(t)
+
 		msess := new(steammock.Session)
 		msess.On("SteamID").Return(uint64(123456))
 		m.Sock.On("Session").Return(msess).Once()
 		assert.Equal(t, uint64(123456), c.Session().SteamID().Uint64())
 	})
 
-	t.Run("No session", func(t *testing.T) {
+	t.Run("no_session", func(t *testing.T) {
+		t.Parallel()
+		c, m := steammock.SetupTestClient(t)
+
 		m.Sock.On("Session").Return(nil).Once()
 		assert.Equal(t, uint64(0), c.Session().SteamID().Uint64())
 	})
 }
 
-func TestClient_Do_State(t *testing.T) {
+func TestClient_Do_StateNotRunning_ReturnsError(t *testing.T) {
+	t.Parallel()
+
 	c, _ := steammock.SetupTestClient(t)
 	c.ForceState(client.StateClosed)
 
-	_, err := c.Do(context.Background(), tr.NewRequest(&mockTarget{}, nil))
+	_, err := c.Do(t.Context(), tr.NewRequest(&mockTarget{}, nil))
 	assert.ErrorIs(t, err, client.ErrNotRunning)
 }
 
-func TestClient_Do(t *testing.T) {
-	c, m := steammock.SetupTestClient(t)
-	defer c.Close()
+func TestClient_Do_VariousStates_BehavesCorrectly(t *testing.T) {
+	t.Parallel()
 
-	req := tr.NewRequest(&mockTarget{}, nil)
+	t.Run("not_running", func(t *testing.T) {
+		t.Parallel()
 
-	t.Run("Not running", func(t *testing.T) {
-		_, err := c.Do(context.Background(), req)
+		c, _ := steammock.SetupTestClient(t)
+		defer c.Close()
+
+		req := tr.NewRequest(&mockTarget{}, nil)
+		_, err := c.Do(t.Context(), req)
 		assert.ErrorIs(t, err, client.ErrNotRunning)
 	})
 
-	t.Run("Running", func(t *testing.T) {
+	t.Run("running", func(t *testing.T) {
+		t.Parallel()
+
+		c, m := steammock.SetupTestClient(t)
+		defer c.Close()
+
+		req := tr.NewRequest(&mockTarget{}, nil)
+
 		c.ForceState(client.StateRunning)
 
 		m.Sock.On("IsConnected").Return(false)
 		m.Http.On("Do", mock.Anything).Return(&http.Response{StatusCode: 200}, nil).Once()
 
-		resp, err := c.Do(context.Background(), req)
+		resp, err := c.Do(t.Context(), req)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 }
 
-func TestClient_RegisterModule(t *testing.T) {
+func TestClient_RegisterModule_VariousInputs_RegistersSuccessfully(t *testing.T) {
+	t.Parallel()
+
 	c, _ := steammock.SetupTestClient(t)
 	defer c.Close()
 
 	c.RegisterModule(nil)
 
-	mod := new(steammock.AuthModule)
-	mod.On("Name").Return("mod-dup")
-	mod.On("Init", mock.Anything).Return(nil).Once()
-	mod.On("Start", mock.Anything).Return(nil).Once()
+	mod := newMockAuthModule(t, "mod-dup", nil, nil, nil)
 
 	c.RegisterModule(mod)
 	c.RegisterModule(mod)
 }
 
-func TestClient_DisableSocket(t *testing.T) {
+func TestClient_DisableSocket_SocketDisabled_ReturnsSocketDisabledError(t *testing.T) {
+	t.Parallel()
+
 	cfg := client.Config{
 		DisableSocket: true,
 	}
@@ -207,15 +284,17 @@ func TestClient_DisableSocket(t *testing.T) {
 
 	defer c.Close()
 
-	err = c.ConnectAndLogin(context.Background(), socket.CMServer{}, &auth.LogOnDetails{})
+	err = c.ConnectAndLogin(t.Context(), socket.CMServer{}, &auth.LogOnDetails{})
 	assert.ErrorIs(t, err, client.ErrSocketDisabled)
 }
 
-func TestClient_SetPersonaState(t *testing.T) {
+func TestClient_SetPersonaState_ValidState_SetsStateSuccessfully(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	m.Sock.On("SendProto", ctx, enums.EMsg_ClientChangeStatus, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -224,26 +303,36 @@ func TestClient_SetPersonaState(t *testing.T) {
 	assert.Equal(t, enums.EPersonaState_Online, c.GetPersonaState())
 }
 
-func TestClient_ConnectAndLogin_Failures(t *testing.T) {
-	c, m := steammock.SetupTestClient(t)
+func TestClient_ConnectAndLogin_VariousFailures_ReturnsExpectedError(t *testing.T) {
+	t.Parallel()
+
 	server := socket.CMServer{}
 	details := &auth.LogOnDetails{}
 
-	t.Run("Already Closed", func(t *testing.T) {
+	t.Run("already_closed", func(t *testing.T) {
+		t.Parallel()
+		c, _ := steammock.SetupTestClient(t)
 		c.ForceState(client.StateClosed)
-		err := c.ConnectAndLogin(context.Background(), server, details)
+
+		err := c.ConnectAndLogin(t.Context(), server, details)
 		assert.ErrorIs(t, err, module.ErrClosed)
 	})
 
-	c.ForceState(client.StateRunning)
+	t.Run("logon_fails", func(t *testing.T) {
+		t.Parallel()
+		c, m := steammock.SetupTestClient(t)
+		c.ForceState(client.StateRunning)
 
-	t.Run("LogOn Fails", func(t *testing.T) {
 		m.Auth.On("LogOn", mock.Anything, details, server).Return(errors.New("logon fail")).Once()
-		err := c.ConnectAndLogin(context.Background(), server, details)
+		err := c.ConnectAndLogin(t.Context(), server, details)
 		assert.ErrorContains(t, err, "logon fail")
 	})
 
-	t.Run("StartAuthedAll Fails", func(t *testing.T) {
+	t.Run("start_authed_all_fails", func(t *testing.T) {
+		t.Parallel()
+		c, m := steammock.SetupTestClient(t)
+		c.ForceState(client.StateRunning)
+
 		m.Auth.On("LogOn", mock.Anything, details, server).Return(nil).Once()
 		m.Web.On("Verify", mock.Anything).Return(true, nil)
 		m.Comm.On("GetOrRegisterAPIKey", mock.Anything, mock.Anything).Return("key_123", nil)
@@ -252,33 +341,39 @@ func TestClient_ConnectAndLogin_Failures(t *testing.T) {
 			Maybe()
 		m.Sock.On("Session").Return(nil)
 
-		mod := new(steammock.AuthModule)
-		mod.On("Name").Return("auth_mod")
-		mod.On("Init", mock.Anything).Return(nil).Once()
-		mod.On("Start", mock.Anything).Return(nil).Once()
-		mod.On("StartAuthed", mock.Anything, mock.Anything).Return(errors.New("start authed fail")).Once()
+		mod := newMockAuthModule(t, "auth_mod", nil, nil, errors.New("start authed fail"))
 
 		c.RegisterModule(mod)
 
-		err := c.ConnectAndLogin(context.Background(), server, details)
+		err := c.ConnectAndLogin(t.Context(), server, details)
 		assert.ErrorContains(t, err, "start authed fail")
 	})
 }
 
-func TestClient_ConnectAndLogin_EdgeCases(t *testing.T) {
-	c, m := steammock.SetupTestClient(t)
-	defer c.Close()
+func TestClient_ConnectAndLogin_EdgeCases_BehavesCorrectly(t *testing.T) {
+	t.Parallel()
 
-	ctx := context.Background()
 	server := socket.CMServer{Endpoint: "cm.test"}
 	details := &auth.LogOnDetails{AccountName: "acc", SteamID: 123}
 
-	t.Run("details is nil", func(t *testing.T) {
-		err := c.ConnectAndLogin(ctx, server, nil)
+	t.Run("details_is_nil", func(t *testing.T) {
+		t.Parallel()
+
+		c, _ := steammock.SetupTestClient(t)
+		defer c.Close()
+
+		err := c.ConnectAndLogin(t.Context(), server, nil)
 		assert.ErrorIs(t, err, client.ErrNilLogOnDetails)
 	})
 
-	t.Run("SetPersonaState fails", func(t *testing.T) {
+	t.Run("set_persona_state_fails", func(t *testing.T) {
+		t.Parallel()
+
+		c, m := steammock.SetupTestClient(t)
+		defer c.Close()
+
+		ctx := t.Context()
+
 		c.ForceState(client.StateRunning)
 		m.Auth.On("LogOn", ctx, details, server).Return(nil).Once()
 		m.Web.On("Verify", mock.Anything).Return(true, nil).Once()
@@ -293,11 +388,13 @@ func TestClient_ConnectAndLogin_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestClient_Reconnect_OptimalCMDiscovery_Success(t *testing.T) {
+func TestClient_Reconnect_SuccessfulDiscovery_ReconnectsSuccessfully(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	m.Sock.On("Disconnect").Return(nil).Once()
 
@@ -329,11 +426,13 @@ func TestClient_Reconnect_OptimalCMDiscovery_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestClient_Reconnect_OptimalCMDiscovery_Failure(t *testing.T) {
+func TestClient_Reconnect_DiscoveryFails_CompletesQuietly(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	details := &auth.LogOnDetails{AccountName: "acc", SteamID: 123}
 	m.Auth.On("LogOn", ctx, details, mock.Anything).Return(nil)
@@ -349,11 +448,13 @@ func TestClient_Reconnect_OptimalCMDiscovery_Failure(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestClient_Reconnect_ReconnectFailure(t *testing.T) {
+func TestClient_Reconnect_LogOnFails_ReturnsReconnectError(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	details := &auth.LogOnDetails{AccountName: "acc", SteamID: 123}
 	m.Auth.On("LogOn", ctx, details, mock.Anything).Return(nil).Once()
@@ -371,14 +472,18 @@ func TestClient_Reconnect_ReconnectFailure(t *testing.T) {
 	assert.ErrorContains(t, err, "reconnect failed")
 }
 
-func TestClient_Reconnect_Closed(t *testing.T) {
+func TestClient_Reconnect_ClientClosed_ReturnsClosedError(t *testing.T) {
+	t.Parallel()
+
 	c, _ := steammock.SetupTestClient(t)
 	c.ForceState(client.StateClosed)
-	err := c.Reconnect(context.Background())
+	err := c.Reconnect(t.Context())
 	assert.ErrorIs(t, err, module.ErrClosed)
 }
 
-func TestClient_Disconnect(t *testing.T) {
+func TestClient_Disconnect_SocketFails_ReturnsError(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 
@@ -388,9 +493,11 @@ func TestClient_Disconnect(t *testing.T) {
 	assert.ErrorContains(t, err, "disc err")
 }
 
-func TestNoopSocketProvider(t *testing.T) {
+func TestNoopSocketProvider_VariousMethods_ReturnsDisabledError(t *testing.T) {
+	t.Parallel()
+
 	p := client.NoopSocketProvider{}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	assert.False(t, p.IsConnected())
 	assert.Nil(t, p.Session())
@@ -416,7 +523,9 @@ func TestNoopSocketProvider(t *testing.T) {
 	p.UpdateServers(nil)
 }
 
-func TestInitContext(t *testing.T) {
+func TestInitContext_VariousMethods_DelegatesCorrectly(t *testing.T) {
+	t.Parallel()
+
 	c, m := steammock.SetupTestClient(t)
 	defer c.Close()
 

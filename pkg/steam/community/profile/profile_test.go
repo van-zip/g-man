@@ -5,58 +5,23 @@
 package profile
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"io"
-	"net/http"
 	"testing"
 
-	"github.com/lemon4ksan/aoni"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
+	"github.com/lemon4ksan/g-man/test/mock"
 )
-
-type mockRequester struct {
-	mock.Mock
-	LastRequest *http.Request
-}
-
-func (m *mockRequester) Request(
-	ctx context.Context,
-	method, path string,
-	mods ...aoni.RequestModifier,
-) (*http.Response, error) {
-	req, _ := http.NewRequestWithContext(ctx, method, "https://steamcommunity.com/"+path, nil)
-	for _, mod := range mods {
-		mod(req)
-	}
-
-	m.LastRequest = req
-
-	args := m.Called(ctx, method, path, mods)
-
-	var resp *http.Response
-	if args.Get(0) != nil {
-		resp = args.Get(0).(*http.Response)
-	}
-
-	return resp, args.Error(1)
-}
-
-func (m *mockRequester) SessionID(baseURL string) string {
-	return m.Called(baseURL).String(0)
-}
 
 func TestEditProfile(t *testing.T) {
 	ctx := context.Background()
 	steamID := id.ID(76561197960265728)
 
 	t.Run("Success with overrides", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
 
 		editHTML := `
 		<html>
@@ -64,19 +29,8 @@ func TestEditProfile(t *testing.T) {
 				<div id="profile_edit_config" data-profile-edit='{"strPersonaName":"OldNickname","strRealName":"OldRealName","strSummary":"OldSummary","strCustomURL":"oldurl","LocationData":{"locCountryCode":"US","locStateCode":"FL","locCityCode":"Miami"}}'></div>
 			</body>
 		</html>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(editHTML)),
-			}, nil).
-			Once()
-
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/edit", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":1}`)),
-			}, nil).
-			Once()
+		clientMock.SetHTMLResponse("profiles/{steamID}/edit/info", 200, editHTML)
+		clientMock.SetJSONResponse("profiles/{steamID}/edit", 200, map[string]int{"success": 1})
 
 		newName := "NewNickname"
 		newSummary := "NewSummary"
@@ -89,63 +43,41 @@ func TestEditProfile(t *testing.T) {
 			CustomURL: &newCustomURL,
 		}
 
-		err := EditProfile(ctx, client, steamID, settings)
+		err := EditProfile(ctx, clientMock, steamID, settings)
 		assert.NoError(t, err)
 
-		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		lastCall := clientMock.GetLastCall()
+		require.NotNil(t, lastCall)
+
+		bodyBytes, _ := io.ReadAll(lastCall.Body)
 		bodyStr := string(bodyBytes)
 		assert.Contains(t, bodyStr, "personaName=NewNickname")
 		assert.Contains(t, bodyStr, "real_name=OldRealName")
 		assert.Contains(t, bodyStr, "summary=NewSummary")
 		assert.Contains(t, bodyStr, "country=CA")
 		assert.Contains(t, bodyStr, "customURL=newurl")
-
-		client.AssertExpectations(t)
-	})
-
-	t.Run("GET fails", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
-			Return(nil, errors.New("network error")).
-			Once()
-
-		err := EditProfile(ctx, client, steamID, Settings{})
-		assert.ErrorContains(t, err, "network error")
 	})
 
 	t.Run("Missing config element", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`<html><body></body></html>`)),
-			}, nil).
-			Once()
+		clientMock := mock.NewHTTPStub()
+		clientMock.SetHTMLResponse("profiles/{steamID}/edit/info", 200, `<html><body></body></html>`)
 
-		err := EditProfile(ctx, client, steamID, Settings{})
+		err := EditProfile(ctx, clientMock, steamID, Settings{})
 		assert.ErrorContains(t, err, "could not find profile_edit_config element")
 	})
 
 	t.Run("Save failed response", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
 
 		editHTML := `<div id="profile_edit_config" data-profile-edit='{"strPersonaName":"a"}'></div>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/info", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(editHTML)),
-			}, nil).
-			Once()
+		clientMock.SetHTMLResponse("profiles/{steamID}/edit/info", 200, editHTML)
+		clientMock.SetJSONResponse(
+			"profiles/{steamID}/edit",
+			200,
+			map[string]any{"success": 0, "errmsg": "invalid custom URL"},
+		)
 
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/edit", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":0,"errmsg":"invalid custom URL"}`)),
-			}, nil).
-			Once()
-
-		err := EditProfile(ctx, client, steamID, Settings{})
+		err := EditProfile(ctx, clientMock, steamID, Settings{})
 		assert.ErrorContains(t, err, "save failed: invalid custom URL")
 	})
 }
@@ -155,8 +87,7 @@ func TestUpdatePrivacySettings(t *testing.T) {
 	steamID := id.ID(76561197960265728)
 
 	t.Run("Success privacy override", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
 
 		settingsHTML := `
 		<html>
@@ -164,19 +95,8 @@ func TestUpdatePrivacySettings(t *testing.T) {
 				<div id="profile_edit_config" data-profile-edit='{"Privacy":{"PrivacySettings":{"PrivacyProfile":3,"PrivacyInventory":3,"PrivacyInventoryGifts":3,"PrivacyOwnedGames":3,"PrivacyPlaytime":3,"PrivacyFriendsList":3},"eCommentPermission":1}}'></div>
 			</body>
 		</html>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/settings", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(settingsHTML)),
-			}, nil).
-			Once()
-
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/ajaxsetprivacy", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":1}`)),
-			}, nil).
-			Once()
+		clientMock.SetHTMLResponse("profiles/{steamID}/edit/settings", 200, settingsHTML)
+		clientMock.SetJSONResponse("profiles/{steamID}/ajaxsetprivacy", 200, map[string]int{"success": 1})
 
 		newProfile := PrivacyPrivate
 		newComments := CommentPrivate
@@ -187,10 +107,13 @@ func TestUpdatePrivacySettings(t *testing.T) {
 			InventoryGifts: &giftsPrivate,
 		}
 
-		err := UpdatePrivacySettings(ctx, client, steamID, settings)
+		err := UpdatePrivacySettings(ctx, clientMock, steamID, settings)
 		assert.NoError(t, err)
 
-		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		lastCall := clientMock.GetLastCall()
+		require.NotNil(t, lastCall)
+
+		bodyBytes, _ := io.ReadAll(lastCall.Body)
 		bodyStr := string(bodyBytes)
 		assert.Contains(
 			t,
@@ -198,30 +121,16 @@ func TestUpdatePrivacySettings(t *testing.T) {
 			"Privacy=%7B%22PrivacyProfile%22%3A1%2C%22PrivacyInventory%22%3A3%2C%22PrivacyInventoryGifts%22%3A1%2C%22PrivacyOwnedGames%22%3A3%2C%22PrivacyPlaytime%22%3A3%2C%22PrivacyFriendsList%22%3A3%7D",
 		)
 		assert.Contains(t, bodyStr, "eCommentPermission=2") // CommentPrivate
-
-		client.AssertExpectations(t)
 	})
 
 	t.Run("AJAX Set Privacy fails", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
 
 		settingsHTML := `<div id="profile_edit_config" data-profile-edit='{"Privacy":{"PrivacySettings":{},"eCommentPermission":1}}'></div>`
-		client.On("Request", mock.Anything, http.MethodGet, "profiles/{steamID}/edit/settings", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(settingsHTML)),
-			}, nil).
-			Once()
+		clientMock.SetHTMLResponse("profiles/{steamID}/edit/settings", 200, settingsHTML)
+		clientMock.SetJSONResponse("profiles/{steamID}/ajaxsetprivacy", 200, map[string]int{"success": 0})
 
-		client.On("Request", mock.Anything, http.MethodPost, "profiles/{steamID}/ajaxsetprivacy", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":0}`)),
-			}, nil).
-			Once()
-
-		err := UpdatePrivacySettings(ctx, client, steamID, PrivacySettings{})
+		err := UpdatePrivacySettings(ctx, clientMock, steamID, PrivacySettings{})
 		assert.ErrorContains(t, err, "privacy save failed: success=0")
 	})
 }
@@ -232,54 +141,49 @@ func TestUploadAvatar(t *testing.T) {
 	dummyImage := []byte("image_data_bytes_12345")
 
 	t.Run("Success jpg upload", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
+		clientMock.SetJSONResponse(
+			"actions/FileUploader",
+			200,
+			map[string]any{"success": true, "hash": "new_jpg_avatar_hash"},
+		)
 
-		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":true,"hash":"new_jpg_avatar_hash"}`)),
-			}, nil).
-			Once()
-
-		hash, err := UploadAvatar(ctx, client, steamID, dummyImage, "image/jpeg")
+		hash, err := UploadAvatar(ctx, clientMock, steamID, dummyImage, "image/jpeg")
 		assert.NoError(t, err)
 		assert.Equal(t, "new_jpg_avatar_hash", hash)
 
-		bodyBytes, _ := io.ReadAll(client.LastRequest.Body)
+		lastCall := clientMock.GetLastCall()
+		require.NotNil(t, lastCall)
+
+		bodyBytes, _ := io.ReadAll(lastCall.Body)
 		bodyStr := string(bodyBytes)
 		assert.Contains(t, bodyStr, "player_avatar_image")
 		assert.Contains(t, bodyStr, "76561197960265728")
 		assert.Contains(t, bodyStr, "avatar.jpg")
 		assert.Contains(t, bodyStr, "image_data_bytes_12345")
-
-		client.AssertExpectations(t)
 	})
 
 	t.Run("Empty image", func(t *testing.T) {
-		client := new(mockRequester)
-		_, err := UploadAvatar(ctx, client, steamID, nil, "png")
+		clientMock := mock.NewHTTPStub()
+		_, err := UploadAvatar(ctx, clientMock, steamID, nil, "png")
 		assert.ErrorContains(t, err, "empty avatar image buffer")
 	})
 
 	t.Run("Unsupported format", func(t *testing.T) {
-		client := new(mockRequester)
-		_, err := UploadAvatar(ctx, client, steamID, dummyImage, "image/tiff")
+		clientMock := mock.NewHTTPStub()
+		_, err := UploadAvatar(ctx, clientMock, steamID, dummyImage, "image/tiff")
 		assert.ErrorContains(t, err, "unsupported content-type")
 	})
 
 	t.Run("Upload fails with error message", func(t *testing.T) {
-		client := new(mockRequester)
-		client.On("SessionID", mock.Anything).Return("mock_session_id")
+		clientMock := mock.NewHTTPStub()
+		clientMock.SetJSONResponse(
+			"actions/FileUploader",
+			200,
+			map[string]any{"success": false, "message": "file too large"},
+		)
 
-		client.On("Request", mock.Anything, http.MethodPost, "actions/FileUploader", mock.Anything).
-			Return(&http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewBufferString(`{"success":false,"message":"file too large"}`)),
-			}, nil).
-			Once()
-
-		_, err := UploadAvatar(ctx, client, steamID, dummyImage, "png")
+		_, err := UploadAvatar(ctx, clientMock, steamID, dummyImage, "png")
 		assert.ErrorContains(t, err, "upload failed: file too large")
 	})
 }

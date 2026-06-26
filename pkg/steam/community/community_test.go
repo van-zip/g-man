@@ -36,6 +36,10 @@ type customRequester struct{ aoni.Requester }
 
 func (cr customRequester) SessionID(baseURL string) string { return "" }
 
+func (cr customRequester) GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error) {
+	return "", nil
+}
+
 // A simple struct for testing JSON responses.
 type genericResponse struct {
 	Success bool   `json:"success"`
@@ -129,7 +133,7 @@ func TestGetHTML(t *testing.T) {
 func TestPostForm(t *testing.T) {
 	ctx := context.Background()
 	mock := mock.NewServiceMock()
-	client := community.NewClient(nil, mock.SessionID, community.WithREST(mock))
+	client := community.NewClient(nil, mock, community.WithREST(mock))
 	respBody, _ := json.Marshal(genericResponse{Success: true})
 
 	t.Run("Success with Request Struct", func(t *testing.T) {
@@ -182,7 +186,7 @@ func TestPostForm(t *testing.T) {
 func TestPostJSON(t *testing.T) {
 	ctx := context.Background()
 	mock := mock.NewServiceMock()
-	client := community.NewClient(nil, mock.SessionID, community.WithREST(mock))
+	client := community.NewClient(nil, mock, community.WithREST(mock))
 	respBody, _ := json.Marshal(genericResponse{Success: true})
 
 	t.Run("Success", func(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/client"
 	"github.com/lemon4ksan/g-man/pkg/steam/client/router"
 	"github.com/lemon4ksan/g-man/pkg/steam/client/session"
+	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -42,7 +43,7 @@ func SetupTestClient(t *testing.T) (*client.Client, *TestMocks) {
 		WebFactory: func(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) session.WebSessionProvider {
 			return m.Web
 		},
-		CommunityFactory: func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) session.CommunityProvider {
+		CommunityFactory: func(httpClient *http.Client, sess community.SessionProvider, logger log.Logger) community.Requester {
 			return m.Comm
 		},
 	})
@@ -57,7 +58,7 @@ func SetupTestClient(t *testing.T) (*client.Client, *TestMocks) {
 			return m.Web
 		}),
 		client.WithCommunityFactory(
-			func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) session.CommunityProvider {
+			func(httpClient *http.Client, sess community.SessionProvider, logger log.Logger) community.Requester {
 				return m.Comm
 			},
 		),

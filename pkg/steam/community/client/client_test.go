@@ -5,8 +5,6 @@
 package client_test
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -32,227 +30,335 @@ func (fr faultyReader) Read(p []byte) (n int, err error) {
 	return 0, errors.New("read error")
 }
 
-func TestNewClient(t *testing.T) {
+type mockSession struct{}
+
+func (m *mockSession) SessionID(s string) string {
+	return "test_session_id"
+}
+
+// newMockedClient is a helper to construct a client with a mocked REST service.
+func newMockedClient(t *testing.T, mock *mock.ServiceMock, opts ...client.Option) *client.Client {
+	t.Helper()
+
+	combinedOpts := append([]client.Option{client.WithREST(mock)}, opts...)
+
+	return client.New(nil, mock, combinedOpts...)
+}
+
+func TestNew_Options_InitializesCorrectly(t *testing.T) {
+	t.Parallel()
+
 	mockHTTP := &http.Client{}
-	sessionFunc := func(s string) string { return "session" }
+	logger := log.New(log.DefaultConfig(log.LevelDebug))
+	rc := aoni.NewClient(mockHTTP)
 
-	t.Run("Default Initialization", func(t *testing.T) {
-		c := client.New(mockHTTP, sessionFunc)
-		require.NotNil(t, c)
-		assert.Equal(t, "session", c.SessionID(client.BaseURL))
-	})
-
-	t.Run("WithLogger Option", func(t *testing.T) {
-		logger := log.New(log.DefaultConfig(log.LevelDebug))
-		// This test ensures the option can be applied without panicking.
-		c := client.New(mockHTTP, sessionFunc, client.WithLogger(logger))
-		require.NotNil(t, c)
-	})
-
-	t.Run("WithREST Option", func(t *testing.T) {
-		rc := aoni.NewClient(mockHTTP)
-		// This test ensures the option can be applied without panicking.
-		c := client.New(mockHTTP, sessionFunc, client.WithREST(rc))
-		require.NotNil(t, c)
-	})
-}
-
-func TestClient_SessionID(t *testing.T) {
-	t.Run("With Session Func", func(t *testing.T) {
-		c := client.New(&http.Client{}, func(s string) string { return "test_session_id" })
-		assert.Equal(t, "test_session_id", c.SessionID("any_url"))
-	})
-
-	t.Run("Without Session Func", func(t *testing.T) {
-		c := client.New(&http.Client{}, nil)
-		assert.Empty(t, c.SessionID("any_url"))
-	})
-}
-
-func TestClient_Request(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("Success", func(t *testing.T) {
-		mock := mock.NewServiceMock()
-		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
-			}, nil
-		}
-		client := client.New(nil, nil, client.WithREST(mock))
-
-		resp, err := client.Request(ctx, http.MethodGet, "/test")
-		require.NoError(t, err)
-
-		require.NotNil(t, resp)
-		defer resp.Body.Close()
-
-		respBody, _ := io.ReadAll(resp.Body)
-		assert.JSONEq(t, `{"status": "ok"}`, string(respBody))
-	})
-
-	t.Run("Underlying Client Error", func(t *testing.T) {
-		mock := mock.NewServiceMock()
-		expectedErr := errors.New("network failure")
-		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-			return nil, expectedErr
-		}
-		client := client.New(nil, nil, client.WithREST(mock))
-
-		_, err := client.Request(ctx, http.MethodGet, "/test")
-		require.Error(t, err)
-		assert.Equal(t, expectedErr, err)
-	})
-
-	t.Run("Response Body Read Error", func(t *testing.T) {
-		mock := mock.NewServiceMock()
-		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(faultyReader{}),
-			}, nil
-		}
-		client := client.New(nil, nil, client.WithREST(mock))
-
-		_, err := client.Request(ctx, http.MethodGet, "/test")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "read error")
-	})
-
-	// Table-driven test for all Steam-specific error conditions
-	errorTests := []struct {
-		name         string
-		response     *http.Response
-		expectedErr  error
-		errorContent string
+	tests := []struct {
+		name string
+		opts []client.Option
 	}{
 		{
-			name: "Rate Limited",
-			response: &http.Response{
-				StatusCode: http.StatusTooManyRequests,
-				Body:       io.NopCloser(strings.NewReader("")),
-			},
-			expectedErr: client.ErrRateLimited,
+			name: "default_initialization",
+			opts: nil,
 		},
 		{
-			name: "Internal Server Error",
-			response: &http.Response{
-				StatusCode: http.StatusInternalServerError,
-				Body:       io.NopCloser(strings.NewReader("")),
-			},
-			errorContent: "steam API error: message=Steam is down or in maintenance, status=500",
+			name: "with_logger_option",
+			opts: []client.Option{client.WithLogger(logger)},
 		},
 		{
-			name: "Auth Redirect",
-			response: &http.Response{
-				StatusCode: http.StatusFound,
-				Header:     http.Header{"Location": {"https://steamcom/login/rendercapcha"}},
-				Body:       io.NopCloser(strings.NewReader("")),
-			},
-			expectedErr: service.ErrSessionExpired,
-		},
-		{
-			name: "Family View Restricted",
-			response: &http.Response{
-				StatusCode: http.StatusForbidden,
-				Body: io.NopCloser(
-					strings.NewReader(
-						`<div id="parental_notice_instructions">Enter your PIN below to exit Family View.</div>`,
-					),
-				),
-			},
-			expectedErr: client.ErrFamilyViewRestricted,
-		},
-		{
-			name: "Soft Auth Fail (g_steamID = false)",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader("var g_steamID = false;")),
-			},
-			expectedErr: service.ErrSessionExpired,
-		},
-		{
-			name: "Soft Auth Fail (g_steamID = \"0\")",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`var g_steamID = "0";`)),
-			},
-			expectedErr: service.ErrSessionExpired,
-		},
-		{
-			name: "Soft Auth Fail (Sign In Title)",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader("<title>Sign In</title>")),
-			},
-			expectedErr: service.ErrSessionExpired,
-		},
-		{
-			name: "Sorry Page with Reason",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body: io.NopCloser(
-					strings.NewReader(`<h1>Sorry!</h1><h3>   You've made too many requests.   </h3>`),
-				),
-			},
-			errorContent: "steam API error: message=You've made too many requests., status=200",
-		},
-		{
-			name: "Sorry Page without Reason",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`<h1>Sorry!</h1><p>Other text</p>`)),
-			},
-			errorContent: "steam API error: message=unknown steam community error (Sorry page), status=200",
-		},
-		{
-			name: "Trade Error Message",
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`<div id="error_msg">  Error (15)  </div>`)),
-			},
-			errorContent: "steam API error: message=Error (15), status=200",
-		},
-		{
-			name: "Generic Bad Request",
-			response: &http.Response{
-				StatusCode: http.StatusBadRequest,
-				Body:       io.NopCloser(strings.NewReader("bad data")),
-			},
-			expectedErr: service.NewSteamAPIError("bad data", http.StatusBadRequest, nil),
+			name: "with_rest_option",
+			opts: []client.Option{client.WithREST(rc)},
 		},
 	}
 
-	for _, tt := range errorTests {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := mock.NewServiceMock()
-			// The SUT reads and closes the body, so we need to ensure the mock can provide it again if needed.
-			bodyBytes, _ := io.ReadAll(tt.response.Body)
-			mock.OnRest = func(method, path string, body any) (*http.Response, error) {
-				tt.response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				return tt.response, nil
-			}
-			client := client.New(nil, nil, client.WithREST(mock))
+			t.Parallel()
 
-			_, err := client.Request(ctx, http.MethodGet, "/test")
-			require.Error(t, err)
+			c := client.New(mockHTTP, &mockSession{}, tt.opts...)
+			require.NotNil(t, c)
 
-			if tt.errorContent != "" {
-				assert.EqualError(t, err, tt.errorContent)
-			} else {
-				assert.ErrorIs(t, err, tt.expectedErr)
+			if len(tt.opts) == 0 {
+				assert.Equal(t, "test_session_id", c.SessionID(client.BaseURL))
 			}
 		})
 	}
 }
 
-func TestClient_GetOrRegisterAPIKey(t *testing.T) {
-	ctx := context.Background()
+func TestClient_SessionID_VariousSessions_ReturnsExpectedID(t *testing.T) {
+	t.Parallel()
 
-	t.Run("Key Already Exists", func(t *testing.T) {
+	tests := []struct {
+		name    string
+		session client.SessionProvider
+		want    string
+	}{
+		{
+			name:    "with_session_func",
+			session: &mockSession{},
+			want:    "test_session_id",
+		},
+		{
+			name:    "without_session_func",
+			session: nil,
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := client.New(&http.Client{}, tt.session)
+			assert.Equal(t, tt.want, c.SessionID("any_url"))
+		})
+	}
+}
+
+func TestClient_Request_VariousResponses_ReturnsExpected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		mockSetup    func(m *mock.ServiceMock)
+		expectedBody string
+		wantErr      bool
+		expectedErr  error
+		errorContent string
+	}{
+		{
+			name: "success",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
+					}, nil
+				}
+			},
+			expectedBody: `{"status": "ok"}`,
+		},
+		{
+			name: "underlying_client_error",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return nil, errors.New("network failure")
+				}
+			},
+			wantErr:      true,
+			errorContent: "network failure",
+		},
+		{
+			name: "response_body_read_error",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(faultyReader{}),
+					}, nil
+				}
+			},
+			wantErr:      true,
+			errorContent: "read error",
+		},
+		{
+			name: "rate_limited",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusTooManyRequests,
+						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: client.ErrRateLimited,
+		},
+		{
+			name: "internal_server_error",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}
+			},
+			wantErr:      true,
+			errorContent: "steam API error: message=Steam is down or in maintenance, status=500",
+		},
+		{
+			name: "auth_redirect",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusFound,
+						Header:     http.Header{"Location": {"https://steamcom/login/rendercapcha"}},
+						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: service.ErrSessionExpired,
+		},
+		{
+			name: "family_view_restricted",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusForbidden,
+						Body: io.NopCloser(
+							strings.NewReader(
+								`<div id="parental_notice_instructions">Enter your PIN below to exit Family View.</div>`,
+							),
+						),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: client.ErrFamilyViewRestricted,
+		},
+		{
+			name: "soft_auth_fail_g_steamID_false",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader("var g_steamID = false;")),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: service.ErrSessionExpired,
+		},
+		{
+			name: "soft_auth_fail_g_steamID_0",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`var g_steamID = "0";`)),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: service.ErrSessionExpired,
+		},
+		{
+			name: "soft_auth_fail_sign_in_title",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader("<title>Sign In</title>")),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: service.ErrSessionExpired,
+		},
+		{
+			name: "sorry_page_with_reason",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(
+							strings.NewReader(`<h1>Sorry!</h1><h3>   You've made too many requests.   </h3>`),
+						),
+					}, nil
+				}
+			},
+			wantErr:      true,
+			errorContent: "steam API error: message=You've made too many requests., status=200",
+		},
+		{
+			name: "sorry_page_without_reason",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`<h1>Sorry!</h1><p>Other text</p>`)),
+					}, nil
+				}
+			},
+			wantErr:      true,
+			errorContent: "steam API error: message=unknown steam community error (Sorry page), status=200",
+		},
+		{
+			name: "trade_error_message",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`<div id="error_msg">  Error (15)  </div>`)),
+					}, nil
+				}
+			},
+			wantErr:      true,
+			errorContent: "steam API error: message=Error (15), status=200",
+		},
+		{
+			name: "generic_bad_request",
+			mockSetup: func(m *mock.ServiceMock) {
+				m.OnRest = func(method, path string, body any) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusBadRequest,
+						Body:       io.NopCloser(strings.NewReader("bad data")),
+					}, nil
+				}
+			},
+			wantErr:     true,
+			expectedErr: service.NewSteamAPIError("bad data", http.StatusBadRequest, nil),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+
+			mock := mock.NewServiceMock()
+			if tt.mockSetup != nil {
+				tt.mockSetup(mock)
+			}
+
+			client := newMockedClient(t, mock)
+
+			resp, err := client.Request(ctx, http.MethodGet, "/test")
+			if tt.wantErr {
+				require.Error(t, err)
+
+				if tt.errorContent != "" {
+					assert.Contains(t, err.Error(), tt.errorContent)
+				} else {
+					assert.ErrorIs(t, err, tt.expectedErr)
+				}
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			t.Cleanup(func() {
+				_ = resp.Body.Close()
+			})
+
+			respBody, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.expectedBody, string(respBody))
+		})
+	}
+}
+
+func TestClient_GetOrRegisterAPIKey_VariousScenarios_ReturnsExpected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("key_already_exists", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		client := client.New(nil, nil, client.WithREST(mock))
+		client := newMockedClient(t, mock)
 		htmlWithKey := `<div><p>Key: 1234567890ABCDEF1234567890ABCDEF</p></div>`
 
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
@@ -270,9 +376,12 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		assert.Equal(t, "1234567890ABCDEF1234567890ABCDEF", key)
 	})
 
-	t.Run("Register New Key Success", func(t *testing.T) {
+	t.Run("register_new_key_success", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		client := client.New(nil, mock.SessionID, client.WithREST(mock), client.WithLogger(log.Discard))
+		client := newMockedClient(t, mock, client.WithLogger(log.Discard))
 
 		htmlWithForm := `<div><form id="register_form"></form></div>`
 		htmlWithKey := `<div>Key: FEDCBA0987654321FEDCBA0987654321</div>`
@@ -281,7 +390,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			callCount++
 			switch callCount {
-			case 1: // First GET to fetch the form
+			case 1:
 				assert.Equal(t, http.MethodGet, method)
 				assert.Equal(t, "dev/apikey", path)
 
@@ -290,7 +399,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(htmlWithForm)),
 				}, nil
 
-			case 2: // POST to register the key
+			case 2:
 				assert.Equal(t, http.MethodPost, method)
 				assert.Equal(t, "dev/registerkey", path)
 
@@ -310,7 +419,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
 
-			case 3: // Second GET to retrieve the new key
+			case 3:
 				assert.Equal(t, http.MethodGet, method)
 				assert.Equal(t, "dev/apikey", path)
 
@@ -329,15 +438,17 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		assert.Equal(t, "FEDCBA0987654321FEDCBA0987654321", key)
 	})
 
-	t.Run("Register New Key with Default Domain", func(t *testing.T) {
+	t.Run("register_new_key_with_default_domain", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		c := client.New(nil, mock.SessionID, client.WithREST(mock), client.WithLogger(log.Discard))
+		c := newMockedClient(t, mock, client.WithLogger(log.Discard))
 
 		callCount := 0
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			callCount++
 
-			// 1. First GET: Return form to trigger registration
 			if method == http.MethodGet && callCount == 1 {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -345,7 +456,6 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 				}, nil
 			}
 
-			// 2. The POST: Validate domain and return success
 			if method == http.MethodPost {
 				var bodyStr string
 				if b, ok := body.([]byte); ok {
@@ -360,21 +470,22 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
 			}
 
-			// 3. Second GET (triggered by tail call): Return something WITHOUT the form
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(`<html>No key here and no form</html>`)),
 			}, nil
 		}
 
-		// Now it will return ErrAPITokenNotFound instead of looping forever
 		_, err := c.GetOrRegisterAPIKey(ctx, "")
 		require.ErrorIs(t, err, client.ErrAPITokenNotFound)
 	})
 
-	t.Run("Initial Page Fetch Fails", func(t *testing.T) {
+	t.Run("initial_page_fetch_fails", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		client := client.New(nil, nil, client.WithREST(mock))
+		client := newMockedClient(t, mock)
 		expectedErr := errors.New("network error")
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, expectedErr
@@ -385,9 +496,12 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to fetch apikey page")
 	})
 
-	t.Run("Registration Request Fails", func(t *testing.T) {
+	t.Run("registration_request_fails", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		client := client.New(nil, nil, client.WithREST(mock), client.WithLogger(log.Discard))
+		client := newMockedClient(t, mock, client.WithLogger(log.Discard))
 		expectedErr := errors.New("post failed")
 
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
@@ -398,7 +512,7 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 				}, nil
 			}
 
-			return nil, expectedErr // Fail on POST
+			return nil, expectedErr
 		}
 
 		_, err := client.GetOrRegisterAPIKey(ctx, "test.com")
@@ -406,9 +520,12 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		assert.Contains(t, err.Error(), "registration request failed")
 	})
 
-	t.Run("No Key and No Registration Form", func(t *testing.T) {
+	t.Run("no_key_and_no_registration_form", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+
 		mock := mock.NewServiceMock()
-		c := client.New(nil, nil, client.WithREST(mock))
+		c := newMockedClient(t, mock)
 		htmlWithoutKeyOrForm := `<html><body><p>Your account is limited.</p></body></html>`
 
 		mock.OnRest = func(method, path string, body any) (*http.Response, error) {
@@ -422,4 +539,261 @@ func TestClient_GetOrRegisterAPIKey(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, client.ErrAPITokenNotFound, err)
 	})
+}
+
+type mockHTTPDoer struct {
+	doFunc func(req *http.Request) (*http.Response, error)
+}
+
+func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return m.doFunc(req)
+}
+
+func TestClient_Request_ReplayableBody_Success(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	htmlContent := "var g_steamID = false;"
+	httpClient := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       aoni.AsReplayable(io.NopCloser(strings.NewReader(htmlContent))),
+			}, nil
+		},
+	}
+
+	c := client.New(httpClient, &mockSession{})
+
+	httpClient.doFunc = func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       aoni.AsReplayable(io.NopCloser(strings.NewReader("var g_steamID = false;"))),
+		}, nil
+	}
+
+	_, err := c.Request(ctx, http.MethodGet, "/test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSessionExpired)
+}
+
+func TestClient_Request_ReplayableBody_ReadError(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	httpClient := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(faultyReader{}),
+			}, nil
+		},
+	}
+
+	c := client.New(httpClient, &customSessionProvider{})
+	_, err := c.Request(ctx, http.MethodGet, "/test")
+	require.Error(t, err)
+	assert.EqualError(t, err, "read error")
+}
+
+func TestClient_Request_RedirectError_Intercept(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	mockService := mock.NewServiceMock()
+	c := newMockedClient(t, mockService, client.WithLogger(log.Discard))
+
+	mockService.OnRest = func(method, path string, body any) (*http.Response, error) {
+		return nil, errors.New("stopped after 10 redirects (redirect loop detected)")
+	}
+
+	_, err := c.Request(ctx, http.MethodGet, "/test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSessionExpired)
+	assert.Contains(t, err.Error(), "session expired during redirect loop")
+}
+
+func TestClient_Request_SessionExpired_Intercept(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	mockService := mock.NewServiceMock()
+	c := newMockedClient(t, mockService, client.WithLogger(log.Discard))
+
+	mockService.OnRest = func(method, path string, body any) (*http.Response, error) {
+		return nil, errors.New("unauthorized: session expired")
+	}
+
+	_, err := c.Request(ctx, http.MethodGet, "/test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSessionExpired)
+	assert.Contains(t, err.Error(), "session expired during redirect loop")
+}
+
+type customSessionProvider struct{}
+
+func (c *customSessionProvider) SessionID(baseURL string) string {
+	return "test_session"
+}
+
+func TestTruncateBody_VariousLengths_TruncatesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		body     []byte
+		maxLen   int
+		expected string
+	}{
+		{
+			name:     "short_body_not_truncated",
+			body:     []byte("hello"),
+			maxLen:   500,
+			expected: "hello",
+		},
+		{
+			name:     "exact_length_not_truncated",
+			body:     []byte("12345"),
+			maxLen:   5,
+			expected: "12345",
+		},
+		{
+			name:     "long_body_truncated",
+			body:     []byte("this is a very long body that should be truncated"),
+			maxLen:   10,
+			expected: "this is a ...[truncated]",
+		},
+		{
+			name:     "empty_body",
+			body:     []byte{},
+			maxLen:   500,
+			expected: "",
+		},
+		{
+			name:     "nil_body",
+			body:     nil,
+			maxLen:   500,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := client.TruncateBody(tt.body, tt.maxLen)
+			if result != tt.expected {
+				t.Errorf("truncateBody() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCheckSteamErrors_VariousResponses_DetectsErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		header     http.Header
+		body       []byte
+		wantErr    bool
+		errMsg     string
+	}{
+		{
+			name:       "rate_limit",
+			statusCode: http.StatusTooManyRequests,
+			header:     http.Header{},
+			body:       []byte(""),
+			wantErr:    true,
+			errMsg:     "Rate limit exceeded",
+		},
+		{
+			name:       "server_error",
+			statusCode: http.StatusInternalServerError,
+			header:     http.Header{},
+			body:       []byte(""),
+			wantErr:    true,
+			errMsg:     "Steam is down or in maintenance",
+		},
+		{
+			name:       "auth_redirect",
+			statusCode: http.StatusFound,
+			header:     http.Header{"Location": []string{"https://store.steampowered.com/login"}},
+			body:       []byte(""),
+			wantErr:    true,
+			errMsg:     "Session expired",
+		},
+		{
+			name:       "family_view",
+			statusCode: http.StatusForbidden,
+			header:     http.Header{},
+			body: []byte(
+				`<div id="parental_notice_instructions">Enter your PIN below to exit Family View.</div>`,
+			),
+			wantErr: true,
+			errMsg:  "Family View enabled",
+		},
+		{
+			name:       "soft_auth_failure_guest",
+			statusCode: http.StatusOK,
+			header:     http.Header{},
+			body:       []byte(`g_steamID = false;`),
+			wantErr:    true,
+			errMsg:     "Session expired",
+		},
+		{
+			name:       "sorry_page_with_reason",
+			statusCode: http.StatusOK,
+			header:     http.Header{},
+			body:       []byte(`<h1>Sorry!</h1><div>Some content</div><h3>An error occurred</h3>`),
+			wantErr:    true,
+			errMsg:     "An error occurred",
+		},
+		{
+			name:       "sorry_page_without_reason",
+			statusCode: http.StatusOK,
+			header:     http.Header{},
+			body:       []byte(`<h1>Sorry!</h1><div>Some content without h3</div>`),
+			wantErr:    true,
+			errMsg:     "unknown steam community error (Sorry page)",
+		},
+		{
+			name:       "bad_request_with_body_truncation",
+			statusCode: http.StatusBadRequest,
+			header:     http.Header{},
+			body: []byte(
+				"This is a very long error body that should definitely be truncated to prevent information leakage in logs and error messages. The body contains sensitive data that should not be exposed to users or logged in plain text. This repeated content ensures the body exceeds 500 characters for testing purposes. Adding more text here to make sure we cross the threshold and trigger the truncation behavior that we want to verify works correctly in production environments. This additional text is added to ensure we have enough characters to trigger the truncation logic.",
+			),
+			wantErr: true,
+			errMsg:  "This additional text is added to en...[truncated]",
+		},
+		{
+			name:       "success",
+			statusCode: http.StatusOK,
+			header:     http.Header{},
+			body:       []byte(`{"success": true}`),
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := client.CheckSteamErrors(tt.statusCode, tt.header, tt.body)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkSteamErrors() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && err != nil {
+				if tt.errMsg != "" {
+					if !strings.Contains(err.Error(), tt.errMsg) {
+						t.Errorf("checkSteamErrors() error message = %q, want to contain %q", err.Error(), tt.errMsg)
+					}
+				}
+			}
+		})
+	}
 }

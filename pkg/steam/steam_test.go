@@ -20,6 +20,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/client/session"
+	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 	steammock "github.com/lemon4ksan/g-man/test/mock"
@@ -70,7 +71,7 @@ func TestNewReady_Success(t *testing.T) {
 			return webMock
 		}),
 		steam.WithCommunityFactory(
-			func(httpClient *http.Client, sessionID func(string) string, logger log.Logger) session.CommunityProvider {
+			func(httpClient *http.Client, sess community.SessionProvider, logger log.Logger) community.Requester {
 				return commMock
 			},
 		),

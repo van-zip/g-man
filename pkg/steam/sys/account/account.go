@@ -13,7 +13,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/log"
 	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam"
-	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
+	"github.com/lemon4ksan/g-man/pkg/steam/encoding/bvdf"
 	"github.com/lemon4ksan/g-man/pkg/steam/module"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol"
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
@@ -315,7 +315,7 @@ func (a *Account) handleUpdateGuestPassesList(packet *protocol.Packet) {
 	offset := 12
 	for range countToGive {
 		var discard map[string]any
-		if err := encoding.UnmarshalBinaryKVOffset(packet.Payload, &offset, &discard); err != nil {
+		if err := bvdf.UnmarshalOffset(packet.Payload, &offset, &discard); err != nil {
 			a.Logger.Error("Failed to parse discarded guest pass", log.Err(err))
 			return
 		}
@@ -324,7 +324,7 @@ func (a *Account) handleUpdateGuestPassesList(packet *protocol.Packet) {
 	gifts := make([]map[string]any, 0, countToRedeem)
 	for range countToRedeem {
 		var gift map[string]any
-		if err := encoding.UnmarshalBinaryKVOffset(packet.Payload, &offset, &gift); err != nil {
+		if err := bvdf.UnmarshalOffset(packet.Payload, &offset, &gift); err != nil {
 			a.Logger.Error("Failed to parse guest pass/gift KV", log.Err(err))
 			return
 		}

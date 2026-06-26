@@ -2,40 +2,37 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package encoding provides utilities for parsing Steam WebAPI responses in various formats.
+// Package encoding provides decoders and request modifiers specifically tailored for Steam API responses.
+// It automatically handles typical Steam Web API patterns, such as unwrapping the outer "response" JSON object,
+// detecting Protobuf payload encodings, and parsing Valve-specific text and binary VDF formats.
 //
-// # Key Components
+// The package exposes [aoni.DecoderFunc] implementations like [SteamJSONDecoder] and [ProtobufDecoder],
+// alongside [aoni.RequestModifier] factories like [AsJSON] to configure client requests.
 //
-//   - [UnmarshalRegistry]: A thread-safe registry of decoders used to parse multiple response formats.
-//   - [ResponseFormat]: An enumeration defining supported formats (JSON, VDF, Protobuf, Binary VDF).
-//
-// # Basic Usage Example
+// Basic usage example:
 //
 //	package main
 //
 //	import (
+//		"context"
 //		"fmt"
+//
+//		"github.com/lemon4ksan/aoni"
 //		"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 //	)
 //
-//	type Summary struct {
-//		SteamID uint64 `json:"steamid"`
+//	type SteamApp struct {
+//		AppID uint32 `json:"appid"`
 //	}
 //
 //	func main() {
-//		// Create a new unmarshal registry
-//		reg := encoding.NewUnmarshalRegistry()
-//
-//		// Mock raw Steam WebAPI JSON response data (usually wrapped under "response")
-//		rawData := []byte(`{"response":{"steamid":76561197960265728}}`)
-//
-//		var res Summary
-//		err := reg.Unmarshal(rawData, &res, encoding.FormatJSON)
+//		client := aoni.NewClient(nil)
+//		var app SteamApp
+//		// Automatically decode response and unwrap the "response" wrapper using AsJSON
+//		_, err := client.Request(context.Background(), "GET", "api-endpoint", encoding.AsJSON())
 //		if err != nil {
-//			fmt.Println("Unmarshal failed:", err)
-//			return
+//			panic(err)
 //		}
-//
-//		fmt.Println("Parsed SteamID:", res.SteamID)
+//		fmt.Println("Decoded AppID:", app.AppID)
 //	}
 package encoding

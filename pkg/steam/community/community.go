@@ -19,26 +19,32 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/encoding"
 )
 
-// BaseURL is the base url for community requests.
+// BaseURL is the default base URL for Steam Community requests, mapped from [client.BaseURL].
 const BaseURL = client.BaseURL
 
-// Requester defines the requirements for making Community requests.
+// Requester defines the requirements for executing Steam Community requests.
+// It is a type alias for [client.Requester]. Use [NewClient] to instantiate a default client,
+// or [Decorate] to wrap an existing requester with default request modifiers.
 type Requester = client.Requester
 
-// SessionProvider defines how the community client retrieves active Steam session IDs.
+// SessionProvider defines how to retrieve active Steam session identifiers.
+// It is a type alias for [client.SessionProvider]. Typically implemented by components
+// that manage user authentication states.
 type SessionProvider = client.SessionProvider
 
-// NewClient creates a new Community Client.
+// NewClient creates a new [Requester] instance using the constructor from [client.New].
 var NewClient = client.New
 
 var (
-	// WithREST sets the REST client for the Community Client.
+	// WithREST returns a [client.Option] to set the underlying REST client, mapped from [client.WithREST].
 	WithREST = client.WithREST
-	// WithLogger sets the logger for the Community Client.
+	// WithLogger returns a [client.Option] to configure the client logger, mapped from [client.WithLogger].
 	WithLogger = client.WithLogger
 )
 
-// Decorate wraps an existing Requester and adds global request modifiers.
+// Decorate wraps an existing [Requester] to append default global request modifiers to every request.
+// It returns the original requester unchanged if the slice of modifiers is empty or nil.
+// If the original requester is nil, the decorated wrapper will panic upon calling its methods.
 func Decorate(r Requester, mods ...aoni.RequestModifier) Requester {
 	if len(mods) == 0 {
 		return r
@@ -50,7 +56,11 @@ func Decorate(r Requester, mods ...aoni.RequestModifier) Requester {
 	}
 }
 
-// Get performs a GET request and unmarshals the resulting JSON into the Resp type.
+// Get executes a GET request and decodes the resulting JSON response into a new [Resp] instance.
+// It automatically configures the request headers and uses the [encoding.SteamJSONDecoder] for decoding.
+// It passes reqMsg as URL query parameters if it is not nil.
+// It returns network, decoding, or Steam-specific response validation errors.
+// It will panic if the provided [Requester] is nil.
 func Get[Resp any](
 	ctx context.Context,
 	r Requester,
@@ -73,7 +83,10 @@ func Get[Resp any](
 	return aoni.GetJSON[Resp](ctx, r, path, allMods...)
 }
 
-// GetHTML performs a GET request specifically for raw HTML content.
+// GetHTML executes a GET request optimized for raw HTML content.
+// The caller is responsible for closing the returned [io.ReadCloser] to prevent resource leaks.
+// It returns network errors or Steam-specific response errors encountered during the request.
+// It will panic if the provided [Requester] is nil.
 func GetHTML(ctx context.Context, r Requester, path string, mods ...aoni.RequestModifier) (io.ReadCloser, error) {
 	allMods := make([]aoni.RequestModifier, 0, 1+len(mods))
 	allMods = append(
@@ -90,8 +103,11 @@ func GetHTML(ctx context.Context, r Requester, path string, mods ...aoni.Request
 	return resp.Body, nil
 }
 
-// PostForm performs a POST request with application/x-www-form-urlencoded data.
-// It automatically injects the "sessionid" into the form parameters.
+// PostForm executes a POST request containing URL-encoded form data.
+// It automatically encodes the reqMsg argument as form parameters and injects the session identifier from [Requester.SessionID].
+// If reqMsg is nil, it initializes and sends an empty set of form parameters with the session identifier.
+// It returns network, parsing, or decoding errors, and decodes the JSON response using [encoding.SteamJSONDecoder].
+// It will panic if the provided [Requester] is nil.
 func PostForm[Resp any](
 	ctx context.Context,
 	r Requester,
@@ -125,8 +141,11 @@ func PostForm[Resp any](
 	return aoni.PostForm[Resp](ctx, r, path, strings.NewReader(params.Encode()), allMods...)
 }
 
-// PostJSON performs a POST request with a JSON body.
-// It automatically injects the "sessionid" into the URL query parameters.
+// PostJSON executes a POST request containing a JSON-encoded body.
+// It automatically serializes reqMsg to JSON and injects the session identifier as a "sessionid" URL query parameter.
+// If reqMsg is nil, the request is executed with an empty body.
+// It returns network, encoding, or decoding errors, and decodes the JSON response using [encoding.SteamJSONDecoder].
+// It will panic if the provided [Requester] is nil.
 func PostJSON[Resp any](
 	ctx context.Context,
 	r Requester,

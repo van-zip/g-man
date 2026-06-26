@@ -2,6 +2,32 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package client provides a client for making HTTP requests to the Steam Community website.
+// It automatically handles typical Steam-specific edge cases such as Family View restrictions, rate limits, session expiration redirects, and temporary maintenance outages.
+// The primary entry point is the [Client] struct, which is initialized via [New] and configured using [Option] functions.
+// It implements the [Requester] interface to perform authenticated requests and register WebAPI keys.
+//
+// Basic usage example:
+//
+//	package main
+//
+//	import (
+//		"context"
+//		"fmt"
+//		"net/http"
+//
+//		"github.com/lemon4ksan/g-man/pkg/steam/client"
+//	)
+//
+//	func main() {
+//		c := client.New(http.DefaultClient, nil)
+//		resp, err := c.Request(context.Background(), http.MethodGet, "market")
+//		if err != nil {
+//			panic(err)
+//		}
+//		defer resp.Body.Close()
+//		fmt.Println("Response status:", resp.StatusCode)
+//	}
 package client
 
 import (
@@ -23,7 +49,7 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/service"
 )
 
-// BaseURL is the base url for community requests.
+// BaseURL is the default root URL for the Steam Community website.
 const BaseURL = "https://steamcommunity.com/"
 
 var (
@@ -36,15 +62,15 @@ var (
 )
 
 var (
-	// ErrFamilyViewRestricted is returned when the account is under Family View restrictions.
+	// ErrFamilyViewRestricted is returned when a Steam Community request is blocked by Family View parental controls.
 	ErrFamilyViewRestricted = errors.New("community: family view restricted")
-	// ErrRateLimited is returned when the account is rate limited.
+	// ErrRateLimited is returned when the Steam Community server rate limits the client request.
 	ErrRateLimited = service.ErrRateLimited
-	// ErrAPITokenNotFound is returned when automatic key registration fails.
+	// ErrAPITokenNotFound is returned when automatic retrieval or registration of the Steam WebAPI key fails.
 	ErrAPITokenNotFound = errors.New(
 		"community: could not find api key or registration form (account might be limited)",
 	)
-	// ErrRedirectLoop is returned when a redirect loop is detected and the session expires.
+	// ErrRedirectLoop is returned when the client detects an infinite HTTP redirect loop caused by an expired session.
 	ErrRedirectLoop = service.NewSteamAPIError(
 		"session expired during redirect loop",
 		http.StatusFound,
@@ -52,48 +78,57 @@ var (
 	)
 )
 
-// Requester defines the requirements for making Community requests.
-// It embeds [aoni.Requester], adds Steam session management, and WebAPI key registration.
+// Requester defines the contract for executing Steam Community requests.
+// It extends [aoni.Requester] by integrating session identifier tracking and Steam WebAPI key lifecycle management.
 type Requester interface {
 	aoni.Requester
-	// SessionID returns the current Steam session identifier for the given base URL.
+	// SessionID retrieves the active Steam session identifier associated with the given base URL.
+	// It returns an empty string if no active session is found.
 	SessionID(baseURL string) string
-	// GetOrRegisterAPIKey checks for the presence of a WebAPI key or registers a new one.
+	// GetOrRegisterAPIKey retrieves the existing WebAPI key or requests a new one for the specified domain.
+	// It returns [ErrAPITokenNotFound] if registration fails.
 	GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error)
 }
 
-// SessionProvider defines how the community client retrieves active Steam session IDs.
+// SessionProvider defines the interface for retrieving active Steam session identifiers.
+// Implementations supply session tokens to authenticate outgoing requests.
 type SessionProvider interface {
+	// SessionID retrieves the session identifier for the specified base URL.
+	// It returns an empty string if no session exists for the URL.
 	SessionID(baseURL string) string
 }
 
-// Option defines a functional configuration for the [Client].
+// Option defines a functional configuration function for a [Client].
 type Option = generic.Option[*Client]
 
-// WithLogger sets a custom logger for the client.
+// WithLogger configures a [Client] to use the specified [log.Logger].
+// If the provided logger is nil, the client uses a discard logger to suppress output.
 func WithLogger(l log.Logger) Option {
 	return func(c *Client) {
 		c.logger = l.With(log.Module("community"))
 	}
 }
 
-// WithREST sets a custom rest client for performing requests.
+// WithREST configures a [Client] to use the specified [aoni.Requester] for its underlying HTTP calls.
+// If the provided requester is nil, the client falls back to its default internal REST client.
 func WithREST(r aoni.Requester) Option {
 	return func(c *Client) {
 		c.restClient = r
 	}
 }
 
-// Client handles communication with Steam Community, backed by a generic REST client.
-// It wraps a [aoni.Client] and automatically configures default headers like Origin and Referer.
+// Client executes HTTP requests against the Steam Community website.
+// Use [New] to instantiate and initialize a ready-to-use client.
+// The client relies on an internal [aoni.Requester] and an optional [SessionProvider] to manage authentication and state.
 type Client struct {
 	restClient aoni.Requester
 	session    SessionProvider
 	logger     log.Logger
 }
 
-// New creates a new Community Client.
-// It initializes a [aoni.Client] with the required default browser-like headers.
+// New creates an initialized [Client] with browser-like headers.
+// If the session provider is nil, the client executes requests as an unauthenticated guest.
+// If the httpClient is nil, the constructor uses the default HTTP client configuration.
 func New(httpClient aoni.HTTPDoer, session SessionProvider, opts ...Option) *Client {
 	rc := aoni.NewClient(httpClient).
 		WithBaseURL(BaseURL).
@@ -107,31 +142,33 @@ func New(httpClient aoni.HTTPDoer, session SessionProvider, opts ...Option) *Cli
 	}
 
 	for _, opt := range opts {
-		opt(c)
+		if opt != nil {
+			opt(c)
+		}
 	}
 
 	return c
 }
 
-// Unwrap returns the underlying [aoni.Requester] if this is a wrapped client.
+// Unwrap returns the underlying [aoni.Requester] wrapped by the [Client].
 func (c *Client) Unwrap() aoni.Requester {
 	return c.restClient
 }
 
-// SessionID retrieves the session identifier for the specified URI.
+// SessionID retrieves the active session identifier for the given target URI.
+// It returns an empty string if targetURI is empty or if no [SessionProvider] is configured.
 func (c *Client) SessionID(targetURI string) string {
-	if c.session == nil {
+	if c.session == nil || targetURI == "" {
 		return ""
 	}
 
 	return c.session.SessionID(targetURI)
 }
 
-// Request implements [aoni.Requester]. It executes the HTTP request and deeply
-// inspects the response for Steam-specific soft errors.
-//
-// If an authentication failure, rate limit, family view, or generic Steam "Sorry!" error
-// page is detected, Request intercepts the response and returns an [api.SteamAPIError].
+// Request executes an HTTP request and checks the response for Steam-specific soft errors.
+// It returns [ErrRedirectLoop] if a login redirect loop is detected.
+// It returns a [service.SteamAPIError] if an expired session, rate limit, or parental control block is encountered.
+// The context parameter manages request cancellation, and nil modifiers in mods are ignored.
 func (c *Client) Request(
 	ctx context.Context,
 	method, path string,
@@ -181,16 +218,10 @@ func (c *Client) Request(
 	return resp, nil
 }
 
-// GetOrRegisterAPIKey checks for the presence of a WebAPI key on the account.
-// If no key exists, it registers a new one for the specified domain.
-//
-// If the domain is empty, it defaults to "localhost".
-// It returns [ErrAPITokenNotFound] if a key cannot be found or registered.
+// GetOrRegisterAPIKey checks for a Steam WebAPI key or registers one for the given domain.
+// It defaults to registering for localhost if the domain argument is empty.
+// It returns [ErrAPITokenNotFound] or underlying connection errors if registration fails.
 func (c *Client) GetOrRegisterAPIKey(ctx context.Context, domain string) (string, error) {
-	if domain == "" {
-		domain = "localhost"
-	}
-
 	resp, err := c.Request(
 		ctx, http.MethodGet, "dev/apikey",
 		aoni.WithAccept("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"),
@@ -220,12 +251,13 @@ func (c *Client) GetOrRegisterAPIKey(ctx context.Context, domain string) (string
 	}
 
 	if doc.Find("#register_form").Length() > 0 {
-		return c.registerAPIKey(ctx, domain)
+		return c.registerAPIKey(ctx, generic.Coalesce(domain, "localhost"))
 	}
 
 	return "", ErrAPITokenNotFound
 }
 
+// registerAPIKey registers a new WebAPI key for the specified domain.
 func (c *Client) registerAPIKey(ctx context.Context, domain string) (string, error) {
 	c.logger.Info("Registering new WebAPI key...", log.String("domain", domain))
 
@@ -257,7 +289,8 @@ var (
 	patternSignInTitle  = []byte("<title>Sign In</title>")
 )
 
-// IsSessionExpiredError returns true if the error indicates a session expired error.
+// IsSessionExpiredError reports whether the given error indicates an expired Steam session.
+// It returns false if the error argument is nil.
 func IsSessionExpiredError(err error) bool {
 	if err == nil {
 		return false
@@ -272,7 +305,11 @@ func IsSessionExpiredError(err error) bool {
 	return strings.Contains(msg, "session expired") || strings.Contains(msg, "redirect")
 }
 
-// CheckSteamErrors checks the HTTP status code and body for Steam API errors.
+// CheckSteamErrors inspects the HTTP response status, headers, and body for Steam-specific error conditions.
+// It returns [service.ErrRateLimited] when the server responds with a rate limit status.
+// It returns [ErrFamilyViewRestricted] if the account parental lock page is detected.
+// It returns [service.ErrSessionExpired] if auth redirects or guest session indicators are found.
+// It handles empty or nil body slices without panicking.
 func CheckSteamErrors(statusCode int, header http.Header, body []byte) error {
 	if statusCode == http.StatusTooManyRequests {
 		return service.NewSteamAPIError("Rate limit exceeded", statusCode, service.ErrRateLimited)
@@ -324,8 +361,8 @@ func CheckSteamErrors(statusCode int, header http.Header, body []byte) error {
 	return nil
 }
 
-// TruncateBody returns a truncated string representation of the body,
-// limited to maxLen characters to prevent leaking sensitive data in errors.
+// TruncateBody returns a shortened string representation of the provided response body.
+// It limits the output length to maxLen characters to avoid exposing excessive data in log traces.
 func TruncateBody(body []byte, maxLen int) string {
 	s := string(body)
 	if len(s) > maxLen {

@@ -2,45 +2,36 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package community provides a high-level client for the steamcommunity.com website.
+// Package community provides high-level helper functions for interacting with the Steam Community.
+// It simplifies performing common HTTP operations such as executing GET requests for JSON or HTML,
+// as well as submitting POST requests with form URL-encoded or JSON payloads.
 //
-// Unlike the structured service package which uses official WebAPIs, this
-// package interacts with the web side of Steam. This includes parsing HTML pages,
-// performing AJAX calls, and handling legacy form-encoded data.
+// The package defines the [Requester] and [SessionProvider] interface aliases which map directly
+// to their counterparts in [client]. It provides the [Decorate] function to wrap a requester
+// with default modifiers, and helper functions like [Get], [GetHTML], [PostForm], and [PostJSON]
+// to streamline communications.
 //
-// # Key Components
-//
-//   - [Client]: The primary client used to communicate with Steam Community pages.
-//   - [Requester]: An interface representing objects capable of executing HTTP requests with session support.
-//
-// # Basic Usage Example
+// Basic usage example:
 //
 //	package main
 //
 //	import (
 //		"context"
 //		"fmt"
+//
 //		"github.com/lemon4ksan/g-man/pkg/steam/community"
 //	)
 //
+//	type Inventory struct {
+//		Success bool `json:"success"`
+//	}
+//
 //	func main() {
-//		ctx := context.Background()
-//
-//		// Mock sessionID extractor returning a dummy token
-//		sessionFunc := func(url string) string {
-//			return "mock_session_id_12345"
-//		}
-//
-//		// Create a new Community Client wrapping the default HTTP transport
-//		client := community.NewClient(nil, sessionFunc)
-//
-//		// Perform a GET request to fetch raw HTML content
-//		htmlBytes, err := community.GetHTML(ctx, client, "dev")
+//		c := community.NewClient(nil, nil)
+//		inv, err := community.Get[Inventory](context.Background(), c, "inventory", nil)
 //		if err != nil {
-//			fmt.Println("Request failed:", err)
-//			return
+//			panic(err)
 //		}
-//
-//		fmt.Printf("Successfully retrieved %d bytes of HTML\n", len(htmlBytes))
+//		fmt.Println("Inventory fetch success:", inv.Success)
 //	}
 package community

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -397,10 +398,10 @@ func TestConnector_MonitorAndReconnect(t *testing.T) {
 			sent:     make(chan []byte, 1),
 		}
 
-		dialCalls := 0
+		var dialCalls atomic.Int32
+
 		cfg.Dialers["tcp"] = func(ctx context.Context, logger log.Logger, endpoint, proxyURL string, headers http.Header) (network.Connection, error) {
-			dialCalls++
-			if dialCalls == 1 {
+			if dialCalls.Add(1) == 1 {
 				return mockConn, nil
 			}
 
@@ -471,10 +472,10 @@ func TestConnector_MonitorAndReconnect(t *testing.T) {
 			sent:     make(chan []byte, 1),
 		}
 
-		dialCalls := 0
+		var dialCalls atomic.Int32
+
 		cfg.Dialers["tcp"] = func(ctx context.Context, logger log.Logger, endpoint, proxyURL string, headers http.Header) (network.Connection, error) {
-			dialCalls++
-			if dialCalls == 1 {
+			if dialCalls.Add(1) == 1 {
 				return mockConn, nil
 			}
 
@@ -582,14 +583,14 @@ func TestConnector_MonitorAndReconnect(t *testing.T) {
 		err := c.Connect(t.Context(), CMServer{Type: "tcp", Endpoint: "1.1.1.1"})
 		require.NoError(t, err)
 
-		var cancelCalled bool
+		var cancelCalled atomic.Bool
 
 		c.reconnectCancel = func() {
-			cancelCalled = true
+			cancelCalled.Store(true)
 		}
 
 		c.handleDisconnect(mockConn)
-		assert.True(t, cancelCalled)
+		assert.True(t, cancelCalled.Load())
 	})
 
 	t.Run("reconnect_loop_terminated_by_context_cancel", func(t *testing.T) {
@@ -640,10 +641,14 @@ func TestConnector_MonitorAndReconnect(t *testing.T) {
 		}
 
 		mockConn := &MockConnection{id: 1, closed: make(chan struct{})}
-		dialedLast := false
+		dialedLast := make(chan struct{})
 		cfg.Dialers["tcp"] = func(ctx context.Context, logger log.Logger, endpoint, proxyURL string, headers http.Header) (network.Connection, error) {
 			if endpoint == "last_endpoint" {
-				dialedLast = true
+				select {
+				case <-dialedLast:
+				default:
+					close(dialedLast)
+				}
 			}
 
 			return nil, errors.New("fail")
@@ -655,8 +660,11 @@ func TestConnector_MonitorAndReconnect(t *testing.T) {
 
 		c.handleDisconnect(mockConn)
 
-		time.Sleep(10 * time.Millisecond)
-		assert.True(t, dialedLast)
+		select {
+		case <-dialedLast:
+		case <-time.After(1 * time.Second):
+			t.Fatal("timeout waiting for last endpoint dial")
+		}
 	})
 
 	t.Run("reconnect_loop_cancelled_during_backoff", func(t *testing.T) {

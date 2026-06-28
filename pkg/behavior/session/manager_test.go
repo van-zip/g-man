@@ -111,7 +111,7 @@ func TestManager_Run(t *testing.T) {
 			case verified <- struct{}{}:
 			default:
 			}
-		}).Once()
+		})
 
 		m := New(provider, log.Discard, eventBus, cfg)
 
@@ -144,12 +144,15 @@ func TestManager_Run(t *testing.T) {
 		}
 
 		provider.On("IsAuthenticated").Return(true)
-		provider.On("Verify", mock.Anything).Return(false, nil).Once()
+		provider.On("Verify", mock.Anything).Return(false, nil)
 
-		refreshed := make(chan struct{})
+		refreshed := make(chan struct{}, 1)
 		provider.On("Refresh", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-			close(refreshed)
-		}).Once()
+			select {
+			case refreshed <- struct{}{}:
+			default:
+			}
+		})
 
 		m := New(provider, log.Discard, eventBus, cfg)
 
@@ -180,12 +183,15 @@ func TestManager_Run(t *testing.T) {
 		}
 
 		provider.On("IsAuthenticated").Return(true)
-		provider.On("Verify", mock.Anything).Return(false, errors.New("network error")).Once()
+		provider.On("Verify", mock.Anything).Return(false, errors.New("network error"))
 
-		refreshed := make(chan struct{})
+		refreshed := make(chan struct{}, 1)
 		provider.On("Refresh", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-			close(refreshed)
-		}).Once()
+			select {
+			case refreshed <- struct{}{}:
+			default:
+			}
+		})
 
 		m := New(provider, log.Discard, eventBus, cfg)
 
@@ -216,12 +222,15 @@ func TestManager_Run(t *testing.T) {
 		}
 
 		provider.On("IsAuthenticated").Return(true)
-		provider.On("Verify", mock.Anything).Return(false, nil).Once()
+		provider.On("Verify", mock.Anything).Return(false, nil)
 
-		refreshed := make(chan struct{})
+		refreshed := make(chan struct{}, 1)
 		provider.On("Refresh", mock.Anything).Return(errors.New("refresh fail")).Run(func(args mock.Arguments) {
-			close(refreshed)
-		}).Once()
+			select {
+			case refreshed <- struct{}{}:
+			default:
+			}
+		})
 
 		m := New(provider, log.Discard, eventBus, cfg)
 

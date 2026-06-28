@@ -46,13 +46,12 @@ func newMockedClient(t *testing.T, mock *mock.ServiceMock) *client.Client {
 func TestNew_InitializesCorrectly(t *testing.T) {
 	t.Parallel()
 
-	mockHTTP := &http.Client{}
 	logger := log.New(log.DefaultConfig(log.LevelDebug))
-	rc := aoni.NewClient(mockHTTP)
 
 	t.Run("Default Initialization", func(t *testing.T) {
 		t.Parallel()
 
+		mockHTTP := &http.Client{}
 		c := client.New(mockHTTP, &mockSession{})
 		require.NotNil(t, c)
 		assert.Equal(t, "test_session_id", c.SessionID(client.BaseURL))
@@ -61,6 +60,7 @@ func TestNew_InitializesCorrectly(t *testing.T) {
 	t.Run("With Logger Option", func(t *testing.T) {
 		t.Parallel()
 
+		mockHTTP := &http.Client{}
 		c := client.New(mockHTTP, &mockSession{})
 		require.NotNil(t, c)
 
@@ -73,6 +73,8 @@ func TestNew_InitializesCorrectly(t *testing.T) {
 	t.Run("With REST Option", func(t *testing.T) {
 		t.Parallel()
 
+		mockHTTP := &http.Client{}
+		rc := aoni.NewClient(mockHTTP)
 		c := client.New(mockHTTP, &mockSession{})
 		require.NotNil(t, c)
 

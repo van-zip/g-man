@@ -278,8 +278,9 @@ func (p *Processor) withRetry(ctx context.Context, maxRetries int, fn func() err
 			break
 		}
 
-		// TODO: Check if error is fatal (e.g. Steam dropped connection permanently)
-		// if isFatalError(err) { return err }
+		if errors.Is(err, ErrEscrowNotFound) {
+			return err
+		}
 
 		// Calculate backoff: 2^attempt seconds (1s, 2s, 4s, 8s, 16s)
 		backoffDuration := time.Duration(math.Pow(2, float64(attempt))) * time.Second

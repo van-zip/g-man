@@ -1,13 +1,12 @@
 <div align="center">
 
-# 🤖 G-MAN
-
-### Core Steam Network & Multi-Game Automation Framework for Go
+<img src="assets/logo.png" alt="G-MAN Logo"/>
 
 [![Go Reference](https://img.shields.io/badge/go-reference-007d9c?logo=go&logoColor=white&style=flat-square)](https://pkg.go.dev/github.com/lemon4ksan/g-man)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lemon4ksan/g-man?style=flat-square)](https://goreportcard.com/report/github.com/lemon4ksan/g-man)
+[![Coverage](https://img.shields.io/badge/coverage-94.5%25-brightgreen?style=flat-square&logo=go&logoColor=white)](https://github.com/lemon4ksan/g-man)
 [![License](https://img.shields.io/github/license/lemon4ksan/g-man?style=flat-square)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/lemon4ksan/g-man?style=flat-square)](https://github.com/lemon4ksan/g-man/stargazers)
+[![Linter](https://img.shields.io/badge/linter-golangci--lint-brightgreen?style=flat-square&logo=go)](https://github.com/golangci/golangci-lint)
 
 > _"The right bot in the wrong place can make all the difference in the skins market."_
 
@@ -90,6 +89,27 @@ flowchart LR
 * **Defensive Web Scraping:** Parses standard HTML pages returning `200 OK` status codes for hidden "Soft Errors" (e.g., rate-limit messages, Family View locks, login prompts) and converts them into strictly typed Go errors.
 * **Robust Dependency Management:** Uses a Depth-First Search (DFS) algorithm during boot to topologically sort and initialize modules, failing fast on circular dependencies.
 
+## ⚔️ Go vs. JavaScript: Why G-man Wins
+
+Historically, Node.js (with libraries like `node-steam-user`) has been the default choice for Steam automation. However, when scaling to enterprise or production grade operations, JavaScript's single-threaded nature and runtime characteristics introduce heavy bottlenecks:
+
+| Feature | 🤖 G-man (Go) | 📦 Node.js (JS/TS) | Why it matters |
+| :--- | :--- | :--- | :--- |
+| **Concurrency Model** | **CSP (Goroutines + Channels)** | Single-threaded Event Loop | Go handles thousands of concurrent sessions/accounts across all CPU cores without blocking. |
+| **Idle Memory Footprint** | **~4.5 MB** per client | **~40 - 80 MB** per client | G-man allows running 10x-20x more bots on the same VPS, drastically reducing hosting costs. |
+| **Garbage Collection** | **Low-latency (sub-millisecond)** | Generational (V8) | Eliminates random micro-stutters during heavy inventory parsing or high-frequency trading. |
+| **Type Safety** | **Strict compile-time checking** | Dynamic / Runtime-only (TS compiles to JS) | Guarantees safety in critical economic/trading operations, eliminating `undefined` crashes. |
+| **Deployment** | **Single static binary (~15MB)** | Large `node_modules` (+ Node runtime) | Simplifies deployment and reduces Docker image sizes from 300MB+ to 15MB. |
+
+## 🔮 The Go Future: Why We Build on Go
+
+Steam network protocols are evolving. Modern Game Coordinator handshakes (CS2, Dota 2) utilize Protobufs heavily, and Steam's API rate limits require robust connection multiplexing. G-man uses Go because it is built for the next decade of automation:
+
+1. **Cloud-Native Architecture:** Go is the lingua franca of cloud engineering (Docker, Kubernetes, Prometheus). G-man exports native metrics effortlessly, allowing you to integrate bot fleets into modern Grafana dashboards.
+2. **Zero-Dependency Resilience:** G-man compiles down to a single binary with zero external runtime dependencies. Say goodbye to `npm audit` warnings, breaking updates in nested NPM packages, and security vulnerabilities.
+3. **Optimized Protobuf & Serialization:** Go's official protobuf implementation is highly optimized, allowing G-man to decode, process, and route binary network packets from Game Coordinators at blazing speeds.
+4. **Resilient Network Primitives:** Implementing proxy-rotation, custom DNS resolution, and TCP/UDP dialers is simple and native in Go's standard `net` library, without relying on bloated wrapper packages.
+
 ## 🚀 Quick Start
 
 ### 1. Initialize the Core Client
@@ -170,14 +190,16 @@ func PriceValidationMiddleware(priceLimit int) engine.Middleware {
 }
 ```
 
-## 🎮 Multi-Game Extensions
+## 📦 Ecosystem & Extensions
 
-Domain-specific game behaviors are decoupled from the core framework into dedicated repositories:
+G-man is designed to be highly modular. Game-specific modules and tooling are decoupled into dedicated repositories:
 
-* **[g-man-tf2](https://github.com/lemon4ksan/g-man-tf2)**: Team Fortress 2 Trading & Economy Suite
+* **[g-man-tf2](https://github.com/lemon4ksan/g-man-tf2)**: Team Fortress 2 Trading & Economy Suite.
   - **Metal Arithmetic:** Calculations with keys, refined, reclaimed, and scrap metals.
   - **Auto-Smelter:** Automatically handles weapon combining and metal smelting to balance change.
   - **Backpack.tf Sync:** Listing publisher and competitor undercutting manager.
+* **[g-man-cli](https://github.com/lemon4ksan/g-man-cli)**: Background system daemon (`g-mand`) and color-coded CLI client (`gmanctl`) for control, monitoring, and inventory management over secure gRPC.
+* **[node-gman](https://github.com/lemon4ksan/node-gman)**: TypeScript/Node.js SDK for `g-mand` providing compatibility wrappers (`SteamUserAdapter`, `TradeOfferManagerAdapter`) to easily migrate or bridge existing NodeJS code to the Go backend.
 
 ## 🚀 Memory & Performance
 

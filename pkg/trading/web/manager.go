@@ -25,6 +25,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/lemon4ksan/g-man/pkg/log"
+	pb "github.com/lemon4ksan/g-man/pkg/protobuf/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam"
 	"github.com/lemon4ksan/g-man/pkg/steam/auth"
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
@@ -251,7 +252,10 @@ func (m *Manager) StartAuthed(ctx context.Context, authCtx module.AuthContext) e
 	})
 
 	// Listen for trade offer notification changes to trigger immediate poll
-	notifSub := m.Bus.Subscribe(&notifications.UserNotificationsEvent{})
+	notifSub := m.Bus.Subscribe(
+		&notifications.UserNotificationsEvent{},
+		&notifications.ReceivedEvent{},
+	)
 	m.Go(func(ctx context.Context) {
 		m.listenNotifications(ctx, notifSub)
 	})
@@ -1053,11 +1057,26 @@ func (m *Manager) listenNotifications(ctx context.Context, sub *bus.Subscription
 				return
 			}
 
-			if e, ok := ev.(*notifications.UserNotificationsEvent); ok {
+			switch e := ev.(type) {
+			case *notifications.UserNotificationsEvent:
 				if count, exists := e.Notifications[notifications.NotificationTradeOffer]; exists && count > 0 {
 					m.Logger.Debug("Trade offer notification received, triggering poll",
 						log.Uint32("count", count),
 					)
+					m.TriggerPoll()
+				}
+
+			case *notifications.ReceivedEvent:
+				hasTradeOffer := false
+				for _, notif := range e.Notifications {
+					if notif.GetNotificationType() == pb.ESteamNotificationType_k_ESteamNotificationType_TradeOffer {
+						hasTradeOffer = true
+						break
+					}
+				}
+
+				if hasTradeOffer {
+					m.Logger.Debug("Trade offer notification received, triggering poll")
 					m.TriggerPoll()
 				}
 			}

@@ -44,18 +44,22 @@ func setupChat(t *testing.T) (*Chat, *mock.InitContext) {
 func TestChat_InitAndClose(t *testing.T) {
 	t.Parallel()
 
-	m := New()
-	ictx := mock.NewInitContext()
+	t.Run("success_lifecycle", func(t *testing.T) {
+		t.Parallel()
 
-	assert.Equal(t, ModuleName, m.Name())
+		m := New()
+		ictx := mock.NewInitContext()
 
-	err := m.Init(ictx)
-	require.NoError(t, err)
-	ictx.AssertServiceHandlerRegistered(t, "FriendMessagesClient.IncomingMessage#1")
+		assert.Equal(t, ModuleName, m.Name())
 
-	err = m.Close()
-	require.NoError(t, err)
-	ictx.AssertServiceHandlerUnregistered(t, "FriendMessagesClient.IncomingMessage#1")
+		err := m.Init(ictx)
+		require.NoError(t, err)
+		ictx.AssertServiceHandlerRegistered(t, "FriendMessagesClient.IncomingMessage#1")
+
+		err = m.Close()
+		require.NoError(t, err)
+		ictx.AssertServiceHandlerUnregistered(t, "FriendMessagesClient.IncomingMessage#1")
+	})
 }
 
 func TestChat_StartAuthed(t *testing.T) {
@@ -451,6 +455,76 @@ func TestChat_HandleIncomingMessage(t *testing.T) {
 	})
 }
 
+func TestChat_HandleLegacyFriendMsg(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success_chat_msg", func(t *testing.T) {
+		t.Parallel()
+		m, ictx := setupChat(t)
+
+		sub := ictx.Bus().Subscribe(&MessageEvent{})
+		defer sub.Unsubscribe()
+
+		msg := &pb.CMsgClientFriendMsgIncoming{
+			SteamidFrom:            proto.Uint64(FriendSteamID),
+			ChatEntryType:          proto.Int32(ChatEntryTypeChatMsg),
+			Message:                []byte("hello legacy\x00"),
+			Rtime32ServerTimestamp: proto.Uint32(111),
+		}
+		b, _ := proto.Marshal(msg)
+		m.handleLegacyFriendMsg(&protocol.Packet{Payload: b})
+
+		select {
+		case ev := <-sub.C():
+			assert.Equal(t, "hello legacy", ev.(*MessageEvent).Message)
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Legacy message not received")
+		}
+	})
+
+	t.Run("success_typing", func(t *testing.T) {
+		t.Parallel()
+		m, ictx := setupChat(t)
+
+		sub := ictx.Bus().Subscribe(&TypingEvent{})
+		defer sub.Unsubscribe()
+
+		msg := &pb.CMsgClientFriendMsgIncoming{
+			SteamidFrom:   proto.Uint64(FriendSteamID),
+			ChatEntryType: proto.Int32(ChatEntryTypeTyping),
+		}
+		b, _ := proto.Marshal(msg)
+		m.handleLegacyFriendMsg(&protocol.Packet{Payload: b})
+
+		select {
+		case <-sub.C():
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Legacy typing not received")
+		}
+	})
+
+	t.Run("unhandled_type", func(t *testing.T) {
+		t.Parallel()
+		m, _ := setupChat(t)
+
+		msg := &pb.CMsgClientFriendMsgIncoming{
+			ChatEntryType: proto.Int32(99),
+		}
+		b, _ := proto.Marshal(msg)
+		assert.NotPanics(t, func() {
+			m.handleLegacyFriendMsg(&protocol.Packet{Payload: b})
+		})
+	})
+
+	t.Run("unmarshal_error", func(t *testing.T) {
+		t.Parallel()
+		m, _ := setupChat(t)
+		assert.NotPanics(t, func() {
+			m.handleLegacyFriendMsg(&protocol.Packet{Payload: []byte{0xFF, 0xFF}})
+		})
+	})
+}
+
 func TestChat_OfflineSync(t *testing.T) {
 	t.Parallel()
 
@@ -492,6 +566,68 @@ func TestChat_OfflineSync(t *testing.T) {
 			assert.Equal(t, "unread friend message", ev.(*MessageEvent).Message)
 		case <-time.After(time.Second):
 			t.Fatal("Message not synced")
+		}
+	})
+
+	t.Run("sync_all_messages_read", func(t *testing.T) {
+		t.Parallel()
+		m, ictx := setupChat(t)
+		ctx := t.Context()
+
+		ictx.MockService().
+			SetProtoResponse("FriendMessages", "GetActiveMessageSessions", &pb.CFriendsMessages_GetActiveMessageSessions_Response{
+				MessageSessions: []*pb.CFriendsMessages_GetActiveMessageSessions_Response_FriendMessageSession{
+					{
+						AccountidFriend: proto.Uint32(id.ID(FriendSteamID).AccountID()),
+						LastMessage:     proto.Uint32(100),
+						LastView:        proto.Uint32(100), // Equal, so no unread!
+					},
+				},
+			})
+
+		assert.NotPanics(t, func() {
+			m.synchronizeOfflineMessages(ctx)
+		})
+	})
+
+	t.Run("sync_filter_old_messages", func(t *testing.T) {
+		t.Parallel()
+		m, ictx := setupChat(t)
+		m.botAccountID = id.ID(BotSteamID).AccountID()
+		ctx := t.Context()
+
+		ictx.MockService().
+			SetProtoResponse("FriendMessages", "GetActiveMessageSessions", &pb.CFriendsMessages_GetActiveMessageSessions_Response{
+				MessageSessions: []*pb.CFriendsMessages_GetActiveMessageSessions_Response_FriendMessageSession{
+					{
+						AccountidFriend: proto.Uint32(id.ID(FriendSteamID).AccountID()),
+						LastMessage:     proto.Uint32(200),
+						LastView:        proto.Uint32(100),
+					},
+				},
+			})
+
+		ictx.MockService().
+			SetProtoResponse("FriendMessages", "GetRecentMessages", &pb.CFriendMessages_GetRecentMessages_Response{
+				Messages: []*pb.CFriendMessages_GetRecentMessages_Response_FriendMessage{
+					{
+						Accountid: proto.Uint32(9999),
+						Timestamp: proto.Uint32(90), // <= LastView (100)
+						Message:   proto.String("old message"),
+					},
+				},
+			})
+
+		sub := ictx.Bus().Subscribe(&MessageEvent{})
+		defer sub.Unsubscribe()
+
+		m.synchronizeOfflineMessages(ctx)
+
+		select {
+		case <-sub.C():
+			t.Fatal("Old message should be filtered and not published")
+		case <-time.After(50 * time.Millisecond):
+			// Success!
 		}
 	})
 

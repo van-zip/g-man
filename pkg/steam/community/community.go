@@ -5,13 +5,10 @@
 package community
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/lemon4ksan/aoni"
 
@@ -49,12 +46,11 @@ func Decorate(r Requester, mods ...aoni.RequestModifier) Requester {
 	}
 }
 
-// GetJSON executes a GET request and decodes the resulting JSON response into a new [Resp] instance.
-// It automatically configures the request headers and uses the [encoding.SteamJSONDecoder] for decoding.
-// It passes reqMsg as URL query parameters if it is not nil.
+// GetTo executes a GET request and decodes the response body into a new [Resp] instance.
+// It injects Steam Community-specific request headers and uses [encoding.SteamJSONDecoder] for decoding.
 // It returns network, decoding, or Steam-specific response validation errors.
 // It will panic if the provided [Requester] is nil.
-func GetJSON[Resp any](
+func GetTo[Resp any](
 	ctx context.Context,
 	r Requester,
 	path string,
@@ -66,7 +62,7 @@ func GetJSON[Resp any](
 		aoni.WithHeader("X-Requested-With", "XMLHttpRequest"),
 	}, mods...)
 
-	return aoni.GetJSON[Resp](ctx, r, path, mods...)
+	return aoni.GetTo[Resp](ctx, r, path, mods...)
 }
 
 // GetHTML executes a GET request optimized for raw HTML content.
@@ -86,24 +82,57 @@ func GetHTML(ctx context.Context, r Requester, path string, mods ...aoni.Request
 	return resp.Body, nil
 }
 
-// PostForm executes a POST request containing URL-encoded form data.
-// It automatically encodes the reqMsg argument as form parameters and injects the session identifier from [Requester.SessionID].
-// If reqMsg is nil, it initializes and sends an empty set of form parameters with the session identifier.
-// It returns network, parsing, or decoding errors, and decodes the JSON response using [encoding.SteamJSONDecoder].
-// It will panic if the provided [Requester] is nil.
-func PostForm[Resp any](
+// PostTo executes a POST request with a JSON-encoded body and decodes the response into a new [Resp] instance.
+// It injects the active session identifier as a "sessionid" URL query parameter.
+// It uses [encoding.SteamJSONDecoder] for decoding the response.
+//
+// To send other body formats, pre-serialize the payload and pass it as an [io.Reader] (e.g. [strings.NewReader]),
+// then override the Content-Type header using [WithContentType].
+// To decode other response formats (such as XML or YAML), pass a decoder modifier, e.g. [WithXMLDecoder] or [WithYAMLDecoder].
+//
+// Use [PostFormTo] instead of passing [aoni.WithFormBody] or [aoni.WithFormValues] request modifiers.
+func PostTo[Resp any](
 	ctx context.Context,
 	r Requester,
 	path string,
-	reqMsg any,
+	body any,
+	mods ...aoni.RequestModifier,
+) (*Resp, error) {
+	var query url.Values
+	if sid := r.SessionID(BaseURL); sid != "" {
+		query = url.Values{"sessionid": {sid}}
+	}
+
+	mods = append([]aoni.RequestModifier{
+		aoni.WithDecoder(encoding.SteamJSONDecoder),
+		aoni.WithQuery(query),
+		aoni.WithAccept("application/json"),
+		aoni.WithContentType("application/json; charset=UTF-8"),
+	}, mods...)
+
+	return aoni.PostTo[Resp](ctx, r, path, body, mods...)
+}
+
+// PostFormTo executes a POST request with URL-encoded form data and decodes the response into a new [Resp] instance.
+// It automatically serializes reqMsg to form values using [aoni.StructToValues] and injects
+// the active session identifier as a "sessionid" form field if not already present.
+// It uses [encoding.SteamJSONDecoder] for decoding the response.
+//
+// This helper doesn't accept [io.Reader] body.
+// Use [aoni.PostTo] with [aoni.WithFormBody] or [aoni.WithFormValues] for that.
+func PostFormTo[Resp any](
+	ctx context.Context,
+	r Requester,
+	path string,
+	body any,
 	mods ...aoni.RequestModifier,
 ) (*Resp, error) {
 	var params url.Values
 
-	if reqMsg != nil {
+	if body != nil {
 		var err error
 
-		params, err = aoni.StructToValues(reqMsg)
+		params, err = aoni.StructToValues(body)
 		if err != nil {
 			return nil, err
 		}
@@ -117,48 +146,12 @@ func PostForm[Resp any](
 
 	mods = append([]aoni.RequestModifier{
 		aoni.WithDecoder(encoding.SteamJSONDecoder),
+		aoni.WithFormValues(params),
 		aoni.WithAccept("application/json, text/javascript; q=0.01"),
 		aoni.WithContentType("application/x-www-form-urlencoded; charset=UTF-8"),
 	}, mods...)
 
-	return aoni.PostFormJSON[Resp](ctx, r, path, strings.NewReader(params.Encode()), mods...)
-}
-
-// PostJSON executes a POST request containing a JSON-encoded body.
-// It automatically serializes reqMsg to JSON and injects the session identifier as a "sessionid" URL query parameter.
-// If reqMsg is nil, the request is executed with an empty body.
-// It returns network, encoding, or decoding errors, and decodes the JSON response using [encoding.SteamJSONDecoder].
-// It will panic if the provided [Requester] is nil.
-func PostJSON[Resp any](
-	ctx context.Context,
-	r Requester,
-	path string,
-	reqMsg any,
-	mods ...aoni.RequestModifier,
-) (*Resp, error) {
-	var query url.Values
-	if sid := r.SessionID(BaseURL); sid != "" {
-		query = url.Values{"sessionid": {sid}}
-	}
-
-	var bodyBytes []byte
-	if reqMsg != nil {
-		var err error
-
-		bodyBytes, err = json.Marshal(reqMsg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	mods = append([]aoni.RequestModifier{
-		aoni.WithQuery(query),
-		aoni.WithContentType("application/json; charset=UTF-8"),
-		aoni.WithAccept("application/json"),
-		aoni.WithDecoder(encoding.SteamJSONDecoder),
-	}, mods...)
-
-	return aoni.PostJSON[Resp](ctx, r, path, bytes.NewReader(bodyBytes), mods...)
+	return aoni.PostTo[Resp](ctx, r, path, nil, mods...)
 }
 
 type decoratedRequester struct {

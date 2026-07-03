@@ -199,9 +199,9 @@ type ItemOrdersHistogramResponse struct {
 	// BuyOrderSummary is the HTML summary block representing buy orders.
 	BuyOrderSummary string `json:"buy_order_summary"`
 	// HighestBuyOrder is the highest active buy order price as a decimal string.
-	HighestBuyOrder string `json:"highest_buy_order"`
+	HighestBuyOrder aoni.Float64String `json:"highest_buy_order"`
 	// LowestSellOrder is the lowest active sell order price as a decimal string.
-	LowestSellOrder string `json:"lowest_sell_order"`
+	LowestSellOrder aoni.Float64String `json:"lowest_sell_order"`
 	// BuyOrderGraph contains the coordinates for the buy order volume chart.
 	BuyOrderGraph GraphPoints `json:"buy_order_graph"`
 	// SellOrderGraph contains the coordinates for the sell order volume chart.
@@ -490,15 +490,15 @@ type GemValue struct {
 	// PromptTitle is the title displayed in the gem grinding confirmation dialog.
 	PromptTitle string
 	// GemValue is the total quantity of gems received on grinding.
-	GemValue int
+	GemValue int64
 }
 
 // GemsResult represents the result of grinding an item into gems.
 type GemsResult struct {
 	// GemsReceived is the quantity of gems received on grinding.
-	GemsReceived int
+	GemsReceived int64
 	// TotalGems is the total quantity of gems on the account.
-	TotalGems int
+	TotalGems int64
 }
 
 // BoosterCatalog represents the booster pack creator catalog details.
@@ -530,11 +530,11 @@ type BoosterPackInfo struct {
 // BoosterResult represents the result of creating or opening a booster pack.
 type BoosterResult struct {
 	// TotalGems is the total quantity of gems remaining on the account.
-	TotalGems int
+	TotalGems int64
 	// TradableGems is the quantity of tradable gems remaining on the account.
-	TradableGems int
+	TradableGems int64
 	// UntradableGems is the quantity of untradable gems remaining on the account.
-	UntradableGems int
+	UntradableGems int64
 	// ResultItem is the raw item description details of the crafted/unpacked asset.
 	ResultItem any
 }
@@ -544,23 +544,23 @@ type GiftDetails struct {
 	// GiftName is the display name of the gift.
 	GiftName string
 	// PackageID is the package identifier of the gift.
-	PackageID int
+	PackageID int64
 	// Owned is true if the user already owns the target package.
 	Owned bool
 }
 
 type gemValueResponse struct {
-	Success  int    `json:"success"`
-	Message  string `json:"message"`
-	GooValue string `json:"goo_value"`
-	StrTitle string `json:"strTitle"`
+	Success  int              `json:"success"`
+	Message  string           `json:"message"`
+	GooValue aoni.Int64String `json:"goo_value"`
+	StrTitle string           `json:"strTitle"`
 }
 
 type grindGooResponse struct {
-	Success          int    `json:"success"`
-	Message          string `json:"message"`
-	GooValueReceived string `json:"goo_value_received "` // lol valve
-	GooValueTotal    string `json:"goo_value_total"`
+	Success          int              `json:"success"`
+	Message          string           `json:"message"`
+	GooValueReceived aoni.Int64String `json:"goo_value_received "` // lol valve
+	GooValueTotal    aoni.Int64String `json:"goo_value_total"`
 }
 
 type unpackBoosterResponse struct {
@@ -570,19 +570,19 @@ type unpackBoosterResponse struct {
 }
 
 type createBoosterResponse struct {
-	PurchaseEResult     int    `json:"purchase_eresult"`
-	GooAmount           string `json:"goo_amount"`
-	TradableGooAmount   string `json:"tradable_goo_amount"`
-	UntradableGooAmount string `json:"untradable_goo_amount"`
-	PurchaseResult      any    `json:"purchase_result"`
+	PurchaseEResult     int              `json:"purchase_eresult"`
+	GooAmount           aoni.Int64String `json:"goo_amount"`
+	TradableGooAmount   aoni.Int64String `json:"tradable_goo_amount"`
+	UntradableGooAmount aoni.Int64String `json:"untradable_goo_amount"`
+	PurchaseResult      any              `json:"purchase_result"`
 }
 
 type giftDetailsResponse struct {
-	Success   int    `json:"success"`
-	Message   string `json:"message"`
-	PackageID string `json:"packageid"`
-	GiftName  string `json:"gift_name"`
-	Owned     bool   `json:"owned"`
+	Success   int              `json:"success"`
+	Message   string           `json:"message"`
+	PackageID aoni.Int64String `json:"packageid"`
+	GiftName  string           `json:"gift_name"`
+	Owned     bool             `json:"owned"`
 }
 
 type redeemGiftResponse struct {

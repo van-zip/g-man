@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/lemon4ksan/miyako/bus"
+	"github.com/lemon4ksan/miyako/generic"
 	"github.com/lemon4ksan/miyako/kata"
 	"google.golang.org/protobuf/proto"
 
@@ -486,12 +487,10 @@ func (a *Authenticator) handleGuardCodeConfirmation(
 ) {
 	is2FA := confType == pb.EAuthSessionGuardType_k_EAuthSessionGuardType_DeviceCode
 
-	msg := "2FA code required"
-	if !is2FA {
-		msg = "Email confirmation required"
-	}
-
-	a.getLogger().Info(msg, log.String("associated_message", conf.GetAssociatedMessage()))
+	a.getLogger().Info(
+		generic.Ternary(is2FA, "2FA code required", "Email confirmation required"),
+		log.String("associated_message", conf.GetAssociatedMessage()),
+	)
 
 	a.bus.Publish(&SteamGuardRequiredEvent{
 		Is2FA:       is2FA,

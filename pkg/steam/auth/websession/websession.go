@@ -26,7 +26,8 @@ import (
 	"github.com/lemon4ksan/g-man/pkg/steam/protocol/enums"
 )
 
-var defaultDomains = []string{
+// DefaultDomains is the list of domains that will have authenticated cookies.
+var DefaultDomains = []string{
 	"https://steamcommunity.com",
 	"https://store.steampowered.com",
 	"https://help.steampowered.com",
@@ -88,7 +89,7 @@ func New(steamID id.ID, logger log.Logger, baseDoer aoni.HTTPDoer) *WebSession {
 		retryBackoff: time.Second,
 	}
 
-	for _, d := range defaultDomains {
+	for _, d := range DefaultDomains {
 		if u, err := url.Parse(d); err == nil {
 			ws.domains = append(ws.domains, u)
 		}
@@ -184,7 +185,7 @@ func (s *WebSession) Verify(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	_, err := aoni.GetJSON[aoni.NoResponse](ctx, s.REST(), urlVerify)
+	_, err := aoni.GetTo[aoni.NoResponse](ctx, s.REST(), urlVerify)
 	if err != nil {
 		s.Clear()
 		return false, nil //nolint:nilerr
@@ -275,7 +276,7 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 		} `json:"transfer_info"`
 	}
 
-	res, err := aoni.PostJSON[finalizeResponse](ctx, s.REST(), urlFinalize, payload)
+	res, err := aoni.PostTo[finalizeResponse](ctx, s.REST(), urlFinalize, payload)
 	if err != nil {
 		return fmt.Errorf("websession: finalize login failed: %w", err)
 	}
@@ -303,17 +304,17 @@ func (s *WebSession) authSlowPath(ctx context.Context, refreshToken, sessionID s
 }
 
 func (s *WebSession) executeTransfer(ctx context.Context, transferURL string, params map[string]string) error {
-	type transferResult struct {
+	type transferResp struct {
 		Result enums.EResult `json:"result"`
 	}
 
-	res, err := aoni.PostJSON[transferResult](ctx, s.REST(), transferURL, params)
+	resp, err := aoni.PostTo[transferResp](ctx, s.REST(), transferURL, params)
 	if err != nil {
 		return err
 	}
 
-	if res.Result != enums.EResult_OK {
-		return fmt.Errorf("steam error: %s", res.Result.String())
+	if resp.Result != enums.EResult_OK {
+		return fmt.Errorf("steam error: %s", resp.Result.String())
 	}
 
 	return nil

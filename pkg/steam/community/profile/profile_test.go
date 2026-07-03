@@ -137,7 +137,7 @@ func TestEditProfile(t *testing.T) {
 		clientMock.SetHTMLResponse("profiles/{steamID}/edit/info", 200, `<html><body></body></html>`)
 
 		err := EditProfile(t.Context(), clientMock, testSteamID, Settings{})
-		assert.ErrorContains(t, err, "could not find profile_edit_config element")
+		assert.ErrorContains(t, err, "config element not found (possibly not logged in)")
 	})
 
 	t.Run("missing_data_profile_edit_attribute", func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestEditProfile(t *testing.T) {
 		)
 
 		err := EditProfile(t.Context(), clientMock, testSteamID, Settings{})
-		assert.ErrorContains(t, err, "failed to parse existing settings JSON")
+		assert.ErrorContains(t, err, "failed to unmarshal config")
 	})
 
 	t.Run("html_parse_failure", func(t *testing.T) {
@@ -353,7 +353,7 @@ func TestUpdatePrivacySettings(t *testing.T) {
 		)
 
 		err := UpdatePrivacySettings(t.Context(), clientMock, testSteamID, PrivacySettings{})
-		assert.ErrorContains(t, err, "failed to parse existing privacy settings JSON")
+		assert.ErrorContains(t, err, "failed to unmarshal config")
 	})
 
 	t.Run("html_parse_failure", func(t *testing.T) {

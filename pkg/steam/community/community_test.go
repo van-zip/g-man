@@ -113,7 +113,7 @@ func TestGet(t *testing.T) {
 		mockSvc.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
-		resp, err := community.GetJSON[genericResponse](
+		resp, err := community.GetTo[genericResponse](
 			t.Context(), client, "/test/get",
 			aoni.WithQuery(genericRequest{Param1: "hi", Param2: 1}),
 		)
@@ -127,7 +127,7 @@ func TestGet(t *testing.T) {
 		mockSvc := mock.NewServiceMock()
 		client := community.NewClient(nil, nil).WithREST(mockSvc)
 
-		resp, err := community.GetJSON[genericResponse](
+		resp, err := community.GetTo[genericResponse](
 			t.Context(),
 			client,
 			"/test/get",
@@ -146,7 +146,7 @@ func TestGet(t *testing.T) {
 		mockSvc.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, errors.New("get request failed")
 		}
-		_, err := community.GetJSON[genericResponse](t.Context(), client, "/test/get")
+		_, err := community.GetTo[genericResponse](t.Context(), client, "/test/get")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "get request failed")
 	})
@@ -163,7 +163,7 @@ func TestGet(t *testing.T) {
 				Body:       io.NopCloser(strings.NewReader(`{"success": "not-a-bool"}`)),
 			}, nil
 		}
-		_, err := community.GetJSON[genericResponse](t.Context(), client, "/test/get")
+		_, err := community.GetTo[genericResponse](t.Context(), client, "/test/get")
 		require.Error(t, err)
 		assert.IsType(t, &json.UnmarshalTypeError{}, err)
 	})
@@ -219,7 +219,7 @@ func TestGetHTML(t *testing.T) {
 	})
 }
 
-func TestPostForm(t *testing.T) {
+func TestPostFormJSON(t *testing.T) {
 	t.Parallel()
 
 	respBody, _ := json.Marshal(genericResponse{Success: true})
@@ -247,7 +247,7 @@ func TestPostForm(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
 		reqMsg := genericRequest{Param1: "data", Param2: 42}
-		_, err := community.PostForm[genericResponse](t.Context(), client, "/test/post", reqMsg)
+		_, err := community.PostFormTo[genericResponse](t.Context(), client, "/test/post", reqMsg)
 		require.NoError(t, err)
 	})
 
@@ -278,7 +278,7 @@ func TestPostForm(t *testing.T) {
 		}
 
 		reqMsg := requestWithSession{SessionID: "custom_session_id", Param: "val"}
-		_, err := community.PostForm[genericResponse](t.Context(), client, "/test/post", reqMsg)
+		_, err := community.PostFormTo[genericResponse](t.Context(), client, "/test/post", reqMsg)
 		require.NoError(t, err)
 	})
 
@@ -302,7 +302,7 @@ func TestPostForm(t *testing.T) {
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
-		_, err := community.PostForm[genericResponse](t.Context(), client, "/test/post", nil)
+		_, err := community.PostFormTo[genericResponse](t.Context(), client, "/test/post", nil)
 		require.NoError(t, err)
 	})
 
@@ -315,7 +315,7 @@ func TestPostForm(t *testing.T) {
 		mockSvc.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, errors.New("post form failed")
 		}
-		_, err := community.PostForm[genericResponse](t.Context(), client, "/test/post", nil)
+		_, err := community.PostFormTo[genericResponse](t.Context(), client, "/test/post", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "post form failed")
 	})
@@ -326,7 +326,7 @@ func TestPostForm(t *testing.T) {
 		mockSvc := mock.NewServiceMock()
 		client := community.NewClient(nil, mockSvc).WithREST(mockSvc)
 
-		_, err := community.PostForm[genericResponse](t.Context(), client, "/test/post", make(chan int))
+		_, err := community.PostFormTo[genericResponse](t.Context(), client, "/test/post", make(chan int))
 		require.Error(t, err)
 	})
 }
@@ -353,7 +353,7 @@ func TestPostJSON(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
 		reqMsg := genericRequest{Param1: "data", Param2: 42}
-		_, err := community.PostJSON[genericResponse](t.Context(), client, "/test/post", reqMsg)
+		_, err := community.PostTo[genericResponse](t.Context(), client, "/test/post", reqMsg)
 		require.NoError(t, err)
 	})
 
@@ -367,7 +367,7 @@ func TestPostJSON(t *testing.T) {
 			assert.Nil(t, body)
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(respBody))}, nil
 		}
-		_, err := community.PostJSON[genericResponse](t.Context(), client, "/test/post", nil)
+		_, err := community.PostTo[genericResponse](t.Context(), client, "/test/post", nil)
 		require.NoError(t, err)
 	})
 
@@ -383,7 +383,7 @@ func TestPostJSON(t *testing.T) {
 		}
 
 		clientEmptySession := community.NewClient(nil, mockEmptySess).WithREST(mockEmptySess)
-		_, err := community.PostJSON[genericResponse](t.Context(), clientEmptySession, "/test/post", nil)
+		_, err := community.PostTo[genericResponse](t.Context(), clientEmptySession, "/test/post", nil)
 		require.NoError(t, err)
 	})
 
@@ -396,7 +396,7 @@ func TestPostJSON(t *testing.T) {
 		mockSvc.OnRest = func(method, path string, body any) (*http.Response, error) {
 			return nil, errors.New("post json failed")
 		}
-		_, err := community.PostJSON[genericResponse](t.Context(), client, "/test/post", nil)
+		_, err := community.PostTo[genericResponse](t.Context(), client, "/test/post", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "post json failed")
 	})
@@ -409,9 +409,11 @@ func TestPostJSON(t *testing.T) {
 
 		type badJSON struct{ F func() }
 
-		_, err := community.PostJSON[genericResponse](t.Context(), client, "/test/post", badJSON{})
+		_, err := community.PostTo[genericResponse](t.Context(), client, "/test/post", badJSON{})
 		require.Error(t, err)
-		assert.IsType(t, &json.UnsupportedTypeError{}, err)
+
+		var marshalErr *json.UnsupportedTypeError
+		assert.ErrorAs(t, err, &marshalErr)
 	})
 }
 
@@ -430,7 +432,7 @@ func TestPerformRequest(t *testing.T) {
 			},
 		}
 		client := community.NewClient(httpClient, nil)
-		_, err := community.GetJSON[genericResponse](
+		_, err := community.GetTo[genericResponse](
 			t.Context(),
 			client,
 			"/test",
@@ -451,7 +453,7 @@ func TestPerformRequest(t *testing.T) {
 		req := customRequester{Requester: mockSvc}
 
 		require.NotPanics(t, func() {
-			_, err := community.GetJSON[genericResponse](t.Context(), req, "/test")
+			_, err := community.GetTo[genericResponse](t.Context(), req, "/test")
 			require.NoError(t, err)
 		})
 	})

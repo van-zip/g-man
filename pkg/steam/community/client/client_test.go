@@ -595,7 +595,7 @@ func TestClient_Request_ReplayableBody_ReadError(t *testing.T) {
 	c := client.New(httpClient, &customSessionProvider{})
 	_, err := c.Request(ctx, http.MethodGet, "/test")
 	require.Error(t, err)
-	assert.EqualError(t, err, "read error")
+	assert.ErrorContains(t, err, "read error")
 }
 
 func TestClient_Request_RedirectError_Intercept(t *testing.T) {

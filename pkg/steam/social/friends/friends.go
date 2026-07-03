@@ -225,14 +225,23 @@ func (m *Manager) SetPersona(ctx context.Context, state enums.EPersonaState, nam
 
 // InviteToGroups sends group invitations to a friend.
 // Standard HTTP 400 errors (already in group/already invited) are ignored.
-func (m *Manager) InviteToGroups(ctx context.Context, steamID id.ID, groupIDs []uint64) {
-	if !m.IsFriend(steamID) {
-		m.Logger.Debug("Skipping group invite: user is not a friend", log.SteamID(steamID.Uint64()))
-		return
+func (m *Manager) InviteToGroups(ctx context.Context, steamID id.ID, groupIDs []uint64) error {
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return err
 	}
 
+	if !m.IsFriend(steamID) {
+		return errors.New("friends: group invite failed: user is not a friend")
+	}
+
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
+
 	_ = generic.ParallelForEach(ctx, groupIDs, 5, func(ctx context.Context, groupID uint64) error {
-		req := struct {
+		reqForm := struct {
 			JSON    int    `url:"json"`
 			Type    string `url:"type"`
 			Inviter id.ID  `url:"inviter"`
@@ -240,15 +249,28 @@ func (m *Manager) InviteToGroups(ctx context.Context, steamID id.ID, groupIDs []
 			Group   uint64 `url:"group"`
 		}{1, "groupInvite", m.mySteamID, steamID, groupID}
 
-		_, err := community.PostForm[service.NoResponse](ctx, m.community, "actions/GroupInvite", req)
+		_, err := community.PostFormTo[service.NoResponse](ctx, client, "actions/GroupInvite", reqForm)
 		if err != nil {
-			if !strings.Contains(err.Error(), "400") {
-				m.Logger.Warn("Failed to invite to group", log.Uint64("group_id", groupID), log.Err(err))
+			var apiErr *aoni.APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest {
+				return nil
 			}
+
+			m.Logger.Warn("Failed to invite to group",
+				log.Uint64("group_id", groupID),
+				log.Err(err),
+			)
+
+			mu.Lock()
+
+			errs = append(errs, err)
+			mu.Unlock()
 		}
 
 		return nil
 	})
+
+	return errors.Join(errs...)
 }
 
 // GetFriendGroups returns the list of all friend groups.
@@ -284,24 +306,21 @@ func (m *Manager) GetNickname(steamID id.ID) string {
 //
 // It returns an error if the web-based request fails or is rejected by Steam.
 func (m *Manager) AcceptFriendRequestWeb(ctx context.Context, steamID id.ID) error {
-	m.mu.RLock()
-	comm := m.community
-	m.mu.RUnlock()
-
-	if comm == nil {
-		return errors.New("friends: community requester is not initialized")
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return err
 	}
 
-	req := struct {
+	reqForm := struct {
 		AcceptInvite int   `url:"accept_invite"`
 		SteamID      id.ID `url:"steamid"`
 	}{1, steamID}
 
-	type webResponse struct {
+	type respType struct {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[webResponse](ctx, comm, "actions/AddFriendAjax", req)
+	resp, err := community.PostFormTo[respType](ctx, client, "actions/AddFriendAjax", reqForm)
 	if err != nil {
 		return fmt.Errorf("friends: web accept request failed: %w", err)
 	}
@@ -317,23 +336,20 @@ func (m *Manager) AcceptFriendRequestWeb(ctx context.Context, steamID id.ID) err
 //
 // It returns an error if the request fails or is rejected by Steam.
 func (m *Manager) BlockCommunication(ctx context.Context, steamID id.ID) error {
-	m.mu.RLock()
-	comm := m.community
-	m.mu.RUnlock()
-
-	if comm == nil {
-		return errors.New("friends: community requester is not initialized")
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return err
 	}
 
-	req := struct {
+	reqForm := struct {
 		SteamID id.ID `url:"steamid"`
 	}{steamID}
 
-	type webResponse struct {
+	type respType struct {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[webResponse](ctx, comm, "actions/BlockUserAjax", req)
+	resp, err := community.PostFormTo[respType](ctx, client, "actions/BlockUserAjax", reqForm)
 	if err != nil {
 		return fmt.Errorf("friends: block user request failed: %w", err)
 	}
@@ -349,36 +365,26 @@ func (m *Manager) BlockCommunication(ctx context.Context, steamID id.ID) error {
 //
 // It returns an error if the request fails or is rejected by Steam.
 func (m *Manager) UnblockCommunication(ctx context.Context, steamID id.ID) error {
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return err
+	}
+
 	m.mu.RLock()
-	comm := m.community
 	mySteamID := m.mySteamID
 	m.mu.RUnlock()
-
-	if comm == nil {
-		return errors.New("friends: community requester is not initialized")
-	}
 
 	form := url.Values{
 		"action":                            {"unignore"},
 		"friends[" + steamID.String() + "]": {"1"},
-		"sessionid":                         {comm.SessionID(community.BaseURL)},
 	}
 
-	resp, err := comm.Request(
-		ctx,
-		http.MethodPost,
-		"profiles/{mySteamID}/friends/blocked",
+	_, err = community.PostFormTo[aoni.NoResponse](
+		ctx, client, "profiles/{mySteamID}/friends/blocked", form,
 		aoni.WithVar("mySteamID", mySteamID),
-		aoni.WithBody(strings.NewReader(form.Encode())),
-		aoni.WithContentType("application/x-www-form-urlencoded"),
 	)
 	if err != nil {
 		return fmt.Errorf("friends: unblock request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("friends: unblock failed with HTTP status: %d", resp.StatusCode)
 	}
 
 	return nil
@@ -389,27 +395,24 @@ func (m *Manager) UnblockCommunication(ctx context.Context, steamID id.ID) error
 // It returns an error if the request fails, if Steam returns an error message,
 // or if the comment element cannot be parsed from the returned HTML payload.
 func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message string) (string, error) {
-	m.mu.RLock()
-	comm := m.community
-	m.mu.RUnlock()
-
-	if comm == nil {
-		return "", errors.New("friends: community requester is not initialized")
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return "", err
 	}
 
-	req := struct {
+	reqForm := struct {
 		Comment string `url:"comment"`
 		Count   int    `url:"count"`
 	}{message, 1}
 
-	type postCommentResponse struct {
+	type respType struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[postCommentResponse](ctx, comm,
-		"comment/Profile/post/{steamID}/-1", req,
+	resp, err := community.PostFormTo[respType](
+		ctx, client, "comment/Profile/post/{steamID}/-1", reqForm,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -417,12 +420,7 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 	}
 
 	if !resp.Success {
-		errMsg := resp.Error
-		if errMsg == "" {
-			errMsg = "unknown error"
-		}
-
-		return "", fmt.Errorf("friends: post comment failed: %s", errMsg)
+		return "", fmt.Errorf("friends: post comment failed: %s", generic.Coalesce(resp.Error, "unknown error"))
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(resp.CommentsHTML))
@@ -453,29 +451,26 @@ func (m *Manager) PostUserComment(ctx context.Context, steamID id.ID, message st
 // It returns an error if the request fails, if Steam returns an error message,
 // or if the comment remains inside the returned HTML payload.
 func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentID string) error {
-	m.mu.RLock()
-	comm := m.community
-	m.mu.RUnlock()
-
-	if comm == nil {
-		return errors.New("friends: community requester is not initialized")
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return err
 	}
 
-	req := struct {
+	reqForm := struct {
 		GIDComment string `url:"gidcomment"`
 		Start      int    `url:"start"`
 		Count      int    `url:"count"`
 		Feature2   int    `url:"feature2"`
 	}{commentID, 0, 1, -1}
 
-	type deleteCommentResponse struct {
+	type respType struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[deleteCommentResponse](ctx, comm,
-		"comment/Profile/delete/{steamID}/-1", req,
+	resp, err := community.PostFormTo[respType](
+		ctx, client, "comment/Profile/delete/{steamID}/-1", reqForm,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -483,12 +478,7 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 	}
 
 	if !resp.Success {
-		errMsg := resp.Error
-		if errMsg == "" {
-			errMsg = "unknown error"
-		}
-
-		return fmt.Errorf("friends: delete comment failed: %s", errMsg)
+		return fmt.Errorf("friends: delete comment failed: %s", generic.Coalesce(resp.Error, "unknown error"))
 	}
 
 	if strings.Contains(resp.CommentsHTML, commentID) {
@@ -503,29 +493,26 @@ func (m *Manager) DeleteUserComment(ctx context.Context, steamID id.ID, commentI
 // It returns the parsed comment list, the total number of comments available on the profile,
 // and any error encountered during network request or HTML parsing.
 func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, count int) ([]Comment, int, error) {
-	m.mu.RLock()
-	comm := m.community
-	m.mu.RUnlock()
-
-	if comm == nil {
-		return nil, 0, errors.New("friends: community requester is not initialized")
+	client, err := m.ensureAuthenticated()
+	if err != nil {
+		return nil, 0, err
 	}
 
-	req := struct {
+	reqForm := struct {
 		Start    int `url:"start"`
 		Count    int `url:"count"`
 		Feature2 int `url:"feature2"`
 	}{start, count, -1}
 
-	type renderCommentsResponse struct {
+	type respType struct {
 		Success      bool   `json:"success"`
 		CommentsHTML string `json:"comments_html"`
 		TotalCount   int    `json:"total_count"`
 		Error        string `json:"error"`
 	}
 
-	resp, err := community.PostForm[renderCommentsResponse](ctx, comm,
-		"comment/Profile/render/{steamID}/-1", req,
+	resp, err := community.PostFormTo[respType](
+		ctx, client, "comment/Profile/render/{steamID}/-1", reqForm,
 		aoni.WithVar("steamID", steamID),
 	)
 	if err != nil {
@@ -533,12 +520,7 @@ func (m *Manager) GetUserComments(ctx context.Context, steamID id.ID, start, cou
 	}
 
 	if !resp.Success {
-		errMsg := resp.Error
-		if errMsg == "" {
-			errMsg = "unknown error"
-		}
-
-		return nil, 0, fmt.Errorf("friends: render comments failed: %s", errMsg)
+		return nil, 0, fmt.Errorf("friends: render comments failed: %s", generic.Coalesce(resp.Error, "unknown error"))
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(resp.CommentsHTML))
@@ -648,13 +630,7 @@ func (m *Manager) CreateFriendInviteToken(ctx context.Context, limit, duration u
 	}
 
 	resp, err := service.WebAPI[pb.CUserAccount_CreateFriendInviteToken_Response](
-		ctx,
-		m.client,
-		"POST",
-		"UserAccount",
-		"CreateFriendInviteToken",
-		1,
-		req,
+		ctx, m.client, "POST", "UserAccount", "CreateFriendInviteToken", 1, req,
 	)
 	if err != nil {
 		return "", fmt.Errorf("friends: failed to create quick-invite token: %w", err)
@@ -670,13 +646,7 @@ func (m *Manager) GetFriendInviteTokens(
 	req := &pb.CUserAccount_GetFriendInviteTokens_Request{}
 
 	resp, err := service.WebAPI[pb.CUserAccount_GetFriendInviteTokens_Response](
-		ctx,
-		m.client,
-		"GET",
-		"UserAccount",
-		"GetFriendInviteTokens",
-		1,
-		req,
+		ctx, m.client, "GET", "UserAccount", "GetFriendInviteTokens", 1, req,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("friends: failed to list quick-invite tokens: %w", err)
@@ -692,13 +662,7 @@ func (m *Manager) RevokeFriendInviteToken(ctx context.Context, token string) err
 	}
 
 	_, err := service.WebAPI[service.NoResponse](
-		ctx,
-		m.client,
-		"POST",
-		"UserAccount",
-		"RevokeFriendInviteToken",
-		1,
-		req,
+		ctx, m.client, "POST", "UserAccount", "RevokeFriendInviteToken", 1, req,
 	)
 	if err != nil {
 		return fmt.Errorf("friends: failed to revoke quick-invite token: %w", err)
@@ -719,13 +683,7 @@ func (m *Manager) ViewFriendInviteToken(
 	}
 
 	resp, err := service.WebAPI[pb.CUserAccount_ViewFriendInviteToken_Response](
-		ctx,
-		m.client,
-		"GET",
-		"UserAccount",
-		"ViewFriendInviteToken",
-		1,
-		req,
+		ctx, m.client, "GET", "UserAccount", "ViewFriendInviteToken", 1, req,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("friends: failed to view quick-invite token: %w", err)
@@ -744,10 +702,7 @@ func (m *Manager) SetFriendNickname(ctx context.Context, steamID uint64, nicknam
 	}
 
 	resp, err := service.LegacyProto[pb.CMsgClientSetPlayerNicknameResponse](
-		ctx,
-		m.client,
-		enums.EMsg_AMClientSetPlayerNickname,
-		req,
+		ctx, m.client, enums.EMsg_AMClientSetPlayerNickname, req,
 	)
 	if err != nil {
 		return fmt.Errorf("friends: failed to set player nickname: %w", err)
@@ -923,4 +878,16 @@ func (m *Manager) handlePersonaState(packet *protocol.Packet) {
 			State:   user,
 		})
 	}
+}
+
+func (m *Manager) ensureAuthenticated() (community.Requester, error) {
+	m.mu.RLock()
+	comm := m.community
+	m.mu.RUnlock()
+
+	if comm == nil {
+		return nil, errors.New("friends: community requester is not initialized")
+	}
+
+	return comm, nil
 }

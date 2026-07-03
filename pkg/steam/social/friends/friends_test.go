@@ -479,8 +479,8 @@ func TestManager_UnblockCommunication(t *testing.T) {
 		comm.SetRawResponse(community.BaseURL+path, 400, []byte("Bad Request"))
 
 		err := m.UnblockCommunication(t.Context(), FriendID1)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "unblock failed with HTTP status: 400")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unblock request failed: aoni: status 400")
 	})
 
 	t.Run("http_error", func(t *testing.T) {

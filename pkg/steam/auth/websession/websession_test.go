@@ -68,7 +68,7 @@ func TestNew(t *testing.T) {
 	assert.NotNil(t, ws.httpClient)
 	assert.NotNil(t, ws.jar)
 	assert.False(t, ws.isAuth)
-	assert.Len(t, ws.domains, len(defaultDomains))
+	assert.Len(t, ws.domains, len(DefaultDomains))
 }
 
 func TestAddDomains(t *testing.T) {

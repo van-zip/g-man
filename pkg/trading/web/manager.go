@@ -377,7 +377,7 @@ func (m *Manager) SendOffer(ctx context.Context, p trading.OfferParams) (uint64,
 		referer = fmt.Sprintf("%s&token=%s", referer, p.Token)
 	}
 
-	resp, err := community.PostForm[sendNewResponse](
+	resp, err := community.PostFormTo[sendNewResponse](
 		ctx, comm, "tradeoffer/new/send", payload,
 		aoni.WithHeader("Referer", referer),
 		aoni.WithHeader("Origin", "https://steamcommunity.com"),
@@ -424,7 +424,7 @@ func (m *Manager) AcceptOffer(ctx context.Context, offerID uint64) error {
 		TradeOfferID uint64 `url:"tradeofferid"`
 	}{1, offerID}
 
-	resp, err := community.PostForm[acceptResponse](
+	resp, err := community.PostFormTo[acceptResponse](
 		ctx, comm, "tradeoffer/{offerID}/accept", req,
 		aoni.WithVar("offerID", offerID),
 		aoni.WithOrigin("https://steamcommunity.com"),

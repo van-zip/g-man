@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,17 +404,18 @@ func (m *MockSocketProvider) SimulatePacketRaw(e enums.EMsg, data []byte) {
 
 type mockSession struct {
 	mock.Mock
+	mu      sync.Mutex
 	steamID uint64
 	token   string
 	access  string
 }
 
-func (m *mockSession) SteamID() uint64                    { return m.steamID }
-func (m *mockSession) SetSteamID(id uint64)               { m.steamID = id }
-func (m *mockSession) SetRefreshToken(t string)           { m.token = t }
-func (m *mockSession) RefreshToken() string               { return m.token }
-func (m *mockSession) SetAccessToken(t string)            { m.access = t }
-func (m *mockSession) AccessToken() string                { return m.access }
+func (m *mockSession) SteamID() uint64                    { m.mu.Lock(); defer m.mu.Unlock(); return m.steamID }
+func (m *mockSession) SetSteamID(id uint64)               { m.mu.Lock(); defer m.mu.Unlock(); m.steamID = id }
+func (m *mockSession) SetRefreshToken(t string)           { m.mu.Lock(); defer m.mu.Unlock(); m.token = t }
+func (m *mockSession) RefreshToken() string               { m.mu.Lock(); defer m.mu.Unlock(); return m.token }
+func (m *mockSession) SetAccessToken(t string)            { m.mu.Lock(); defer m.mu.Unlock(); m.access = t }
+func (m *mockSession) AccessToken() string                { m.mu.Lock(); defer m.mu.Unlock(); return m.access }
 func (m *mockSession) SetSessionID(int32)                 {}
 func (m *mockSession) Send(context.Context, []byte) error { return nil }
 func (m *mockSession) Close() error                       { return nil }

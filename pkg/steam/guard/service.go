@@ -95,7 +95,7 @@ func (s *MobileConf) GetConfirmations(
 		ActionTag: "conf",
 	}
 
-	return community.GetJSON[ConfirmationsList](
+	return community.GetTo[ConfirmationsList](
 		ctx, s.client, "mobileconf/getlist",
 		aoni.WithQuery(params),
 	)
@@ -121,7 +121,7 @@ func (s *MobileConf) GetConfirmationOfferID(
 
 	path := "mobileconf/detailspage/" + strconv.FormatUint(confID, 10)
 
-	respBytes, err := community.GetJSON[[]byte](
+	respBytes, err := community.GetTo[[]byte](
 		ctx, s.client, path,
 		aoni.WithQuery(params),
 		aoni.WithRawDecoder(),
@@ -160,11 +160,11 @@ func (s *MobileConf) RespondToConfirmation(
 		Nonce:     conf.Nonce,
 	}
 
-	type resStruct struct {
+	type respStruct struct {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.GetJSON[resStruct](
+	resp, err := community.GetTo[respStruct](
 		ctx, s.client, "mobileconf/ajaxop",
 		aoni.WithQuery(params),
 	)
@@ -218,12 +218,12 @@ func (s *MobileConf) RespondToMultiple(
 		req.Nonces[i] = c.Nonce
 	}
 
-	type resStruct struct {
+	type respStruct struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
 
-	resp, err := community.PostForm[resStruct](ctx, s.client, "mobileconf/multiajaxop", req)
+	resp, err := community.PostFormTo[respStruct](ctx, s.client, "mobileconf/multiajaxop", req)
 	if err != nil {
 		return err
 	}

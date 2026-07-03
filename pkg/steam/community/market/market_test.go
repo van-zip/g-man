@@ -43,7 +43,7 @@ func TestMarket_NotAuthenticated(t *testing.T) {
 
 	m := market.New(market.DefaultConfig())
 
-	_, err := m.CreateSellOrder(t.Context(), market.CreateSellOrderOptions{})
+	_, err := m.CreateSellOrder(t.Context(), market.CreateSellOrderOptions{}, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not authenticated")
 }
@@ -73,7 +73,7 @@ func TestMarket_CreateSellOrder(t *testing.T) {
 			Price:     1050, // 10.50 units
 		}
 
-		resp, err := m.CreateSellOrder(t.Context(), opts)
+		resp, err := m.CreateSellOrder(t.Context(), opts, 0)
 		require.NoError(t, err)
 		assert.True(t, resp.Success)
 		assert.True(t, resp.RequiresConfirmation)
@@ -89,7 +89,7 @@ func TestMarket_CreateSellOrder(t *testing.T) {
 		mockComm := auth.MockCommunity
 		mockComm.ResponseErrs["market/sellitem"] = errors.New("post fail")
 
-		_, err := m.CreateSellOrder(t.Context(), market.CreateSellOrderOptions{})
+		_, err := m.CreateSellOrder(t.Context(), market.CreateSellOrderOptions{}, 0)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "post fail")
 	})
@@ -486,7 +486,7 @@ func TestMarket_GetGemValue(t *testing.T) {
 
 		res, err := m.GetGemValue(t.Context(), 730, 1111)
 		require.NoError(t, err)
-		assert.Equal(t, 100, res.GemValue)
+		assert.Equal(t, int64(100), res.GemValue)
 		assert.Equal(t, "Gems info", res.PromptTitle)
 	})
 
@@ -531,8 +531,8 @@ func TestMarket_TurnItemIntoGems(t *testing.T) {
 
 		res, err := m.TurnItemIntoGems(t.Context(), 730, 1111, 100)
 		require.NoError(t, err)
-		assert.Equal(t, 100, res.GemsReceived)
-		assert.Equal(t, 1000, res.TotalGems)
+		assert.Equal(t, int64(100), res.GemsReceived)
+		assert.Equal(t, int64(1000), res.TotalGems)
 	})
 
 	t.Run("steam_error", func(t *testing.T) {
@@ -687,7 +687,7 @@ func TestMarket_CreateBoosterPack(t *testing.T) {
 
 		res, err := m.CreateBoosterPack(t.Context(), 730, true)
 		require.NoError(t, err)
-		assert.Equal(t, 900, res.TotalGems)
+		assert.Equal(t, int64(900), res.TotalGems)
 		assert.Equal(t, "crafted_pack", res.ResultItem)
 	})
 
@@ -705,7 +705,7 @@ func TestMarket_CreateBoosterPack(t *testing.T) {
 
 		res, err := m.CreateBoosterPack(t.Context(), 730, false)
 		require.NoError(t, err)
-		assert.Equal(t, 1000, res.TotalGems)
+		assert.Equal(t, int64(1000), res.TotalGems)
 
 		lastCall := mockComm.GetLastCall()
 		_ = lastCall.ParseForm()
@@ -802,7 +802,7 @@ func TestMarket_GetGiftDetails(t *testing.T) {
 
 		res, err := m.GetGiftDetails(t.Context(), 3333)
 		require.NoError(t, err)
-		assert.Equal(t, 4444, res.PackageID)
+		assert.Equal(t, int64(4444), res.PackageID)
 		assert.Equal(t, "CS2 Gift", res.GiftName)
 		assert.True(t, res.Owned)
 	})

@@ -183,6 +183,7 @@ func (b Base) WithDeps(deps ...string) Base {
 }
 
 // Init configures common scoped dependencies such as [log.Logger] and [bus.Bus] using the provided [InitContext].
+// It is called exactly once when client is fist run, so the initialized fields don't need to be protected.
 func (b *Base) Init(ctx InitContext) error {
 	b.Logger = ctx.Logger().With(log.Module(b.NameStr))
 	b.Bus = ctx.Bus()
@@ -247,9 +248,7 @@ func (b *Base) Close() error {
 }
 
 // State returns the current [State] of the [Base] module's lifecycle.
-func (b *Base) State() State {
-	return b.Fsm.CurrentState()
-}
+func (b *Base) State() State { return b.Fsm.CurrentState() }
 
 // IsNew returns true if the module is in StateNew.
 func (b *Base) IsNew() bool { return b.State() == StateNew }

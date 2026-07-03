@@ -8,7 +8,7 @@
 //
 // The package defines the [Requester] and [SessionProvider] interface aliases which map directly
 // to their counterparts in [client]. It provides the [Decorate] function to wrap a requester
-// with default modifiers, and helper functions like [GetJSON], [GetHTML], [PostForm], and [PostJSON]
+// with default modifiers, and helper functions like [GetTo], [GetHTML], [PostFormTo], and [PostTo]
 // to streamline communications.
 //
 // Basic usage example:
@@ -28,7 +28,7 @@
 //
 //	func main() {
 //		c := community.NewClient(nil, nil)
-//		inv, err := community.Get[Inventory](context.Background(), c, "inventory", nil)
+//		inv, err := community.GetJSON[Inventory](context.Background(), c, "inventory")
 //		if err != nil {
 //			panic(err)
 //		}

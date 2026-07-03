@@ -36,7 +36,8 @@ type Doer interface {
 
 // NoResponse indicates that response body marshaling and decoding should be skipped entirely.
 // It is used as a generic parameter in [Execute] or [Unified] calls where response content is ignored.
-type NoResponse struct{}
+// The helper automatically drains and closes the response body to prevent resource leaks.
+type NoResponse = aoni.NoResponse
 
 // CallOption defines a functional configuration option used to modify a [tr.Request] before execution.
 type CallOption func(req *tr.Request)
@@ -101,6 +102,13 @@ func WithFormat(f encoding.ResponseFormat) CallOption {
 			req.SetDecoder(decoder)
 			req.WithModifier(aoni.WithDecoder(decoder))
 		}
+	}
+}
+
+// WithModifier adds the aoni.RequestModifier to the service request.
+func WithModifier(m aoni.RequestModifier) CallOption {
+	return func(req *tr.Request) {
+		req.WithModifier(m)
 	}
 }
 

@@ -128,10 +128,17 @@ func (m *ServiceMock) Request(
 	m.restCalls = append(m.restCalls, restCall{method, path, bodyBytes, nil})
 
 	if m.OnRest != nil {
+		var resp *http.Response
+		var err error
 		if len(bodyBytes) > 0 {
-			return m.OnRest(method, path, bodyBytes)
+			resp, err = m.OnRest(method, path, bodyBytes)
+		} else {
+			resp, err = m.OnRest(method, path, nil)
 		}
-		return m.OnRest(method, path, nil)
+		if resp != nil && resp.Request == nil {
+			resp.Request = dummyReq
+		}
+		return resp, err
 	}
 
 	key := fmt.Sprintf("%s:%s", method, path)

@@ -22,7 +22,7 @@ test: ## Run normal quick tests
 
 race: ## Run tests with race detector
 	@printf "$(CYAN)Running tests with race detector...$(RESET)\n"
-	go test -v -race -timeout 30s $(PKG)
+	go test -race -timeout 30s $(PKG)
 
 cover: ## Run tests and open the coverage report in a browser
 	@printf "$(CYAN)Generating coverage report...$(RESET)\n"

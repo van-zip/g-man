@@ -381,18 +381,16 @@ func (d *Dispatcher) handleMulti(packet *protocol.Packet) {
 			break
 		}
 
-		subPkt, err := protocol.ParsePacket(io.LimitReader(reader, int64(subSize)))
+		subPacket, err := protocol.ParsePacket(io.LimitReader(reader, int64(subSize)))
 		if err != nil {
 			d.getLogger().WarnContext(packet.Context(), "Failed to parse nested multi-packet", log.Err(err))
 			continue
 		}
 
-		// Propagate parent packet's context (and correlation ID) and arrival time to sub-packets
-		subPkt.Ctx = packet.Context()
-		subPkt.ReceivedAt = packet.ReceivedAt
+		subPacket.Ctx = packet.Context()
+		subPacket.ReceivedAt = packet.ReceivedAt
 
-		// Recursively dispatch nested packets
-		d.Dispatch(subPkt)
+		d.Dispatch(subPacket)
 	}
 }
 

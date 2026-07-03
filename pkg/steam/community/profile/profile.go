@@ -18,6 +18,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/lemon4ksan/aoni"
+	"github.com/lemon4ksan/miyako/generic"
 
 	"github.com/lemon4ksan/g-man/pkg/steam/community"
 	"github.com/lemon4ksan/g-man/pkg/steam/id"
@@ -32,6 +33,7 @@ func WithAvatarUpload(fields map[string]string, filename string, image []byte) a
 
 		for name, val := range fields {
 			if err := writer.WriteField(name, val); err != nil {
+				aoni.MarkModifierError(req, fmt.Errorf("field %s: %w", name, err))
 				return
 			}
 		}
@@ -142,7 +144,7 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 	}
 	defer html.Close()
 
-	currentConfig, err := parseProfileEditConfig(html)
+	currentConfig, err := parseSteamConfig[rawProfileEditConfig](html)
 	if err != nil {
 		return err
 	}
@@ -154,7 +156,7 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 		ErrMsg  string `json:"errmsg"`
 	}
 
-	resp, err := community.PostForm[saveResponse](
+	resp, err := community.PostFormTo[saveResponse](
 		ctx, client, "profiles/{steamID}/edit", reqPayload,
 		aoni.WithVar("steamID", steamID),
 	)
@@ -163,12 +165,7 @@ func EditProfile(ctx context.Context, client community.Requester, steamID id.ID,
 	}
 
 	if resp.Success != 1 {
-		errMsg := resp.ErrMsg
-		if errMsg == "" {
-			errMsg = "request was not successful"
-		}
-
-		return fmt.Errorf("profile: save failed: %s", errMsg)
+		return fmt.Errorf("profile: save failed: %s", generic.Coalesce(resp.ErrMsg, "request was not successful"))
 	}
 
 	return nil
@@ -190,7 +187,7 @@ func UpdatePrivacySettings(
 	}
 	defer html.Close()
 
-	currentConfig, err := parsePrivacyConfig(html)
+	currentConfig, err := parseSteamConfig[rawPrivacyConfig](html)
 	if err != nil {
 		return err
 	}
@@ -204,7 +201,7 @@ func UpdatePrivacySettings(
 		Success int `json:"success"`
 	}
 
-	resp, err := community.PostForm[privacyResponse](
+	resp, err := community.PostFormTo[privacyResponse](
 		ctx, client, "profiles/{steamID}/ajaxsetprivacy", reqPayload,
 		aoni.WithVar("steamID", steamID),
 	)
@@ -251,9 +248,10 @@ func UploadAvatar(
 		Hash    string `json:"hash"`
 	}
 
-	resp, err := aoni.PostJSON[upload](
+	resp, err := aoni.PostTo[upload](
 		ctx, client, "actions/FileUploader", nil,
 		WithAvatarUpload(fields, filename, image),
+		aoni.WithJSONDecoder(), // enforce Content-Type
 		aoni.WithHeader("Accept", "application/json, text/javascript; q=0.01"),
 	)
 	if err != nil {
@@ -261,18 +259,13 @@ func UploadAvatar(
 	}
 
 	if !resp.Success {
-		errMsg := resp.Message
-		if errMsg == "" {
-			errMsg = "upload was not successful"
-		}
-
-		return "", fmt.Errorf("profile: upload failed: %s", errMsg)
+		return "", fmt.Errorf("profile: upload failed: %s", generic.Coalesce(resp.Message, "upload was not successful"))
 	}
 
 	return resp.Hash, nil
 }
 
-func parseProfileEditConfig(html io.Reader) (*rawProfileEditConfig, error) {
+func parseSteamConfig[T any](html io.Reader) (*T, error) {
 	doc, err := goquery.NewDocumentFromReader(html)
 	if err != nil {
 		return nil, fmt.Errorf("profile: failed to parse HTML: %w", err)
@@ -280,7 +273,7 @@ func parseProfileEditConfig(html io.Reader) (*rawProfileEditConfig, error) {
 
 	configEl := doc.Find("#profile_edit_config")
 	if configEl.Length() == 0 {
-		return nil, errors.New("profile: could not find profile_edit_config element")
+		return nil, errors.New("profile: config element not found (possibly not logged in)")
 	}
 
 	dataVal, exists := configEl.Attr("data-profile-edit")
@@ -288,9 +281,9 @@ func parseProfileEditConfig(html io.Reader) (*rawProfileEditConfig, error) {
 		return nil, errors.New("profile: missing data-profile-edit attribute")
 	}
 
-	var config rawProfileEditConfig
+	var config T
 	if err := json.Unmarshal([]byte(dataVal), &config); err != nil {
-		return nil, fmt.Errorf("profile: failed to parse existing settings JSON: %w", err)
+		return nil, fmt.Errorf("profile: failed to unmarshal config: %w", err)
 	}
 
 	return &config, nil
@@ -358,30 +351,6 @@ func buildProfileSaveRequest(current *rawProfileEditConfig, settings Settings) p
 	return req
 }
 
-func parsePrivacyConfig(html io.Reader) (*rawPrivacyConfig, error) {
-	doc, err := goquery.NewDocumentFromReader(html)
-	if err != nil {
-		return nil, fmt.Errorf("profile: failed to parse HTML: %w", err)
-	}
-
-	configEl := doc.Find("#profile_edit_config")
-	if configEl.Length() == 0 {
-		return nil, errors.New("profile: could not find profile_edit_config element")
-	}
-
-	dataVal, exists := configEl.Attr("data-profile-edit")
-	if !exists {
-		return nil, errors.New("profile: missing data-profile-edit attribute")
-	}
-
-	var config rawPrivacyConfig
-	if err := json.Unmarshal([]byte(dataVal), &config); err != nil {
-		return nil, fmt.Errorf("profile: failed to parse existing privacy settings JSON: %w", err)
-	}
-
-	return &config, nil
-}
-
 type privacySaveRequest struct {
 	Privacy            string `url:"Privacy"`
 	ECommentPermission int    `url:"eCommentPermission"`
@@ -395,14 +364,13 @@ func buildPrivacySaveRequest(current *rawPrivacyConfig, settings PrivacySettings
 	}
 
 	privacy := current.Privacy.PrivacySettings
-	comments := current.Privacy.ECommentPermission
 
 	if settings.Profile != nil {
 		privacy.PrivacyProfile = int(*settings.Profile)
 	}
 
 	if settings.Comments != nil {
-		comments = commentMapping[*settings.Comments]
+		current.Privacy.ECommentPermission = commentMapping[*settings.Comments]
 	}
 
 	if settings.Inventory != nil {
@@ -440,7 +408,7 @@ func buildPrivacySaveRequest(current *rawPrivacyConfig, settings PrivacySettings
 
 	return privacySaveRequest{
 		Privacy:            string(privacyJSON),
-		ECommentPermission: comments,
+		ECommentPermission: current.Privacy.ECommentPermission,
 	}, nil
 }
 

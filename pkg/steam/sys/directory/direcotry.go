@@ -70,12 +70,12 @@ func (d *Service) GetCMList(ctx context.Context, cellID, maxCount uint32) ([]str
 		MaxCount uint32 `url:"maxcount,omitempty"`
 	}{cellID, maxCount}
 
-	type respStruct struct {
+	type respType struct {
 		ServerList           []string `json:"serverlist"`
 		ServerListWebsockets []string `json:"serverlist_websockets"`
 	}
 
-	resp, err := service.WebAPI[respStruct](ctx, d.client, "GET", "ISteamDirectory", "GetCMList", 1, req)
+	resp, err := service.WebAPI[respType](ctx, d.client, "GET", "ISteamDirectory", "GetCMList", 1, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("directory: get cm list failed: %w", err)
 	}
@@ -94,11 +94,11 @@ func (d *Service) GetCMListForConnect(ctx context.Context, cfg CMCfg) ([]CMServe
 		Realm    string `url:"realm,omitempty"`
 	}{cfg.CellID, cfg.MaxCount, cfg.CmType, cfg.Realm}
 
-	type respStruct struct {
+	type respType struct {
 		ServerList []CMServer `json:"serverlist"`
 	}
 
-	resp, err := service.WebAPI[respStruct](ctx, d.client, "GET", "ISteamDirectory", "GetCMListForConnect", 1, req)
+	resp, err := service.WebAPI[respType](ctx, d.client, "GET", "ISteamDirectory", "GetCMListForConnect", 1, req)
 	if err != nil {
 		return nil, fmt.Errorf("directory: get cm list for connect failed: %w", err)
 	}
@@ -143,11 +143,11 @@ func (d *Service) GetOptimalCMServer(ctx context.Context) (socket.CMServer, erro
 // GetSteamPipeDomains returns a list of domains used by Steam's content delivery system (SteamPipe).
 // It returns an error if the underlying network transport fails or if the context is cancelled.
 func (d *Service) GetSteamPipeDomains(ctx context.Context) ([]string, error) {
-	type respStruct struct {
+	type respType struct {
 		DomainList []string `json:"domainlist"`
 	}
 
-	resp, err := service.WebAPI[respStruct](ctx, d.client, "GET", "ISteamDirectory", "GetSteamPipeDomains", 1, nil)
+	resp, err := service.WebAPI[respType](ctx, d.client, "GET", "ISteamDirectory", "GetSteamPipeDomains", 1, nil)
 	if err != nil {
 		return nil, fmt.Errorf("directory: get steampipe domains failed: %w", err)
 	}

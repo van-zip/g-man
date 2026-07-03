@@ -69,11 +69,9 @@ func DefaultConfig() Config {
 type Market struct {
 	module.Base
 
-	config       Config
-	marketClient community.Requester
-
-	mu      sync.RWMutex
-	steamID id.ID
+	mu     sync.RWMutex
+	config Config
+	client community.Requester
 }
 
 // New creates a new Market module instance.
@@ -84,11 +82,19 @@ func New(cfg Config) *Market {
 	}
 }
 
+// NewWithClient creates a new Market module with existing community client and steam id.
+func NewWithClient(cfg Config, client community.Requester) *Market {
+	return &Market{
+		Base:   module.New(ModuleName),
+		config: cfg,
+		client: client,
+	}
+}
+
 // StartAuthed is called when a community session is established.
 func (m *Market) StartAuthed(ctx context.Context, auth module.AuthContext) error {
 	m.mu.Lock()
-	m.steamID = auth.SteamID()
-	m.marketClient = community.Decorate(auth.Community(),
+	m.client = community.Decorate(auth.Community(),
 		aoni.WithHeader("X-Requested-With", "XMLHttpRequest"),
 		aoni.WithHeader("X-Prototype-Version", "1.7"),
 	)
@@ -96,7 +102,6 @@ func (m *Market) StartAuthed(ctx context.Context, auth module.AuthContext) error
 
 	m.Logger.Info("Market module ready",
 		log.Int("currency", int(m.config.Currency)),
-		log.SteamID(m.steamID.Uint64()),
 	)
 
 	return nil
@@ -105,8 +110,12 @@ func (m *Market) StartAuthed(ctx context.Context, auth module.AuthContext) error
 // CreateSellOrder places an item from the user's inventory onto the market.
 // The price should be in the smallest currency unit (e.g., cents/kopecks)
 // and represents the amount the seller receives.
-func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOptions) (*CreateSellOrder, error) {
-	client, myID, err := m.getAuthenticatedClient()
+func (m *Market) CreateSellOrder(
+	ctx context.Context,
+	opts CreateSellOrderOptions,
+	steamID id.ID,
+) (*CreateSellOrder, error) {
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +128,9 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 		Price     int    `url:"price"`
 	}{opts.AppID, opts.ContextID, opts.AssetID, opts.Amount, opts.Price}
 
-	resp, err := community.PostForm[CreateSellOrderResponse](
+	resp, err := community.PostFormTo[CreateSellOrderResponse](
 		ctx, client, "market/sellitem", req,
-		aoni.WithHeader("Referer", fmt.Sprintf("%sprofiles/%d/inventory?modal=1&market=1", community.BaseURL, myID)),
+		aoni.WithHeader("Referer", fmt.Sprintf("%sprofiles/%d/inventory?modal=1&market=1", community.BaseURL, steamID)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("market: sell order failed: %w", err)
@@ -138,7 +147,7 @@ func (m *Market) CreateSellOrder(ctx context.Context, opts CreateSellOrderOption
 
 // CreateBuyOrder creates a buy order (buy order) for a specific item.
 func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions) (*CreateBuyOrderResponse, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +165,7 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 		SaveMyAddress  string       `url:"save_my_address"`
 	}{opts.AppID, m.config.Currency, opts.MarketHashName, priceTotal, opts.Amount, "", "0"}
 
-	resp, err := community.PostForm[CreateBuyOrderResponse](
+	resp, err := community.PostFormTo[CreateBuyOrderResponse](
 		ctx, client, "market/createbuyorder", req,
 		aoni.WithHeader("Referer", fmt.Sprintf(
 			community.BaseURL+"market/listings/%d/%s",
@@ -172,7 +181,7 @@ func (m *Market) CreateBuyOrder(ctx context.Context, opts CreateBuyOrderOptions)
 
 // CancelBuyOrder cancels an existing active buy order.
 func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return err
 	}
@@ -185,7 +194,7 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[respType](ctx, client, "market/cancelbuyorder", req)
+	resp, err := community.PostFormTo[respType](ctx, client, "market/cancelbuyorder", req)
 	if err != nil {
 		return err
 	}
@@ -199,7 +208,7 @@ func (m *Market) CancelBuyOrder(ctx context.Context, buyOrderID uint64) error {
 
 // CancelSellOrder removes an item from sale on the market.
 func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return err
 	}
@@ -208,7 +217,7 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 		Success bool `json:"success"`
 	}
 
-	resp, err := community.PostForm[respType](
+	resp, err := community.PostFormTo[respType](
 		ctx, client, "market/removelisting/{listingID}", nil,
 		aoni.WithVar("listingID", listingID),
 	)
@@ -225,8 +234,8 @@ func (m *Market) CancelSellOrder(ctx context.Context, listingID uint64) error {
 
 // Search searches for items on the marketplace.
 func (m *Market) Search(ctx context.Context, appID uint32, opts SearchOptions) (*SearchResponse, error) {
-	return community.GetJSON[SearchResponse](
-		ctx, m.marketClient, "market/search/render",
+	return community.GetTo[SearchResponse](
+		ctx, m.client, "market/search/render",
 		aoni.WithQuery(opts),
 		aoni.WithHeader("Referer", fmt.Sprintf(community.BaseURL+"market/search?appid=%d", appID)),
 	)
@@ -244,8 +253,8 @@ func (m *Market) GetPriceOverview(
 		MarketHashName string       `url:"market_hash_name"`
 	}{appID, m.config.Currency, marketHashName}
 
-	return community.GetJSON[PriceOverviewResponse](
-		ctx, m.marketClient, "market/priceoverview",
+	return community.GetTo[PriceOverviewResponse](
+		ctx, m.client, "market/priceoverview",
 		aoni.WithQuery(req),
 	)
 }
@@ -257,7 +266,7 @@ func (m *Market) GetItemOrdersHistogram(
 	marketHashName string,
 	itemNameID uint64,
 ) (*ItemOrdersHistogram, error) {
-	req := struct {
+	params := struct {
 		Country    string       `url:"country"`
 		Language   string       `url:"language"`
 		Currency   CurrencyCode `url:"currency"`
@@ -265,9 +274,9 @@ func (m *Market) GetItemOrdersHistogram(
 		TwoFactor  int          `url:"two_factor"`
 	}{m.config.Country, m.config.Language, m.config.Currency, itemNameID, 0}
 
-	resp, err := community.GetJSON[ItemOrdersHistogramResponse](
-		ctx, m.marketClient, "market/itemordershistogram",
-		aoni.WithQuery(req),
+	resp, err := community.GetTo[ItemOrdersHistogramResponse](
+		ctx, m.client, "market/itemordershistogram",
+		aoni.WithQuery(params),
 		aoni.WithHeader(
 			"Referer",
 			fmt.Sprintf(community.BaseURL+"market/listings/%d/%s", appID, url.PathEscape(marketHashName)),
@@ -277,26 +286,40 @@ func (m *Market) GetItemOrdersHistogram(
 		return nil, err
 	}
 
-	return buildItemOrdersHistogram(resp), nil
+	return &ItemOrdersHistogram{
+		SellOrderTable:   resp.SellOrderTable,
+		SellOrderSummary: resp.SellOrderSummary,
+		BuyOrderTable:    resp.BuyOrderTable,
+		BuyOrderSummary:  resp.BuyOrderSummary,
+		BuyOrderGraph:    resp.BuyOrderGraph,
+		SellOrderGraph:   resp.SellOrderGraph,
+		GraphMaxY:        resp.GraphMaxY,
+		GraphMinX:        resp.GraphMinX,
+		GraphMaxX:        resp.GraphMaxX,
+		PricePrefix:      resp.PricePrefix,
+		PriceSuffix:      resp.PriceSuffix,
+		HighestBuyOrder:  float64(resp.HighestBuyOrder),
+		LowestSellOrder:  float64(resp.LowestSellOrder),
+	}, nil
 }
 
 // GetMyListings gets the active lots and orders of an account.
 func (m *Market) GetMyListings(ctx context.Context, start, count int) (*MyListingsResponse, error) {
-	req := struct {
+	params := struct {
 		Start    int `url:"start"`
 		Count    int `url:"count" default:"100"`
 		NoRender int `url:"norender"`
 	}{start, count, 1}
 
-	return community.GetJSON[MyListingsResponse](
-		ctx, m.marketClient, "market/mylistings",
-		aoni.WithQuery(req),
+	return community.GetTo[MyListingsResponse](
+		ctx, m.client, "market/mylistings",
+		aoni.WithQuery(params),
 	)
 }
 
 // GetMarketApps retrieves all apps listed on the Steam Community Market.
 func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +360,7 @@ func (m *Market) GetMarketApps(ctx context.Context) (map[uint32]string, error) {
 
 // GetGemValue checks if an item is eligible to be turned into gems and gets its gem value.
 func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) (*GemValue, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -348,10 +371,7 @@ func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) 
 		AssetID   uint64 `url:"assetid"`
 	}{appID, 6, assetID}
 
-	resp, err := community.GetJSON[gemValueResponse](
-		ctx, client, "ajaxgetgoovalue",
-		aoni.WithQuery(req),
-	)
+	resp, err := community.GetTo[gemValueResponse](ctx, client, "ajaxgetgoovalue", aoni.WithQuery(req))
 	if err != nil {
 		return nil, err
 	}
@@ -360,11 +380,9 @@ func (m *Market) GetGemValue(ctx context.Context, appID uint32, assetID uint64) 
 		return nil, fmt.Errorf("steam error: %s (success=%d)", resp.Message, resp.Success)
 	}
 
-	gemVal, _ := strconv.Atoi(resp.GooValue)
-
 	return &GemValue{
 		PromptTitle: resp.StrTitle,
-		GemValue:    gemVal,
+		GemValue:    int64(resp.GooValue),
 	}, nil
 }
 
@@ -375,7 +393,7 @@ func (m *Market) TurnItemIntoGems(
 	assetID uint64,
 	expectedGemsValue int,
 ) (*GemsResult, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +405,7 @@ func (m *Market) TurnItemIntoGems(
 		GooValueExpected int    `url:"goo_value_expected"`
 	}{appID, 6, assetID, expectedGemsValue}
 
-	resp, err := community.PostForm[grindGooResponse](ctx, client, "ajaxgrindintogoo", req)
+	resp, err := community.PostFormTo[grindGooResponse](ctx, client, "ajaxgrindintogoo", req)
 	if err != nil {
 		return nil, err
 	}
@@ -396,18 +414,15 @@ func (m *Market) TurnItemIntoGems(
 		return nil, fmt.Errorf("steam error: %s (success=%d)", resp.Message, resp.Success)
 	}
 
-	received, _ := strconv.Atoi(resp.GooValueReceived)
-	total, _ := strconv.Atoi(resp.GooValueTotal)
-
 	return &GemsResult{
-		GemsReceived: received,
-		TotalGems:    total,
+		GemsReceived: int64(resp.GooValueReceived),
+		TotalGems:    int64(resp.GooValueTotal),
 	}, nil
 }
 
 // OpenBoosterPack unpacks a game booster pack into trading cards.
 func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint64) ([]any, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +432,7 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 		CommunityItem uint64 `url:"communityitemid"`
 	}{appID, assetID}
 
-	resp, err := community.PostForm[unpackBoosterResponse](ctx, client, "ajaxunpackbooster", req)
+	resp, err := community.PostFormTo[unpackBoosterResponse](ctx, client, "ajaxunpackbooster", req)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +446,7 @@ func (m *Market) OpenBoosterPack(ctx context.Context, appID uint32, assetID uint
 
 // GetBoosterPackCatalog retrieves the user's gem count and booster pack creator list.
 func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
@@ -452,23 +467,18 @@ func (m *Market) GetBoosterPackCatalog(ctx context.Context) (*BoosterCatalog, er
 
 // CreateBoosterPack crafts a booster pack using gems.
 func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntradableGems bool) (*BoosterResult, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
-	}
-
-	tradability := 2
-	if useUntradableGems {
-		tradability = 3
 	}
 
 	req := struct {
 		AppID                 uint32 `url:"appid"`
 		Series                int    `url:"series"`
 		TradabilityPreference int    `url:"tradability_preference"`
-	}{appID, 1, tradability}
+	}{appID, 1, generic.Ternary(useUntradableGems, 3, 2)}
 
-	resp, err := community.PostForm[createBoosterResponse](ctx, client, "tradingcards/ajaxcreatebooster", req)
+	resp, err := community.PostFormTo[createBoosterResponse](ctx, client, "tradingcards/ajaxcreatebooster", req)
 	if err != nil {
 		return nil, err
 	}
@@ -477,37 +487,22 @@ func (m *Market) CreateBoosterPack(ctx context.Context, appID uint32, useUntrada
 		return nil, fmt.Errorf("steam purchase error: eresult=%d", resp.PurchaseEResult)
 	}
 
-	total, err := strconv.Atoi(resp.GooAmount)
-	if err != nil {
-		return nil, err
-	}
-
-	tradable, err := strconv.Atoi(resp.TradableGooAmount)
-	if err != nil {
-		return nil, err
-	}
-
-	untradable, err := strconv.Atoi(resp.UntradableGooAmount)
-	if err != nil {
-		return nil, err
-	}
-
 	return &BoosterResult{
-		TotalGems:      total,
-		TradableGems:   tradable,
-		UntradableGems: untradable,
+		TotalGems:      int64(resp.GooAmount),
+		TradableGems:   int64(resp.TradableGooAmount),
+		UntradableGems: int64(resp.UntradableGooAmount),
 		ResultItem:     resp.PurchaseResult,
 	}, nil
 }
 
 // GetGiftDetails gets information about a gift package in inventory.
 func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetails, error) {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := community.PostForm[giftDetailsResponse](
+	resp, err := community.PostFormTo[giftDetailsResponse](
 		ctx, client, "gifts/{giftID}/validateunpack", nil,
 		aoni.WithVar("giftID", giftID),
 	)
@@ -519,23 +514,21 @@ func (m *Market) GetGiftDetails(ctx context.Context, giftID uint64) (*GiftDetail
 		return nil, fmt.Errorf("steam error: %s (success=%d)", resp.Message, resp.Success)
 	}
 
-	pkgID, _ := strconv.Atoi(resp.PackageID)
-
 	return &GiftDetails{
 		GiftName:  resp.GiftName,
-		PackageID: pkgID,
+		PackageID: int64(resp.PackageID),
 		Owned:     resp.Owned,
 	}, nil
 }
 
 // RedeemGift unpacks a gift in inventory to the user's library.
 func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return err
 	}
 
-	resp, err := community.PostForm[redeemGiftResponse](
+	resp, err := community.PostFormTo[redeemGiftResponse](
 		ctx, client, "gifts/{giftID}/unpack", nil,
 		aoni.WithVar("giftID", giftID),
 	)
@@ -552,7 +545,7 @@ func (m *Market) RedeemGift(ctx context.Context, giftID uint64) error {
 
 // GemExchange exchanges or packs/unpacks gems.
 func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denomOut, qtyIn, qtyOutExpected int) error {
-	client, _, err := m.getAuthenticatedClient()
+	client, err := m.ensureAuthenticated()
 	if err != nil {
 		return err
 	}
@@ -566,7 +559,7 @@ func (m *Market) GemExchange(ctx context.Context, assetID uint64, denomIn, denom
 		GooAmountOutExpected int    `url:"goo_amount_out_expected"`
 	}{753, assetID, denomIn, qtyIn, denomOut, qtyOutExpected}
 
-	resp, err := community.PostForm[gemExchangeResponse](ctx, client, "ajaxexchangegoo", req)
+	resp, err := community.PostFormTo[gemExchangeResponse](ctx, client, "ajaxexchangegoo", req)
 	if err != nil {
 		return err
 	}
@@ -588,15 +581,15 @@ func (m *Market) UnpackGemSacks(ctx context.Context, assetID uint64, sackCount i
 	return m.GemExchange(ctx, assetID, 1000, 1, sackCount, sackCount*1000)
 }
 
-func (m *Market) getAuthenticatedClient() (community.Requester, id.ID, error) {
+func (m *Market) ensureAuthenticated() (community.Requester, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.marketClient == nil {
-		return nil, 0, module.ErrNotAuthenticated
+	if m.client == nil {
+		return nil, module.ErrNotAuthenticated
 	}
 
-	return m.marketClient, m.steamID, nil
+	return m.client, nil
 }
 
 func parseAppIDFromHref(href string) (uint32, bool) {
@@ -611,32 +604,6 @@ func parseAppIDFromHref(href string) (uint32, bool) {
 	}
 
 	return uint32(appID), true
-}
-
-func buildItemOrdersHistogram(resp *ItemOrdersHistogramResponse) *ItemOrdersHistogram {
-	histogram := &ItemOrdersHistogram{
-		SellOrderTable:   resp.SellOrderTable,
-		SellOrderSummary: resp.SellOrderSummary,
-		BuyOrderTable:    resp.BuyOrderTable,
-		BuyOrderSummary:  resp.BuyOrderSummary,
-		BuyOrderGraph:    resp.BuyOrderGraph,
-		SellOrderGraph:   resp.SellOrderGraph,
-		GraphMaxY:        resp.GraphMaxY,
-		GraphMinX:        resp.GraphMinX,
-		GraphMaxX:        resp.GraphMaxX,
-		PricePrefix:      resp.PricePrefix,
-		PriceSuffix:      resp.PriceSuffix,
-	}
-
-	if resp.HighestBuyOrder != "" {
-		histogram.HighestBuyOrder, _ = strconv.ParseFloat(resp.HighestBuyOrder, 64)
-	}
-
-	if resp.LowestSellOrder != "" {
-		histogram.LowestSellOrder, _ = strconv.ParseFloat(resp.LowestSellOrder, 64)
-	}
-
-	return histogram
 }
 
 func parseBoosterCatalog(bodyBytes []byte) (*BoosterCatalog, error) {
